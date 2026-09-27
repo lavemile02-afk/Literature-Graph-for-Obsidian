@@ -1,5 +1,5 @@
 import { EditorView } from '@codemirror/view';
-import { Keymap, PaneType, Plugin } from 'obsidian';
+import { Keymap, PaneType, Plugin, TFile } from 'obsidian';
 import { CITE_URL_PREFIX, parseCitationUrl } from './citation';
 import { markdownLinksInLine } from './links';
 import { openCitation } from './navigation';
@@ -46,7 +46,10 @@ function citationUrlAt(evt: MouseEvent): string | null {
  * back to the protocol handler. This keeps the click in the current vault and
  * lets Ctrl/Cmd-click and middle-click open the note in a new tab.
  */
-export function registerCitationClicks(plugin: Plugin): void {
+export function registerCitationClicks(
+	plugin: Plugin,
+	fileForDoi: (doi: string) => TFile | null,
+): void {
 	const onClick = (evt: MouseEvent) => {
 		if (evt.button !== 0 && evt.button !== 1) return;
 		const url = citationUrlAt(evt);
@@ -55,7 +58,7 @@ export function registerCitationClicks(plugin: Plugin): void {
 		evt.preventDefault();
 		evt.stopImmediatePropagation();
 		const newLeaf: PaneType | boolean = evt.button === 1 ? 'tab' : Keymap.isModEvent(evt);
-		void openCitation(plugin.app, target, newLeaf);
+		void openCitation(plugin.app, target, newLeaf, fileForDoi);
 	};
 	// The editor starts a mouse selection on mousedown; if it saw the press, it
 	// would move the cursor of the newly opened note to the clicked position.

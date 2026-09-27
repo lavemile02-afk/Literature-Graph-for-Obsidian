@@ -12,14 +12,18 @@ export function resolveCitedNote(app: App, note: string): TFile | null {
 
 /**
  * Opens what a citation link points to: the note at the passage, the DOI, or
- * a notice. `newLeaf` is passed to `workspace.getLeaf` (false = current tab).
+ * a notice. `newLeaf` is passed to `workspace.getLeaf` (false = current tab);
+ * `fileForDoi` finds the note of a work cited only by its DOI.
  */
 export async function openCitation(
 	app: App,
 	target: CitationTarget,
 	newLeaf: PaneType | boolean = false,
+	fileForDoi?: (doi: string) => TFile | null,
 ): Promise<void> {
-	const file = target.note ? resolveCitedNote(app, target.note) : null;
+	const file =
+		(target.note ? resolveCitedNote(app, target.note) : null) ??
+		(target.doi && fileForDoi ? fileForDoi(target.doi) : null);
 
 	if (!file) {
 		if (target.doi) {

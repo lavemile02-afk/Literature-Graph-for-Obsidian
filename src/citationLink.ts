@@ -1,5 +1,5 @@
 import { App, TFile } from 'obsidian';
-import { CITE_URL_PREFIX } from './citation';
+import { CITE_URL_PREFIX, CitationTarget } from './citation';
 import { findExactPassages } from './passage';
 import type { LiteratureGraphSettings } from './settings';
 
@@ -79,7 +79,7 @@ function plainPassage(markdown: string): string {
  * The `note` parameter for a file: its name when that name resolves to it
  * from anywhere in the vault, else its path without the extension.
  */
-function noteParam(app: App, file: TFile): string {
+export function noteParam(app: App, file: TFile): string {
 	return app.metadataCache.getFirstLinkpathDest(file.basename, '') === file
 		? file.basename
 		: file.path.replace(/\.md$/, '');
@@ -115,10 +115,20 @@ export function buildCitationLink(
 		occ = best + 1;
 	}
 
-	const params = [`note=${encodeParam(noteParam(app, file))}`];
-	if (occ) params.push(`occ=${occ}`);
-	if (qe) params.push(`qe=${encodeParam(qe)}`);
-	params.push(`q=${encodeParam(q)}`); // always last
 	const label = citationText(app, file, settings).replace(/([[\]])/g, '\\$1');
-	return `([${label}](${CITE_URL_PREFIX}${params.join('&')}))`;
+	return `([${label}](${citationUrl({ note: noteParam(app, file), occ, qe, q })}))`;
+}
+
+/**
+ * The canonical (encoded) URL of a citation target, with its parameters in
+ * the order note, doi, occ, qe, q; `q` is always last.
+ */
+export function citationUrl(target: CitationTarget): string {
+	const params: string[] = [];
+	if (target.note) params.push(`note=${encodeParam(target.note)}`);
+	if (target.doi) params.push(`doi=${encodeParam(target.doi)}`);
+	if (target.occ) params.push(`occ=${target.occ}`);
+	if (target.qe) params.push(`qe=${encodeParam(target.qe)}`);
+	if (target.q) params.push(`q=${encodeParam(target.q)}`);
+	return CITE_URL_PREFIX + params.join('&');
 }

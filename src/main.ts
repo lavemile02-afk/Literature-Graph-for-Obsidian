@@ -1,10 +1,12 @@
 import { Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
 import { CitationCheckModal, checkCitations } from './check';
+import { CitationIndex } from './citationIndex';
 import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink } from './citationLink';
 import { registerCitationClicks } from './clicks';
 import { withoutCitationLinks } from './links';
 import { buildReferenceList } from './references';
+import { updateLinksAfterRename } from './rename';
 import { openCitation } from './navigation';
 import {
 	DEFAULT_SETTINGS,
@@ -14,15 +16,20 @@ import {
 
 export default class LiteratureGraphPlugin extends Plugin {
 	settings!: LiteratureGraphSettings;
+	index!: CitationIndex;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new LiteratureGraphSettingTab(this.app, this));
 
+		this.index = new CitationIndex(this.app, () => this.settings.doiProperty);
+		const fileForDoi = (doi: string) => this.index.fileForDoi(doi);
+		this.app.workspace.onLayoutReady(() => void this.startIndex());
+
 		this.registerObsidianProtocolHandler(CITE_ACTION, (params) => {
-			void openCitation(this.app, parseCitationParams(params));
+			void openCitation(this.app, parseCitationParams(params), false, fileForDoi);
 		});
-		registerCitationClicks(this);
+		registerCitationClicks(this, fileForDoi);
 
 		this.addCommand({
 			id: 'copy-citation-link',
@@ -85,12 +92,35 @@ export default class LiteratureGraphPlugin extends Plugin {
 		new Notice('Citation link copied.');
 	}
 
+	/** Builds the citation index, then keeps it up to date. */
+	private async startIndex() {
+		await this.index.build();
+		this.registerEvent(
+			this.app.metadataCache.on('changed', (file) => void this.index.indexFile(file)),
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (file instanceof TFile) this.index.removeFile(file.path);
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (file instanceof TFile && file.extension === 'md') this.index.renameFile(file, oldPath);
+				if (this.settings.updateLinksOnRename) {
+					void updateLinksAfterRename(this.app, this.index, file, oldPath);
+				}
+			}),
+		);
+	}
+
 	/**
 	 * Inserts, at the cursor, the reference list of the works cited in the note,
 	 * and says which in-text citations need a letter (2020a, 2020b).
 	 */
 	insertReferenceList(editor: Editor) {
-		const list = buildReferenceList(this.app, editor.getValue(), this.settings);
+		const list = buildReferenceList(this.app, editor.getValue(), this.settings, (doi) =>
+			this.index.fileForDoi(doi),
+		);
 		if (!list.text) {
 			new Notice('This note cites no work of the vault.');
 			return;
@@ -108,7 +138,9 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	/** Checks the citation links of a note and lists those that need attention. */
 	async checkNote(file: TFile) {
-		const results = await checkCitations(this.app, await this.app.vault.read(file));
+		const results = await checkCitations(this.app, await this.app.vault.read(file), (doi) =>
+			this.index.fileForDoi(doi),
+		);
 		if (results.length === 0) {
 			new Notice('This note has no citation links.');
 			return;

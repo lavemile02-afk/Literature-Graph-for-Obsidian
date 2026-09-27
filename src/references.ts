@@ -109,13 +109,15 @@ export function buildReferenceList(
 	app: App,
 	noteText: string,
 	settings: LiteratureGraphSettings,
+	fileForDoi: (doi: string) => TFile | null,
 ): ReferenceList {
 	const files = new Set<TFile>();
 	const skipped = new Set<string>();
 	for (const link of citationLinksIn(noteText)) {
-		const cited = link.target.note ? resolveCitedNote(app, link.target.note) : null;
+		const { note, doi } = link.target;
+		const cited = (note ? resolveCitedNote(app, note) : null) ?? (doi ? fileForDoi(doi) : null);
 		if (cited) files.add(cited);
-		else skipped.add(link.target.doi ? `https://doi.org/${link.target.doi}` : link.text);
+		else skipped.add(doi ? `https://doi.org/${doi}` : link.text);
 	}
 
 	const entries: Entry[] = [...files].map((file) => {

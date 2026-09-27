@@ -19,6 +19,10 @@ export interface LiteratureGraphSettings {
 	titleProperty: string;
 	/** Always use the note name as the citation text. */
 	useNoteNameAsCitation: boolean;
+	/** Property holding a work's DOI, used to recognize works cited by DOI. */
+	doiProperty: string;
+	/** Rewrite citation links when the cited note is renamed. */
+	updateLinksOnRename: boolean;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -30,6 +34,8 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	referenceProperty: 'Citation',
 	titleProperty: 'Titre',
 	useNoteNameAsCitation: false,
+	doiProperty: 'DOI',
+	updateLinksOnRename: true,
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
@@ -86,6 +92,22 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Always use the note name',
 						desc: 'Use the name of the cited note as the citation text, ignoring the properties above.',
 						control: { type: 'toggle', key: 'useNoteNameAsCitation' },
+					},
+					{
+						name: 'DOI property',
+						desc: 'Property that holds the DOI of a work. A link that cites a DOI opens the note with that DOI, if there is one.',
+						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: 'Advanced',
+				items: [
+					{
+						name: 'Update links when a note is renamed',
+						desc: 'Rewrite the citation links that point to a note when it is renamed or moved. Obsidian does this for wikilinks, but not for citation links.',
+						control: { type: 'toggle', key: 'updateLinksOnRename' },
 					},
 				],
 			},

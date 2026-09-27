@@ -18,12 +18,16 @@ export interface CheckedCitation {
 }
 
 /** Checks that every citation link of a note leads to its note and passage. */
-export async function checkCitations(app: App, noteText: string): Promise<CheckedCitation[]> {
+export async function checkCitations(
+	app: App,
+	noteText: string,
+	fileForDoi: (doi: string) => TFile | null,
+): Promise<CheckedCitation[]> {
 	const texts = new Map<TFile, string>();
 	const results: CheckedCitation[] = [];
 	for (const link of citationLinksIn(noteText)) {
 		const { note, q, qe, occ, doi } = link.target;
-		const cited = note ? resolveCitedNote(app, note) : null;
+		const cited = (note ? resolveCitedNote(app, note) : null) ?? (doi ? fileForDoi(doi) : null);
 		let status: CitationStatus;
 		if (!cited) {
 			status = doi ? 'external' : 'note-not-found';
