@@ -1,0 +1,53 @@
+# Builds the plugin and publishes a GitHub release when a version tag
+# (for example 0.1.0) is pushed. The tag must match "version" in manifest.json.
+name: Release Obsidian plugin
+
+on:
+    push:
+        tags:
+            - '*'
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            id-token: write
+            attestations: write
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Use Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  cache: 'npm'
+
+            - name: Check that the tag matches manifest.json
+              run: |
+                  version=$(jq -r .version manifest.json)
+                  if [ "$version" != "${GITHUB_REF_NAME}" ]; then
+                    echo "Tag ${GITHUB_REF_NAME} does not match manifest.json version $version"
+                    exit 1
+                  fi
+
+            - name: Build plugin
+              run: |
+                  npm ci
+                  npm run build
+
+            - name: Attest build provenance
+              uses: actions/attest@v4
+              with:
+                  subject-path: |
+                      main.js
+                      styles.css
+
+            - name: Create release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  gh release create "${GITHUB_REF_NAME}" \
+                    --title="${GITHUB_REF_NAME}" \
+                    --generate-notes \
+                    main.js manifest.json styles.css
