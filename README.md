@@ -2,7 +2,34 @@
 
 An Obsidian plugin for literature notes written in Markdown (for example, papers converted from PDF).
 
-> **Status: early development.** The plugin does not do anything useful yet.
+> **Status: early development.** Citation links already open the cited passage; the other features are planned.
+
+## Citation links
+
+A citation link is an ordinary Markdown link whose text is the citation and whose URL points to a note and a passage in it:
+
+```markdown
+([Bourgeois et al., 2016](obsidian://cite?note=Bourgeois%20et%20al.%2C%202016&q=Once%20canopy%20cover%20passed%20a%20threshold))
+```
+
+Clicking it opens the note `Bourgeois et al., 2016`, scrolls to the passage that starts with "Once canopy cover passed a threshold" and selects it. Parameters:
+
+| Parameter | Meaning |
+|---|---|
+| `note` | Note name (resolved like a `[[wikilink]]`) or path from the vault root. |
+| `q` | Start of the cited passage, copied word for word from the note's Markdown. Six to fifteen words are usually enough to be unique. Always the last parameter. |
+| `occ` | Optional. Which occurrence of the passage to open, if it appears more than once (starting at 1). |
+| `doi` | Optional. DOI of the cited work. If the note does not exist, the link opens `https://doi.org/<doi>` instead. A work that is not in your vault can be cited with `doi` alone. |
+
+Values are percent-encoded, like in any URL. This is the canonical form: it works everywhere, including from other applications when Obsidian is installed. For hand-written links, a readable form between angle brackets is also accepted:
+
+```markdown
+([Bourgeois et al., 2016](<obsidian://cite?note=Bourgeois et al., 2016&q=Once canopy cover passed a threshold>))
+```
+
+The readable form breaks if the passage contains `>` or a line break, and it may not work outside Obsidian.
+
+Because citation links are URLs, Obsidian does not treat them as internal links: nothing is added to the cited note, and they do not appear in the graph view or in backlinks.
 
 ## Planned features
 
