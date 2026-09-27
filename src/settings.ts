@@ -13,6 +13,10 @@ export interface LiteratureGraphSettings {
 	authorsProperty: string;
 	/** Property holding a work's year. */
 	yearProperty: string;
+	/** Property holding a work's full reference, in APA style. */
+	referenceProperty: string;
+	/** Property holding a work's title (used when the reference property is empty). */
+	titleProperty: string;
 	/** Always use the note name as the citation text. */
 	useNoteNameAsCitation: boolean;
 }
@@ -23,6 +27,8 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	citationTextProperty: 'Citation_texte',
 	authorsProperty: 'Auteurs',
 	yearProperty: 'Annee',
+	referenceProperty: 'Citation',
+	titleProperty: 'Titre',
 	useNoteNameAsCitation: false,
 };
 
@@ -65,6 +71,16 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Year property',
 						desc: 'Property that holds the year of publication.',
 						control: { type: 'text', key: 'yearProperty', placeholder: 'Annee' },
+					},
+					{
+						name: 'Reference property',
+						desc: 'Property that holds the full reference of a work, in APA style. Used by "Insert reference list".',
+						control: { type: 'text', key: 'referenceProperty', placeholder: 'Citation' },
+					},
+					{
+						name: 'Title property',
+						desc: 'Property that holds the title. Used to build a short reference when the reference property is empty.',
+						control: { type: 'text', key: 'titleProperty', placeholder: 'Titre' },
 					},
 					{
 						name: 'Always use the note name',

@@ -4,6 +4,7 @@ import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink } from './citationLink';
 import { registerCitationClicks } from './clicks';
 import { withoutCitationLinks } from './links';
+import { buildReferenceList } from './references';
 import { openCitation } from './navigation';
 import {
 	DEFAULT_SETTINGS,
@@ -31,6 +32,11 @@ export default class LiteratureGraphPlugin extends Plugin {
 				if (!checking) void this.copyCitationLink(editor, info);
 				return true;
 			},
+		});
+		this.addCommand({
+			id: 'insert-reference-list',
+			name: 'Insert reference list',
+			editorCallback: (editor) => this.insertReferenceList(editor),
 		});
 		this.addCommand({
 			id: 'check-citations',
@@ -77,6 +83,27 @@ export default class LiteratureGraphPlugin extends Plugin {
 		if (!link) return;
 		await navigator.clipboard.writeText(link);
 		new Notice('Citation link copied.');
+	}
+
+	/**
+	 * Inserts, at the cursor, the reference list of the works cited in the note,
+	 * and says which in-text citations need a letter (2020a, 2020b).
+	 */
+	insertReferenceList(editor: Editor) {
+		const list = buildReferenceList(this.app, editor.getValue(), this.settings);
+		if (!list.text) {
+			new Notice('This note cites no work of the vault.');
+			return;
+		}
+		editor.replaceSelection(`${list.text}\n`);
+		const messages: string[] = [];
+		for (const { citation, letters } of list.lettered) {
+			messages.push(`"${citation}" is shared by several works: write ${letters.join(', ')} in the text, as in the list.`);
+		}
+		if (list.skipped.length > 0) {
+			messages.push(`Not in the list (no note in the vault): ${list.skipped.join('; ')}.`);
+		}
+		if (messages.length > 0) new Notice(messages.join('\n\n'), 15000);
 	}
 
 	/** Checks the citation links of a note and lists those that need attention. */

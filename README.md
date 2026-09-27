@@ -51,6 +51,10 @@ Clicking a citation link opens the note and selects the passage (editing view) o
 - **Check citations in this note** lists the citation links whose note or passage cannot be found, or whose passage was changed, with a link to each line.
 - **Copy note without citation links** copies the note with each link replaced by its text, "(Smith et al., 2020)", for pasting into a word processor, where `obsidian://` links would only work with Obsidian installed.
 
+### Reference list
+
+**Insert reference list** inserts, at the cursor, the reference list of the works cited by the note's citation links, sorted alphabetically as in APA style. Each reference comes from the work's reference property (by default `Citation`), converted to the citation language: "&" or "et", "(Eds.)" or "(dir.)", "In" or "Dans", "(2nd ed.)" or "(2e éd.)", "[Doctoral dissertation, …]" or "(Thèse de doctorat)", "[Preprint]" or "[Prépublication]", "n.d." or "s.d.". When several works share the same in-text citation, they get letters (2016a, 2016b) and a notice says which letters to use in the text.
+
 ### For scripts and AI agents
 
 Citation links are plain text, so a script or an AI assistant can write and check them without Obsidian:
