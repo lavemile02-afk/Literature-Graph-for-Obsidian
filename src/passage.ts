@@ -283,6 +283,18 @@ function exactMatchesNearAnchor(text: string, passage: string): TextRange[] {
 }
 
 /**
+ * Every exact occurrence of a passage start in a text, in text order, found
+ * the same way as `findPassage` does, so that `occ` means the same thing when
+ * a link is created and when it is opened.
+ */
+export function findExactPassages(text: string, q: string): TextRange[] {
+	const nq = normalizeForSearch(q).text;
+	if (!nq) return [];
+	const exact = exactMatchesNearAnchor(text, nq);
+	return exact.length > 0 ? exact : exactMatchesInFullText(normalizeForSearch(text), nq);
+}
+
+/**
  * Finds a cited passage in a text.
  *
  * @param q   start of the passage
@@ -293,8 +305,8 @@ export function findPassage(text: string, q: string, qe?: string, occ = 1): Pass
 	const nq = normalizeForSearch(q).text;
 	if (!nq) return null;
 
-	let exact = exactMatchesNearAnchor(text, nq);
 	let norm: NormalizedText | null = null;
+	let exact = exactMatchesNearAnchor(text, nq);
 	if (exact.length === 0) {
 		norm = normalizeForSearch(text);
 		exact = exactMatchesInFullText(norm, nq);

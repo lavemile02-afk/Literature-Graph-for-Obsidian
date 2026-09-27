@@ -2,7 +2,7 @@
 
 An Obsidian plugin for literature notes written in Markdown (for example, papers converted from PDF).
 
-> **Status: early development.** Citation links already open the cited passage; the other features are planned.
+> **Status: early development.** Citation links can be copied from a selection and open the cited passage; the other features are planned.
 
 ## Citation links
 
@@ -18,6 +18,7 @@ Clicking it opens the note `Bourgeois et al., 2016`, scrolls to the passage that
 |---|---|
 | `note` | Note name (resolved like a `[[wikilink]]`) or path from the vault root. |
 | `q` | Start of the cited passage, copied word for word from the note's Markdown. Six to fifteen words are usually enough to be unique. Always the last parameter. |
+| `qe` | Optional. End of the passage, a few words copied from the note. The passage then runs from `q` to `qe`. |
 | `occ` | Optional. Which occurrence of the passage to open, if it appears more than once (starting at 1). |
 | `doi` | Optional. DOI of the cited work. If the note does not exist, the link opens `https://doi.org/<doi>` instead. A work that is not in your vault can be cited with `doi` alone. |
 
@@ -28,6 +29,22 @@ Values are percent-encoded, like in any URL. This is the canonical form: it work
 ```
 
 The readable form breaks if the passage contains `>` or a line break, and it may not work outside Obsidian.
+
+### Creating a citation link
+
+In the note of a work, select the passage you want to cite, right-click it and choose **Copy citation link** (or run the command **Copy citation link to selection**, which you can bind to a hotkey). Paste the link where you write. For a long selection, the link keeps its first words (`q`) and last words (`qe`), and the whole passage is selected or highlighted when the link is opened. If the start of the passage appears more than once in the note, the link says which occurrence (`occ`).
+
+The text of the link comes from the work's properties:
+
+1. the citation text property (by default `Citation_texte`), such as `(Smith et al., 2020)`;
+2. otherwise the authors and year properties (by default `Auteurs`, as `Family, I., Family, I.`, and `Annee`);
+3. otherwise the note name.
+
+The property names, and the language of the citation ("Smith & Jones" or "Smith et Jones"), can be changed in the plugin settings.
+
+### Opening a citation link
+
+Clicking a citation link opens the note and selects the passage (editing view) or highlights it for a few seconds (reading view). Ctrl/Cmd-click or middle-click opens it in a new tab. The passage is found even if line breaks, hyphenation, emphasis or HTML tags differ; if it was changed since, the closest text is shown with a notice.
 
 Because citation links are URLs, Obsidian does not treat them as internal links: nothing is added to the cited note, and they do not appear in the graph view or in backlinks.
 
