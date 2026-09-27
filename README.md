@@ -46,6 +46,19 @@ The property names, and the language of the citation ("Smith & Jones" or "Smith 
 
 Clicking a citation link opens the note and selects the passage (editing view) or highlights it for a few seconds (reading view). Ctrl/Cmd-click or middle-click opens it in a new tab. The passage is found even if line breaks, hyphenation, emphasis or HTML tags differ; if it was changed since, the closest text is shown with a notice.
 
+### Checking and exporting
+
+- **Check citations in this note** lists the citation links whose note or passage cannot be found, or whose passage was changed, with a link to each line.
+- **Copy note without citation links** copies the note with each link replaced by its text, "(Smith et al., 2020)", for pasting into a word processor, where `obsidian://` links would only work with Obsidian installed.
+
+### For scripts and AI agents
+
+Citation links are plain text, so a script or an AI assistant can write and check them without Obsidian:
+
+1. Copy six to fifteen consecutive words of the passage, word for word, from the note's Markdown (not from the PDF).
+2. Percent-encode `note` and `q` (and `qe`), including `(`, `)`, `!`, `'` and `*`, with a library function (for example `encodeURIComponent` plus those five characters, or Python's `urllib.parse.quote(value, safe="")`). Put `q` last.
+3. Check the link: decode `q` and make sure it occurs in the note after this normalization of both texts, which is what the plugin does: lower case; accents removed (Unicode NFKD, combining marks dropped); `*`, `_`, `` ` ``, `~` and `\` removed; HTML tags removed (`<br>`, `<p>`, `<li>`, `<td>`… count as a space); typographic quotes made straight; every dash or hyphen removed together with the whitespace around it; every other run of whitespace turned into one space. A link whose passage cannot be found this way should not be delivered.
+
 Because citation links are URLs, Obsidian does not treat them as internal links: nothing is added to the cited note, and they do not appear in the graph view or in backlinks.
 
 ## Planned features

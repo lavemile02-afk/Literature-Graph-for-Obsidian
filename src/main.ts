@@ -1,7 +1,9 @@
-import { Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin } from 'obsidian';
+import { Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
+import { CitationCheckModal, checkCitations } from './check';
 import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink } from './citationLink';
 import { registerCitationClicks } from './clicks';
+import { withoutCitationLinks } from './links';
 import { openCitation } from './navigation';
 import {
 	DEFAULT_SETTINGS,
@@ -30,6 +32,26 @@ export default class LiteratureGraphPlugin extends Plugin {
 				return true;
 			},
 		});
+		this.addCommand({
+			id: 'check-citations',
+			name: 'Check citations in this note',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== 'md') return false;
+				if (!checking) void this.checkNote(file);
+				return true;
+			},
+		});
+		this.addCommand({
+			id: 'copy-without-citation-links',
+			name: 'Copy note without citation links',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== 'md') return false;
+				if (!checking) void this.copyWithoutCitationLinks(file);
+				return true;
+			},
+		});
 		this.registerEvent(
 			this.app.workspace.on('editor-menu', (menu, editor, info) => {
 				if (!editor.somethingSelected() || !info.file) return;
@@ -55,6 +77,22 @@ export default class LiteratureGraphPlugin extends Plugin {
 		if (!link) return;
 		await navigator.clipboard.writeText(link);
 		new Notice('Citation link copied.');
+	}
+
+	/** Checks the citation links of a note and lists those that need attention. */
+	async checkNote(file: TFile) {
+		const results = await checkCitations(this.app, await this.app.vault.read(file));
+		if (results.length === 0) {
+			new Notice('This note has no citation links.');
+			return;
+		}
+		new CitationCheckModal(this.app, file, results).open();
+	}
+
+	/** Copies the note with each citation link replaced by its text, for export. */
+	async copyWithoutCitationLinks(file: TFile) {
+		await navigator.clipboard.writeText(withoutCitationLinks(await this.app.vault.read(file)));
+		new Notice('Note copied without citation links.');
 	}
 
 	async loadSettings() {

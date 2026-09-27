@@ -1,54 +1,8 @@
 import { EditorView } from '@codemirror/view';
 import { Keymap, PaneType, Plugin } from 'obsidian';
 import { CITE_URL_PREFIX, parseCitationUrl } from './citation';
+import { markdownLinksInLine } from './links';
 import { openCitation } from './navigation';
-
-/** A Markdown link found in a line of text: `[text](url)` or `[text](<url>)`. */
-export interface LineLink {
-	/** Offset of the opening "[" in the line. */
-	from: number;
-	/** Offset just after the closing ")". */
-	to: number;
-	url: string;
-}
-
-/** Finds the inline Markdown links of one line of text. */
-export function markdownLinksInLine(text: string): LineLink[] {
-	const links: LineLink[] = [];
-	let searchFrom = 0;
-	while (searchFrom < text.length) {
-		const middle = text.indexOf('](', searchFrom);
-		if (middle < 0) break;
-		const from = text.lastIndexOf('[', middle);
-		const destStart = middle + 2;
-		let url: string;
-		let to: number;
-		if (text[destStart] === '<') {
-			const close = text.indexOf('>', destStart + 1);
-			if (close < 0) break;
-			url = text.slice(destStart + 1, close);
-			to = close + 2;
-		} else {
-			// A bare destination ends at whitespace or at an unbalanced ")".
-			let depth = 0;
-			let end = destStart;
-			for (; end < text.length; end++) {
-				const ch = text.charAt(end);
-				if (/\s/.test(ch)) break;
-				if (ch === '(') depth++;
-				if (ch === ')') {
-					if (depth === 0) break;
-					depth--;
-				}
-			}
-			url = text.slice(destStart, end);
-			to = end + 1;
-		}
-		if (from >= searchFrom) links.push({ from, to, url });
-		searchFrom = Math.max(to, middle + 2);
-	}
-	return links;
-}
 
 /** Citation URL of the link under the click in a Markdown editor, if any. */
 function citationUrlInEditor(evt: MouseEvent, el: Element): string | null {
