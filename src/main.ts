@@ -1,5 +1,6 @@
 import { Plugin } from 'obsidian';
 import { CITE_ACTION, parseCitationParams } from './citation';
+import { registerCitationClicks } from './clicks';
 import { openCitation } from './navigation';
 import {
 	DEFAULT_SETTINGS,
@@ -17,6 +18,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.registerObsidianProtocolHandler(CITE_ACTION, (params) => {
 			void openCitation(this.app, parseCitationParams(params));
 		});
+		registerCitationClicks(this);
 	}
 
 	async loadSettings() {
