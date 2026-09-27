@@ -1,1 +1,8 @@
 /* Literature Graph.md styles. */
+
+/* Cited passage, highlighted for a few seconds when a citation link opens it
+   in the reading view. */
+::highlight(literature-graph-passage) {
+	background-color: var(--text-highlight-bg);
+	color: var(--text-normal);
+}

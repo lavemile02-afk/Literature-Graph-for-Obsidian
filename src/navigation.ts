@@ -1,36 +1,13 @@
 import { App, MarkdownView, Notice, PaneType, TFile, WorkspaceLeaf } from 'obsidian';
 import type { CitationTarget } from './citation';
+import { highlightInReadingView, isPassageHighlightShown } from './highlight';
+import { findPassage } from './passage';
 
 /** Finds the note a citation link points to: by path first, then like a wikilink. */
 export function resolveCitedNote(app: App, note: string): TFile | null {
 	const byPath = app.vault.getAbstractFileByPath(note.endsWith('.md') ? note : `${note}.md`);
 	if (byPath instanceof TFile) return byPath;
 	return app.metadataCache.getFirstLinkpathDest(note, '');
-}
-
-function escapeRegExp(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Finds the passage in the note text and returns its character range.
- * Prototype: exact match, where any run of whitespace matches any other.
- */
-export function findPassage(
-	text: string,
-	q: string,
-	occ = 1,
-): { from: number; to: number } | null {
-	const words = q.trim().split(/\s+/).map(escapeRegExp);
-	if (words.length === 0 || words[0] === '') return null;
-	const pattern = new RegExp(words.join('\\s+'), 'g');
-	let match: RegExpExecArray | null;
-	let count = 0;
-	while ((match = pattern.exec(text)) !== null) {
-		count++;
-		if (count === occ) return { from: match.index, to: match.index + match[0].length };
-	}
-	return null;
 }
 
 /**
@@ -54,16 +31,25 @@ export async function openCitation(
 	}
 
 	const text = await app.vault.cachedRead(file);
-	const range = target.q ? findPassage(text, target.q, target.occ) : null;
+	const range = target.q ? findPassage(text, target.q, target.qe, target.occ) : null;
 	const line = range ? text.slice(0, range.from).split('\n').length - 1 : 0;
-	if (target.q && !range) new Notice('Passage not found; the note was opened at the beginning.');
+	if (target.q && !range) {
+		new Notice('Passage not found; the note was opened at the beginning.');
+	} else if (range?.approximate) {
+		new Notice('Exact passage not found; the closest text is shown.');
+	}
 
 	const leaf = app.workspace.getLeaf(newLeaf);
 	await leaf.openFile(file, { active: true, eState: { line } });
 	const view = await viewShowing(app, file, leaf);
 	if (!view) return;
 	if (view.leaf !== leaf) view.setEphemeralState({ line });
-	if (!range || view.getMode() !== 'source') return;
+	if (!range) return;
+
+	if (view.getMode() === 'preview') {
+		await highlightWhenRendered(view, file, line, text.slice(range.from, range.to));
+		return;
+	}
 
 	const editor = view.editor;
 	const from = editor.offsetToPos(range.from);
@@ -73,6 +59,37 @@ export async function openCitation(
 	editor.focus();
 	editor.setSelection(from, to);
 	editor.scrollIntoView({ from, to }, true);
+}
+
+/** How long to wait for the reading view to render a long note. */
+const READING_VIEW_TIMEOUT_MS = 20000;
+
+/**
+ * Scrolls the reading view to the passage and highlights it once it is
+ * rendered. The reading view renders a note progressively, and for a very long
+ * note it may show nothing for several seconds, then render the top of the
+ * note and ignore the requested line; a re-render may also drop the highlight.
+ * So keep scrolling and highlighting until the highlight has held for a
+ * moment, as long as the note stays in that view.
+ */
+async function highlightWhenRendered(
+	view: MarkdownView,
+	file: TFile,
+	line: number,
+	passage: string,
+): Promise<void> {
+	const deadline = Date.now() + READING_VIEW_TIMEOUT_MS;
+	let steady = 0;
+	while (Date.now() < deadline && view.file === file && view.getMode() === 'preview') {
+		await sleep(150);
+		if (isPassageHighlightShown(view)) {
+			if (++steady >= 3) return;
+			continue;
+		}
+		steady = 0;
+		if (highlightInReadingView(view, passage)) continue;
+		if (Math.abs(view.previewMode.getScroll() - line) > 2) view.setEphemeralState({ line });
+	}
 }
 
 /**
