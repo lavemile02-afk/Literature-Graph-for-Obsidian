@@ -59,3 +59,12 @@ test('matches a changed passage approximately, and reports it', () => {
 test('returns null when the passage is not in the note', () => {
 	assert.equal(findPassage(note, 'this sentence is nowhere in the note at all'), null);
 });
+
+test('extends a passage over the emphasis marks at its edges', async () => {
+	const { withAdjacentMarks } = await import('../src/navigation');
+	const text = 'was referred to as the **wild-type gene**; the';
+	const from = text.indexOf('the **');
+	const to = text.indexOf('gene') + 4;
+	const r = withAdjacentMarks(text, { from, to });
+	assert.equal(text.slice(r.from, r.to), 'the **wild-type gene**');
+});

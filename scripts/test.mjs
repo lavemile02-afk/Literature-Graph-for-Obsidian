@@ -12,16 +12,21 @@ const entryPoints = readdirSync('test')
 	.filter((f) => f.endsWith('.test.ts'))
 	.map((f) => join('test', f));
 
-await esbuild.build({
-	entryPoints,
-	outdir,
-	bundle: true,
-	platform: 'node',
-	format: 'esm',
-	outExtension: { '.js': '.mjs' },
-	alias: { obsidian: './test/obsidian-stub.ts' },
-	logLevel: 'warning',
-});
+try {
+	await esbuild.build({
+		entryPoints,
+		outdir,
+		bundle: true,
+		platform: 'node',
+		format: 'esm',
+		outExtension: { '.js': '.mjs' },
+		alias: { obsidian: './test/obsidian-stub.ts' },
+		logLevel: 'warning',
+	});
+} catch {
+	rmSync(outdir, { recursive: true, force: true });
+	process.exit(1);
+}
 
 const files = readdirSync(outdir).map((f) => join(outdir, f));
 const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });

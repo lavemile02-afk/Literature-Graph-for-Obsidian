@@ -307,10 +307,22 @@ export class OpenAlexClient {
 	}
 }
 
+/** Words that belong to a surname when they come before it: "Van den Brink", "De Cáceres", "ter Braak". */
+const PARTICLES = new Set([
+	'van', 'von', 'der', 'den', 'de', 'del', 'della', 'di', 'da', 'du', 'des', 'dos', 'das', 'le', 'la', 'ter', 'ten', 'st.', 'saint', 'al', 'el', 'bin', 'ibn',
+]);
+
+/** The surname in a full name as OpenAlex writes it ("Paul J. Van den Brink" → "Van den Brink"). */
+export function surnameOf(fullName: string): string {
+	const tokens = fullName.trim().split(/\s+/).filter(Boolean);
+	let start = tokens.length - 1;
+	while (start > 1 && PARTICLES.has((tokens[start - 1] ?? '').toLowerCase())) start--;
+	return tokens.slice(Math.max(0, start)).join(' ') || fullName;
+}
+
 /** "Bourgeois et al., 2016" from OpenAlex author names and year. */
 export function workCitation(work: WorkSummary, language: 'en' | 'fr'): string {
-	const family = (name: string) => name.trim().split(/\s+/).pop() ?? name;
-	const names = work.authors.map(family);
+	const names = work.authors.map(surnameOf);
 	const year = work.year ?? (language === 'fr' ? 's.d.' : 'n.d.');
 	if (names.length === 0) return `${work.title.slice(0, 40)}, ${year}`;
 	if (names.length === 1) return `${names[0]}, ${year}`;

@@ -51,10 +51,23 @@ export async function openCitation(
 		return;
 	}
 	const editor = view.editor;
-	const from = editor.offsetToPos(range.from);
-	const to = editor.offsetToPos(range.to);
+	const { from: start, to: end } = withAdjacentMarks(text, range);
+	const from = editor.offsetToPos(start);
+	const to = editor.offsetToPos(end);
 	editor.setSelection(from, to);
 	editor.scrollIntoView({ from, to }, true);
+}
+
+/** Emphasis marks right at the edges of a passage, so that a selection keeps them paired. */
+const MARKS = '*_~=';
+
+/** A passage range extended over the emphasis marks that touch its ends ("**term**" whole). */
+export function withAdjacentMarks(text: string, range: { from: number; to: number }): { from: number; to: number } {
+	let from = range.from;
+	let to = range.to;
+	while (from > 0 && MARKS.includes(text.charAt(from - 1))) from--;
+	while (to < text.length && MARKS.includes(text.charAt(to))) to++;
+	return { from, to };
 }
 
 /**
