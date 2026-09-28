@@ -54,3 +54,23 @@
 .literature-graph-work.is-entry .literature-graph-status {
 	color: var(--text-faint);
 }
+
+/* Literature graph view. */
+.literature-graph-view {
+	position: relative;
+	padding: 0;
+	overflow: hidden;
+}
+
+.literature-graph-view canvas {
+	display: block;
+}
+
+.literature-graph-view-status {
+	position: absolute;
+	left: var(--size-4-3);
+	bottom: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	pointer-events: none;
+}

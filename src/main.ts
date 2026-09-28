@@ -9,6 +9,7 @@ import { buildReferenceList } from './references';
 import { updateLinksAfterRename } from './rename';
 import { openCitation } from './navigation';
 import { OpenAlexClient } from './openalex';
+import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
 import {
 	DEFAULT_SETTINGS,
@@ -40,6 +41,13 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings, this.openAlex));
 		this.addRibbonIcon('quote', 'Open citations panel', () => void this.openCitationsPanel());
+		this.registerView(GRAPH_VIEW, (leaf) => new LiteratureGraphView(leaf, this.index, this.openAlex, () => this.settings));
+		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
+		this.addCommand({
+			id: 'open-literature-graph',
+			name: 'Open literature graph',
+			callback: () => void this.openGraph(),
+		});
 		this.addCommand({
 			id: 'open-citations-panel',
 			name: 'Open citations panel',
@@ -113,6 +121,14 @@ export default class LiteratureGraphPlugin extends Plugin {
 		const leaf = existing ?? this.app.workspace.getRightLeaf(false);
 		if (!leaf) return;
 		if (!existing) await leaf.setViewState({ type: CITATIONS_VIEW, active: true });
+		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	/** Opens the literature graph in a new tab, or shows the open one. */
+	async openGraph() {
+		const existing = this.app.workspace.getLeavesOfType(GRAPH_VIEW)[0];
+		const leaf = existing ?? this.app.workspace.getLeaf('tab');
+		if (!existing) await leaf.setViewState({ type: GRAPH_VIEW, active: true });
 		await this.app.workspace.revealLeaf(leaf);
 	}
 
