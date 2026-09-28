@@ -31,6 +31,11 @@ export default defineConfig(
 	},
 	...obsidianmd.configs.recommended,
 	{
+		// node:test registers tests with test(), whose promise is not awaited.
+		files: ['test/**/*.ts'],
+		rules: { '@typescript-eslint/no-floating-promises': 'off' },
+	},
+	{
 		rules: {
 			// "OpenAlex" is a proper name (https://openalex.org).
 			'obsidianmd/ui/sentence-case': ['warn', { ignoreWords: ['OpenAlex'] }],

@@ -172,6 +172,8 @@ const MAX_PASSAGE_LENGTH = 5000;
 const MIN_APPROXIMATE_SCORE = 0.6;
 /** Passages shorter than this many words are only matched exactly. */
 const MIN_APPROXIMATE_WORDS = 4;
+/** Windows compared on word order when they have as many common words. */
+const MAX_TIES = 200;
 
 /**
  * Finds the text window whose words best match the passage's words (same
@@ -206,22 +208,50 @@ function approximateMatch(norm: NormalizedText, passage: string): TextRange | nu
 
 	const size = Math.min(wanted.length, words.length);
 	let best = -1;
-	let bestStart = 0;
+	let ties: number[] = [];
 	for (let i = 0; i < words.length; i++) {
 		add(words[i]?.word ?? '');
 		if (i >= size) remove(words[i - size]?.word ?? '');
-		if (i >= size - 1 && matched > best) {
+		if (i < size - 1) continue;
+		if (matched > best) {
 			best = matched;
-			bestStart = i - size + 1;
+			ties = [i - size + 1];
+		} else if (matched === best && ties.length < MAX_TIES) {
+			ties.push(i - size + 1);
 		}
 	}
 	if (best / wanted.length < MIN_APPROXIMATE_SCORE) return null;
 
-	// Trim words at both ends that are not part of the passage.
+	// Among windows with as many common words, prefer the one that keeps the
+	// passage's word order best: the most pairs of consecutive words in common.
+	const pairs = new Set(wanted.slice(1).map((w, i) => `${wanted[i]} ${w}`));
+	const pairScore = (start: number) => {
+		let score = 0;
+		for (let k = start + 1; k < start + size; k++) {
+			if (pairs.has(`${words[k - 1]?.word ?? ''} ${words[k]?.word ?? ''}`)) score++;
+		}
+		return score;
+	};
+	// Then prefer a window that starts with the passage's first word.
+	const first = wanted[0];
+	const last = wanted[wanted.length - 1];
+	let bestStart = ties[0] ?? 0;
+	let bestScore = -1;
+	for (const start of ties) {
+		const score = pairScore(start) * 2 + (words[start]?.word === first ? 1 : 0);
+		if (score > bestScore) {
+			bestScore = score;
+			bestStart = start;
+		}
+	}
+
+	// Trim the ends to the first and last words that belong to the passage:
+	// its first or last word, or a pair of consecutive words it contains.
+	const word = (k: number) => words[k]?.word ?? '';
 	let start = bestStart;
 	let end = bestStart + size - 1;
-	while (start < end && !need.has(words[start]?.word ?? '')) start++;
-	while (end > start && !need.has(words[end]?.word ?? '')) end--;
+	while (start < end && word(start) !== first && !pairs.has(`${word(start)} ${word(start + 1)}`)) start++;
+	while (end > start && word(end) !== last && !pairs.has(`${word(end - 1)} ${word(end)}`)) end--;
 	return toOriginal(norm, words[start]?.from ?? 0, words[end]?.to ?? 0);
 }
 

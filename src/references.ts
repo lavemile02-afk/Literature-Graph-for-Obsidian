@@ -65,7 +65,7 @@ export function localizeReference(reference: string, language: CitationLanguage)
 			.replace(/\(Mémoire de maîtrise\)\. ([^.]+)\./g, "[Master's thesis, $1].")
 			.replace(/\[Prépublication\]/g, '[Preprint]')
 			.replace(/\(s\.d\.\)/g, '(n.d.)')
-			.replace(/\. Dans (?=_)/g, '. In ')
+			.replace(/([.?!]) Dans (?=_)/g, '$1 In ')
 			.replace(/\(p\. (\d+\s*[–-])/g, '(pp. $1');
 	} else {
 		ref = ref
@@ -74,7 +74,7 @@ export function localizeReference(reference: string, language: CitationLanguage)
 			.replace(/\[Master's thesis, ([^\]]+)\]\./g, '(Mémoire de maîtrise). $1.')
 			.replace(/\[Preprint\]/g, '[Prépublication]')
 			.replace(/\(n\.d\.\)/g, '(s.d.)')
-			.replace(/\. In (?=_)/g, '. Dans ')
+			.replace(/([.?!]) In (?=_)/g, '$1 Dans ')
 			.replace(/\(pp\. /g, '(p. ');
 	}
 	return ref;

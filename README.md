@@ -132,6 +132,7 @@ npm install      # install dependencies
 npm run dev      # rebuild main.js on every change (watch mode)
 npm run build    # type-check and build a production main.js
 npm run lint     # lint with the Obsidian ESLint rules
+npm test         # run the tests (Node's built-in test runner)
 ```
 
 The source is in `src/` (TypeScript). The build writes `main.js` at the repository root. To test in a vault, copy `main.js`, `manifest.json` and `styles.css` into `<vault>/.obsidian/plugins/literature-graph-md/` and reload the plugin.

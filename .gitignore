@@ -23,3 +23,6 @@ data.json
 
 # OpenAlex cache written by the plugin when it is tested from this folder
 openalex-cache.json
+
+# Tests compiled by scripts/test.mjs
+.test-build
