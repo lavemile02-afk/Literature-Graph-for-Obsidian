@@ -35,6 +35,8 @@ interface CacheFile {
 	works: Record<string, WorkSummary>;
 	/** DOI → OpenAlex id, or null when OpenAlex does not know the DOI. */
 	doiToId: Record<string, string | null>;
+	/** OpenAlex ids that OpenAlex did not return (merged or deleted works). */
+	missingIds?: Record<string, true>;
 	/** Work id → the most cited works that cite it, and how many cite it in all. */
 	citedBy?: Record<string, { total: number; ids: string[] }>;
 }
@@ -141,9 +143,14 @@ export class OpenAlexClient {
 	}
 
 	/** Fetches works by a filter on one field, in batches, and caches them. */
-	private async fetchBy(field: 'doi' | 'openalex_id', values: string[]): Promise<WorkSummary[]> {
+	private async fetchBy(
+		field: 'doi' | 'openalex_id',
+		values: string[],
+		onProgress?: (done: number, total: number) => void,
+	): Promise<WorkSummary[]> {
 		const found: WorkSummary[] = [];
 		for (let i = 0; i < values.length; i += BATCH_SIZE) {
+			onProgress?.(i, values.length);
 			const batch = values.slice(i, i + BATCH_SIZE);
 			const data = (await this.request('/works', {
 				filter: `${field}:${batch.join('|')}`,
@@ -156,13 +163,27 @@ export class OpenAlexClient {
 				if (work.doi) this.cache.doiToId[work.doi] = work.id;
 				found.push(work);
 			}
+			// Remember what OpenAlex does not know, so as not to ask again.
 			if (field === 'doi') {
-				// Remember the DOIs OpenAlex does not know, so as not to ask again.
 				for (const doi of batch) if (!(doi in this.cache.doiToId)) this.cache.doiToId[doi] = null;
+			} else {
+				const missing = (this.cache.missingIds ??= {});
+				for (const id of batch) if (!this.cache.works[id]) missing[id] = true;
 			}
 			this.scheduleSave();
 		}
+		onProgress?.(values.length, values.length);
 		return found;
+	}
+
+	/** A cached work, without any request. */
+	cachedWork(id: string): WorkSummary | null {
+		return this.cache.works[id] ?? null;
+	}
+
+	/** The OpenAlex id of a DOI if it is cached, without any request. */
+	cachedIdForDoi(doi: string): string | null {
+		return this.cache.doiToId[normalizeDoi(doi)] ?? null;
 	}
 
 	/** The work with this DOI, from the cache or OpenAlex; null if unknown or offline. */
@@ -172,11 +193,11 @@ export class OpenAlexClient {
 	}
 
 	/** Works by DOI, in the same order; unknown DOIs are left out. */
-	async worksByDois(dois: string[]): Promise<WorkSummary[]> {
+	async worksByDois(dois: string[], onProgress?: (done: number, total: number) => void): Promise<WorkSummary[]> {
 		await this.load();
 		const wanted = dois.map(normalizeDoi);
-		const missing = wanted.filter((d) => !(d in this.cache.doiToId));
-		if (missing.length > 0 && this.options().enabled) await this.fetchBy('doi', missing);
+		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId)))];
+		if (missing.length > 0 && this.options().enabled) await this.fetchBy('doi', missing, onProgress);
 		return wanted
 			.map((d) => this.cache.doiToId[d])
 			.map((id) => (id ? this.cache.works[id] : undefined))
@@ -184,10 +205,11 @@ export class OpenAlexClient {
 	}
 
 	/** Works by OpenAlex id; works not cached are fetched when possible. */
-	async worksByIds(ids: string[]): Promise<WorkSummary[]> {
+	async worksByIds(ids: string[], onProgress?: (done: number, total: number) => void): Promise<WorkSummary[]> {
 		await this.load();
-		const missing = ids.filter((id) => !this.cache.works[id]);
-		if (missing.length > 0 && this.options().enabled) await this.fetchBy('openalex_id', missing);
+		const known = this.cache.missingIds ?? {};
+		const missing = ids.filter((id) => !this.cache.works[id] && !known[id]);
+		if (missing.length > 0 && this.options().enabled) await this.fetchBy('openalex_id', missing, onProgress);
 		return ids.map((id) => this.cache.works[id]).filter((w): w is WorkSummary => w !== undefined);
 	}
 

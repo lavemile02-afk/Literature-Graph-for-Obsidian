@@ -27,6 +27,12 @@ export interface LiteratureGraphSettings {
 	openAlexEnabled: boolean;
 	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
 	openAlexEmail: string;
+	/** Generations shown by default in the literature graph: 0, 1 or 2. */
+	graphGenerations: number;
+	/** A work outside the vault is shown if at least this many works of the graph cite it. */
+	graphMinCitations: number;
+	/** Most nodes in the literature graph. */
+	graphMaxNodes: number;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -42,6 +48,9 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	updateLinksOnRename: true,
 	openAlexEnabled: true,
 	openAlexEmail: '',
+	graphGenerations: 0,
+	graphMinCitations: 1,
+	graphMaxNodes: 3000,
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
@@ -103,6 +112,27 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'DOI property',
 						desc: 'Property that holds the DOI of a work. A link that cites a DOI opens the note with that DOI, if there is one.',
 						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: 'Literature graph',
+				items: [
+					{
+						name: 'Generations',
+						desc: '0: the works of the literature folder. 1: also the works outside the vault that they cite (from OpenAlex). 2: also the works those cite. Can be changed in the graph for the time it stays open.',
+						control: { type: 'dropdown', key: 'graphGenerations', options: { '0': '0', '1': '1', '2': '2' } },
+					},
+					{
+						name: 'Minimum citations for works outside the vault',
+						desc: 'A work outside the vault is shown only if at least this many works of the graph cite it. Can be changed in the graph for the time it stays open.',
+						control: { type: 'number', key: 'graphMinCitations', min: 1 },
+					},
+					{
+						name: 'Node limit',
+						desc: 'At most this many works in the graph; the most cited works outside the vault are kept. Large graphs take longer to load and to lay out.',
+						control: { type: 'number', key: 'graphMaxNodes', min: 100 },
 					},
 				],
 			},
