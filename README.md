@@ -34,6 +34,8 @@ The readable form breaks if the passage contains `>` or a line break, and it may
 
 In the note of a work, select the passage you want to cite, right-click it and choose **Copy citation link** (or run the command **Copy citation link to selection**, which you can bind to a hotkey). Paste the link where you write. For a long selection, the link keeps its first words (`q`) and last words (`qe`), and the whole passage is selected or highlighted when the link is opened. If the start of the passage appears more than once in the note, the link says which occurrence (`occ`).
 
+The command also works in the reading view: select the passage and run it (bind it to a hotkey for convenience). The selected text is found back in the note's Markdown; if it occurs more than once, the occurrence nearest to the part of the note on screen is cited.
+
 The text of the link comes from the work's properties:
 
 1. the citation text property (by default `Citation_texte`), such as `(Smith et al., 2020)`;

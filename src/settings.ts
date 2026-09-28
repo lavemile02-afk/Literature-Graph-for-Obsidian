@@ -23,6 +23,8 @@ export interface LiteratureGraphSettings {
 	doiProperty: string;
 	/** Rewrite citation links when the cited note is renamed. */
 	updateLinksOnRename: boolean;
+	/** Seconds the cited passage stays highlighted in the reading view (0: until the next one). */
+	highlightSeconds: number;
 	/** Look up bibliographic data on OpenAlex (network access). */
 	openAlexEnabled: boolean;
 	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	useNoteNameAsCitation: false,
 	doiProperty: 'DOI',
 	updateLinksOnRename: true,
+	highlightSeconds: 5,
 	openAlexEnabled: true,
 	openAlexEmail: '',
 	graphGenerations: 0,
@@ -184,6 +187,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Update links when a note is renamed',
 						desc: 'Rewrite the citation links that point to a note when it is renamed or moved. Obsidian does this for wikilinks, but not for citation links.',
 						control: { type: 'toggle', key: 'updateLinksOnRename' },
+					},
+					{
+						name: 'Highlight duration',
+						desc: 'Seconds the cited passage stays highlighted when a citation link opens it in the reading view. 0 keeps it until another passage is highlighted.',
+						control: { type: 'number', key: 'highlightSeconds', min: 0, max: 600 },
 					},
 				],
 			},

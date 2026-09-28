@@ -4,7 +4,9 @@ import { CitationIndex } from './citationIndex';
 import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink } from './citationLink';
 import { registerCitationClicks } from './clicks';
+import { setHighlightDuration } from './highlight';
 import { withoutCitationLinks } from './links';
+import { findExactPassages, findPassage } from './passage';
 import { buildReferenceList } from './references';
 import { updateLinksAfterRename } from './rename';
 import { openCitation } from './navigation';
@@ -24,6 +26,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		setHighlightDuration(Number(this.settings.highlightSeconds));
 		this.addSettingTab(new LiteratureGraphSettingTab(this.app, this));
 
 		this.index = new CitationIndex(this.app, () => this.settings);
@@ -62,9 +65,18 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.addCommand({
 			id: 'copy-citation-link',
 			name: 'Copy citation link to selection',
-			editorCheckCallback: (checking, editor, info) => {
-				if (!editor.somethingSelected() || !info.file) return false;
-				if (!checking) void this.copyCitationLink(editor, info);
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view?.file) return false;
+				if (view.getMode() === 'source') {
+					if (!view.editor.somethingSelected()) return false;
+					if (!checking) void this.copyCitationLink(view.editor, view);
+					return true;
+				}
+				// Reading view: the selected text is rendered text.
+				const selected = activeWindow.getSelection()?.toString().trim() ?? '';
+				if (!selected) return false;
+				if (!checking) void this.copyCitationLinkFromReading(view, selected);
 				return true;
 			},
 		});
@@ -115,6 +127,39 @@ export default class LiteratureGraphPlugin extends Plugin {
 		const from = editor.posToOffset(editor.getCursor('from'));
 		const to = editor.posToOffset(editor.getCursor('to'));
 		const link = buildCitationLink(this.app, file, text, from, to, this.settings);
+		if (!link) return;
+		await navigator.clipboard.writeText(link);
+		new Notice('Citation link copied.');
+	}
+
+	/**
+	 * Copies a citation link to a passage selected in the reading view. The
+	 * rendered text is found back in the note's Markdown by the same
+	 * normalized search that opens links; when it occurs more than once, the
+	 * occurrence nearest to the part of the note on screen is used.
+	 */
+	async copyCitationLinkFromReading(view: MarkdownView, selected: string) {
+		const file = view.file;
+		if (!file) return;
+		const text = await this.app.vault.cachedRead(file);
+		const words = selected.split(/\s+/).filter(Boolean);
+		const q = words.slice(0, 12).join(' ');
+		const qe = words.length > 15 ? words.slice(-6).join(' ') : undefined;
+		const matches = findExactPassages(text, q);
+		if (matches.length === 0) {
+			new Notice('The selection was not found in the note; select the passage in the editing view instead.');
+			return;
+		}
+		const lineOf = (offset: number) => text.slice(0, offset).split('\n').length - 1;
+		const onScreen = view.previewMode.getScroll();
+		let occ = 1;
+		matches.forEach((m, i) => {
+			const best = matches[occ - 1];
+			if (best && Math.abs(lineOf(m.from) - onScreen) < Math.abs(lineOf(best.from) - onScreen)) occ = i + 1;
+		});
+		const range = findPassage(text, q, qe, occ);
+		if (!range) return;
+		const link = buildCitationLink(this.app, file, text, range.from, range.to, this.settings);
 		if (!link) return;
 		await navigator.clipboard.writeText(link);
 		new Notice('Citation link copied.');
@@ -218,6 +263,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	/** Called when a setting changes in the settings tab. */
 	onSettingsChanged() {
+		setHighlightDuration(Number(this.settings.highlightSeconds));
 		for (const leaf of this.app.workspace.getLeavesOfType(GRAPH_VIEW)) {
 			if (leaf.view instanceof LiteratureGraphView) leaf.view.applyColorGroups();
 		}

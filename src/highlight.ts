@@ -4,8 +4,13 @@ import { normalizeForSearch } from './passage';
 /** Name of the CSS highlight, styled with ::highlight(...) in styles.css. */
 export const PASSAGE_HIGHLIGHT = 'literature-graph-passage';
 
-/** How long the cited passage stays highlighted in the reading view. */
-const HIGHLIGHT_DURATION_MS = 5000;
+/** How long the cited passage stays highlighted in the reading view (setting). */
+let highlightDurationMs = 5000;
+
+/** Sets how long the passage stays highlighted, in seconds (0: until the next highlight). */
+export function setHighlightDuration(seconds: number): void {
+	highlightDurationMs = Math.max(0, seconds) * 1000;
+}
 
 const BLOCKS = 'p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, pre, figcaption, div';
 
@@ -109,7 +114,7 @@ export function highlightInReadingView(view: MarkdownView, passage: string): boo
 	clearPassageHighlight();
 	win.CSS.highlights.set(PASSAGE_HIGHLIGHT, new win.Highlight(best));
 	highlightedWindow = win;
-	clearTimer = window.setTimeout(clearPassageHighlight, HIGHLIGHT_DURATION_MS);
+	if (highlightDurationMs > 0) clearTimer = window.setTimeout(clearPassageHighlight, highlightDurationMs);
 	best.startContainer.parentElement?.scrollIntoView({ block: 'center' });
 	return true;
 }
