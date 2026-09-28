@@ -65,6 +65,15 @@ Each work expands to a second level: its cited passages, its own **References** 
 
 - **References (OpenAlex)**: when the note has a DOI (its DOI property, or else the first `doi.org` link in it), the works that this work cites, from OpenAlex. Works of your vault (matched by DOI) open their note; the others open their DOI.
 
+### Reference lists of converted papers
+
+Literature notes converted from PDF usually end with their reference list ("References", "Literature cited", "Références bibliographiques"…; a book may have one per chapter). The plugin reads these lists, without changing the notes, and links each entry to a note of your vault when it can: by DOI, or else by first author and year **and** most of the title's words (or, without a title, the same author list), so that two works of the same author and year are not confused. An entry that matches no note, or more than one, is not linked.
+
+- **References (from the note)**: the entries of the active note's reference list, linked when possible (open by default when the note has no DOI).
+- **Cited by** also lists the notes whose reference list cites the active note.
+
+The notes' properties give the authors, year and title of each work (see the settings), and only notes in the literature folder are read this way.
+
 ## Network use
 
 When **Use OpenAlex** is on (the default), the plugin sends requests to [OpenAlex](https://openalex.org) (`api.openalex.org`), a free and open index of scholarly works, to get bibliographic data: the requests contain DOIs and OpenAlex work ids only, plus the contact email if you set one in the settings. Answers are cached in `openalex-cache.json` in the plugin folder, so they stay available offline and each work is requested only once. Turn **Use OpenAlex** off to make no network requests at all; the cache is still used.

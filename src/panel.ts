@@ -1,6 +1,7 @@
 import { debounce, ItemView, MarkdownView, TFile, WorkspaceLeaf, setIcon } from 'obsidian';
 import { citationText } from './citationLink';
 import type { CitationIndex, CitedWork } from './citationIndex';
+import type { BibEntry } from './bibliography';
 import type { CitationLink } from './links';
 import { openCitation, openFileAtLine } from './navigation';
 import { OpenAlexClient, WorkSummary, workCitation } from './openalex';
@@ -8,16 +9,35 @@ import type { LiteratureGraphSettings } from './settings';
 
 export const CITATIONS_VIEW = 'literature-graph-citations';
 
-/** A work shown in the panel: a note of the vault, a work known by DOI or OpenAlex id, or a broken link. */
+/**
+ * A work shown in the panel: a note of the vault, a work known by DOI or
+ * OpenAlex id, a broken link, or an entry of a reference list that is not
+ * linked to anything (it opens at its line in `file`).
+ */
 interface WorkRow {
-	kind: 'note' | 'doi' | 'broken';
+	kind: 'note' | 'doi' | 'broken' | 'entry';
 	file: TFile | null;
+	/** Line to open in `file` (entries). */
+	line?: number;
 	doi: string | null;
 	/** OpenAlex id, when known. */
 	openAlexId: string | null;
 	label: string;
 	detail: string;
 }
+
+const STATUS_ICON: Record<WorkRow['kind'], string> = {
+	note: 'file-check',
+	doi: 'external-link',
+	broken: 'file-x',
+	entry: 'list',
+};
+const STATUS_LABEL: Record<WorkRow['kind'], string> = {
+	note: 'In the vault',
+	doi: 'Outside the vault',
+	broken: 'Broken link',
+	entry: 'Reference list entry',
+};
 
 /** How many works citing a work are listed at the second level. */
 const CITING_LIMIT = 50;
@@ -92,15 +112,59 @@ export class CitationsView extends ItemView {
 		if (cited.length === 0) cites.createDiv({ cls: 'search-empty-state', text: 'No citation links.' });
 		for (const { row, links } of cited) this.renderWork(cites, row, `cites:${this.rowKey(row)}`, 1, links);
 
-		// Cited by: notes of the vault whose citation links cite this note.
+		// Cited by: notes whose citation links, or whose reference list, cite this note.
 		const citing = this.index.citing(file).sort((a, b) => a.path.localeCompare(b.path));
-		const citedBy = this.section(root, 'cited-by', 'Cited by', citing.length, true);
-		if (citing.length === 0) citedBy.createDiv({ cls: 'search-empty-state', text: 'No note cites this one.' });
+		const inBibliographies = this.index.citedInBibliographies(file).sort((a, b) => a.path.localeCompare(b.path));
+		const citedBy = this.section(root, 'cited-by', 'Cited by', citing.length + inBibliographies.length, true);
+		if (citing.length + inBibliographies.length === 0) {
+			citedBy.createDiv({ cls: 'search-empty-state', text: 'No note cites this one.' });
+		}
 		for (const { path, links } of citing) this.renderCitingNote(citedBy, path, links);
+		for (const { path, entries } of inBibliographies) this.renderCitingBibliography(citedBy, path, entries);
 
-		// References of the work, from OpenAlex, when the note has a DOI.
+		// References of the work, from OpenAlex, when the note has a DOI...
 		const doi = this.index.doiForFile(file);
 		if (doi) void this.renderOpenAlexReferences(root, file, doi);
+		// ...and from the note's own reference list.
+		const entries = this.index.bibliographyOf(file);
+		if (entries.length > 0) this.renderNoteBibliography(root, file, entries, doi === null);
+	}
+
+	/** The reference list of the note itself, each entry linked to a note or a DOI when possible. */
+	private renderNoteBibliography(root: HTMLElement, file: TFile, entries: BibEntry[], open: boolean): void {
+		const section = this.section(root, 'bibliography', 'References (from the note)', entries.length, open);
+		const rows = entries.map((entry) => {
+			const target = this.index.resolveEntry(entry, file.path);
+			if (target) return { row: this.rowForFile(target), entry };
+			const label = entry.firstAuthor && entry.year ? `${entry.firstAuthor}, ${entry.year}` : entry.text.slice(0, 40);
+			const row: WorkRow = entry.doi
+				? { kind: 'doi', file: null, doi: entry.doi, openAlexId: null, label, detail: entry.text }
+				: { kind: 'entry', file, doi: null, openAlexId: null, label, detail: entry.text, line: entry.line };
+			return { row, entry };
+		});
+		const linked = rows.filter((r) => r.row.kind === 'note').length;
+		section.createDiv({
+			cls: 'search-empty-state',
+			text: `${linked} of ${entries.length} entries are notes of the vault. Entries are read from the note's reference list and matched by DOI, or by first author, year and title.`,
+		});
+		for (const { row, entry } of rows) this.renderWork(section, row, `bib:${file.path}:${entry.line}`, row.kind === 'entry' ? 2 : 1);
+	}
+
+	/** A note whose reference list cites the active note. */
+	private renderCitingBibliography(parent: HTMLElement, path: string, entries: BibEntry[]): void {
+		const citing = this.app.vault.getAbstractFileByPath(path);
+		if (!(citing instanceof TFile)) return;
+		const lines = entries.map((e) => e.line + 1).sort((a, b) => a - b);
+		const row: WorkRow = {
+			kind: 'entry',
+			file: citing,
+			doi: null,
+			openAlexId: null,
+			label: citing.basename,
+			detail: `Reference list, line${lines.length > 1 ? 's' : ''} ${lines.join(', ')}`,
+			line: (lines[0] ?? 1) - 1,
+		};
+		this.renderWork(parent, row, '', 2);
 	}
 
 	// ----- Rows and sections -----
@@ -228,8 +292,8 @@ export class CitationsView extends ItemView {
 		const buildSelf = (self: HTMLElement) => {
 			self.addClass('has-action');
 			const status = self.createDiv({ cls: 'literature-graph-status' });
-			setIcon(status, row.kind === 'note' ? 'file-check' : row.kind === 'doi' ? 'external-link' : 'file-x');
-			status.setAttr('aria-label', row.kind === 'note' ? 'In the vault' : row.kind === 'doi' ? 'Outside the vault' : 'Broken link');
+			setIcon(status, STATUS_ICON[row.kind]);
+			status.setAttr('aria-label', STATUS_LABEL[row.kind]);
 			const inner = self.createDiv({ cls: 'tree-item-inner' });
 			inner.createDiv({ cls: 'literature-graph-work-label', text: row.label });
 			const detail = inner.createDiv({ cls: 'literature-graph-work-detail', text: row.detail });
@@ -237,11 +301,13 @@ export class CitationsView extends ItemView {
 				self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(links.length) });
 			}
 			self.addEventListener('click', () => this.openRow(row));
-			// Works cited only by DOI: show their title from OpenAlex.
-			if (row.kind === 'doi' && row.doi && !row.openAlexId) void this.fillTitle(row, detail);
+			// Works cited only by DOI (the detail is the DOI): show their title from OpenAlex.
+			if (row.kind === 'doi' && row.doi && !row.openAlexId && row.detail.startsWith('https://doi.org/')) {
+				void this.fillTitle(row, detail);
+			}
 		};
 		const cls = `tree-item literature-graph-work is-${row.kind}`;
-		if (level === 2 || row.kind === 'broken') {
+		if (level === 2 || row.kind === 'broken' || row.kind === 'entry') {
 			if (links.length === 0) {
 				const item = parent.createDiv({ cls });
 				buildSelf(item.createDiv({ cls: 'tree-item-self is-clickable' }));
@@ -426,7 +492,7 @@ export class CitationsView extends ItemView {
 	}
 
 	private openRow(row: WorkRow): void {
-		if (row.file) void openFileAtLine(this.app, row.file, 0);
+		if (row.file) void openFileAtLine(this.app, row.file, row.line ?? 0);
 		else if (row.doi) window.open(`https://doi.org/${row.doi}`);
 		else if (row.openAlexId) window.open(`https://openalex.org/${row.openAlexId}`);
 	}

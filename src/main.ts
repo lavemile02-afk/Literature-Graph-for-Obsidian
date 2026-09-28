@@ -25,7 +25,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		await this.loadSettings();
 		this.addSettingTab(new LiteratureGraphSettingTab(this.app, this));
 
-		this.index = new CitationIndex(this.app, () => this.settings.doiProperty);
+		this.index = new CitationIndex(this.app, () => this.settings);
 		this.openAlex = new OpenAlexClient(this.app, `${this.manifest.dir ?? ''}/openalex-cache.json`, () => ({
 			enabled: this.settings.openAlexEnabled,
 			email: this.settings.openAlexEmail,

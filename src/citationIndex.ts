@@ -1,7 +1,9 @@
 import { App, Events, TAbstractFile, TFile, TFolder } from 'obsidian';
+import { BibEntry, VaultWork, bibliographyEntries, entryMatches, isReferenceHeading, nameKey } from './bibliography';
 import { CITE_URL_PREFIX, CitationTarget } from './citation';
 import { CitationLink, citationLinksIn } from './links';
 import { resolveCitedNote } from './navigation';
+import type { LiteratureGraphSettings } from './settings';
 
 /** What a citation points to: a note of the vault, a DOI outside it, or nothing. */
 export type CitedWork =
@@ -19,6 +21,20 @@ export function normalizeDoi(doi: string): string {
 }
 
 const DOI_IN_TEXT = /doi\.org\/(10\.\d{4,9}\/[^\s)\]>"']+)/i;
+/** How far from the start of a note its own DOI is looked for, without a DOI property. */
+const DOI_SEARCH_LENGTH = 5000;
+
+/** The text of a note before its first reference-list heading. */
+function beforeReferences(text: string): string {
+	const heading = /^#{1,6}\s+(.*)$/gm;
+	let match: RegExpExecArray | null;
+	while ((match = heading.exec(text)) !== null) {
+		if (isReferenceHeading(match[1] ?? '')) return text.slice(0, match.index);
+	}
+	return text;
+}
+
+type Located = { path: string; entry: BibEntry };
 
 /**
  * An index of the citation links of the vault, kept up to date as notes change.
@@ -34,12 +50,48 @@ export class CitationIndex extends Events {
 	/** Notes of the vault by DOI (from the DOI property, else the first doi.org URL). */
 	private readonly fileByDoi = new Map<string, string>();
 	private readonly doiByPath = new Map<string, string>();
+	/** Reference-list entries of each literature note, by path. */
+	private readonly bibByPath = new Map<string, BibEntry[]>();
+	/** Reference-list entries by "first author|year" and by DOI, to find who cites a work. */
+	private readonly bibByKey = new Map<string, Located[]>();
+	private readonly bibByDoi = new Map<string, Located[]>();
+	/** Literature notes by "first author|year" of their own work. */
+	private readonly worksByKey = new Map<string, Set<string>>();
+	private readonly workKeyByPath = new Map<string, string>();
 
 	constructor(
 		private readonly app: App,
-		private readonly doiProperty: () => string,
+		private readonly settings: () => LiteratureGraphSettings,
 	) {
 		super();
+	}
+
+	/** Whether a note is in the literature folder (every note when the setting is empty). */
+	isLiterature(file: TFile): boolean {
+		const folder = this.settings().literatureFolder.replace(/\/+$/, '');
+		return folder === '' || file.path.startsWith(`${folder}/`);
+	}
+
+	/** What the properties of a note say about its work (authors, year, title, DOI). */
+	vaultWork(file: TFile): VaultWork | null {
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		if (!fm) return null;
+		const read = (key: string): string => {
+			const value: unknown = fm[key];
+			return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+		};
+		const s = this.settings();
+		const authors = read(s.authorsProperty)
+			.split(/\s*[,;]\s*/)
+			.filter((p) => p !== '' && !/^(\p{Lu}\.?[\s.-]*)+$/u.test(p))
+			.map(nameKey)
+			.filter(Boolean);
+		return {
+			authors,
+			year: read(s.yearProperty),
+			title: read(s.titleProperty),
+			doi: this.doiByPath.get(file.path) ?? null,
+		};
 	}
 
 	/** Reads every Markdown note. */
@@ -47,6 +99,11 @@ export class CitationIndex extends Events {
 		this.linksByPath.clear();
 		this.fileByDoi.clear();
 		this.doiByPath.clear();
+		this.bibByPath.clear();
+		this.bibByKey.clear();
+		this.bibByDoi.clear();
+		this.worksByKey.clear();
+		this.workKeyByPath.clear();
 		for (const file of this.app.vault.getMarkdownFiles()) await this.indexFile(file, false);
 		this.trigger('changed');
 	}
@@ -58,6 +115,9 @@ export class CitationIndex extends Events {
 		if (links.length > 0) this.linksByPath.set(file.path, links);
 		else this.linksByPath.delete(file.path);
 		this.setDoi(file.path, this.doiOf(file, text));
+		const literature = this.isLiterature(file);
+		this.setBibliography(file.path, literature ? bibliographyEntries(text) : []);
+		this.setWorkKey(file.path, literature ? this.workKey(file) : null);
 		if (notify) this.trigger('changed');
 	}
 
@@ -65,6 +125,8 @@ export class CitationIndex extends Events {
 	removeFile(path: string): void {
 		this.linksByPath.delete(path);
 		this.setDoi(path, null);
+		this.setBibliography(path, []);
+		this.setWorkKey(path, null);
 		this.trigger('changed');
 	}
 
@@ -76,13 +138,98 @@ export class CitationIndex extends Events {
 		const doi = this.doiByPath.get(oldPath) ?? null;
 		this.setDoi(oldPath, null);
 		this.setDoi(file.path, doi);
+		const literature = this.isLiterature(file);
+		const entries = this.bibByPath.get(oldPath) ?? [];
+		this.setBibliography(oldPath, []);
+		this.setBibliography(file.path, literature ? entries : []);
+		this.setWorkKey(oldPath, null);
+		this.setWorkKey(file.path, literature ? this.workKey(file) : null);
 		this.trigger('changed');
 	}
 
+	private workKey(file: TFile): string | null {
+		const work = this.vaultWork(file);
+		return work?.authors[0] && work.year ? `${work.authors[0]}|${work.year}` : null;
+	}
+
+	private setWorkKey(path: string, key: string | null): void {
+		const old = this.workKeyByPath.get(path);
+		if (old) this.worksByKey.get(old)?.delete(path);
+		if (!key) {
+			this.workKeyByPath.delete(path);
+			return;
+		}
+		this.workKeyByPath.set(path, key);
+		this.worksByKey.set(key, (this.worksByKey.get(key) ?? new Set<string>()).add(path));
+	}
+
+	private setBibliography(path: string, entries: BibEntry[]): void {
+		const remove = (map: Map<string, Located[]>, key: string) => {
+			const list = (map.get(key) ?? []).filter((e) => e.path !== path);
+			if (list.length > 0) map.set(key, list);
+			else map.delete(key);
+		};
+		for (const old of this.bibByPath.get(path) ?? []) {
+			if (old.authors[0] && old.year) remove(this.bibByKey, `${old.authors[0]}|${old.year}`);
+			if (old.doi) remove(this.bibByDoi, old.doi);
+		}
+		if (entries.length === 0) {
+			this.bibByPath.delete(path);
+			return;
+		}
+		this.bibByPath.set(path, entries);
+		const add = (map: Map<string, Located[]>, key: string, entry: BibEntry) => {
+			const list = map.get(key) ?? [];
+			list.push({ path, entry });
+			map.set(key, list);
+		};
+		for (const entry of entries) {
+			if (entry.authors[0] && entry.year) add(this.bibByKey, `${entry.authors[0]}|${entry.year}`, entry);
+			if (entry.doi) add(this.bibByDoi, entry.doi, entry);
+		}
+	}
+
+	/** The literature note that a reference-list entry designates, if exactly one does. */
+	resolveEntry(entry: BibEntry, fromPath: string): TFile | null {
+		if (entry.doi) {
+			const byDoi = this.fileForDoi(entry.doi);
+			if (byDoi) return byDoi.path === fromPath ? null : byDoi;
+		}
+		if (!entry.authors[0] || !entry.year) return null;
+		const matching: TFile[] = [];
+		for (const path of this.worksByKey.get(`${entry.authors[0]}|${entry.year}`) ?? []) {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (path === fromPath || !(file instanceof TFile)) continue;
+			const work = this.vaultWork(file);
+			if (work && entryMatches(entry, work)) matching.push(file);
+		}
+		return matching.length === 1 ? (matching[0] ?? null) : null;
+	}
+
+	/** The reference-list entries of a literature note. */
+	bibliographyOf(file: TFile): BibEntry[] {
+		return this.bibByPath.get(file.path) ?? [];
+	}
+
+	/** Literature notes whose reference list cites a note, with the entries. */
+	citedInBibliographies(file: TFile): { path: string; entries: BibEntry[] }[] {
+		const key = this.workKeyByPath.get(file.path);
+		const doi = this.doiByPath.get(file.path);
+		const candidates = [...(key ? (this.bibByKey.get(key) ?? []) : []), ...(doi ? (this.bibByDoi.get(doi) ?? []) : [])];
+		const byPath = new Map<string, Set<BibEntry>>();
+		for (const { path, entry } of candidates) {
+			if (path === file.path || this.resolveEntry(entry, path) !== file) continue;
+			byPath.set(path, (byPath.get(path) ?? new Set<BibEntry>()).add(entry));
+		}
+		return [...byPath.entries()].map(([path, entries]) => ({ path, entries: [...entries] }));
+	}
+
 	private doiOf(file: TFile, text: string): string | null {
-		const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.doiProperty()];
+		const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings().doiProperty];
 		if (typeof value === 'string' && value.trim()) return normalizeDoi(value);
-		const inText = DOI_IN_TEXT.exec(text);
+		// Without the property, the note's own DOI is the first one near its
+		// start, before any reference list (whose DOIs are other works').
+		const inText = DOI_IN_TEXT.exec(beforeReferences(text).slice(0, DOI_SEARCH_LENGTH));
 		return inText?.[1] ? normalizeDoi(inText[1].replace(/[.,;]+$/, '')) : null;
 	}
 
