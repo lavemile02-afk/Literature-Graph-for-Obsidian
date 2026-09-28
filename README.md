@@ -78,6 +78,8 @@ The notes' properties give the authors, year and title of each work (see the set
 
 **Open literature graph** (command or ribbon icon) opens a graph view of your literature: the notes of the literature folder, and the citations between them, never wikilinks, so Obsidian's own graph view stays as it is. A citation between two works of your vault is drawn when it is found in a citation link, in the citing note's reference list, or in OpenAlex (the references of works with a DOI). Arrows point to the cited work, and larger nodes are cited more often.
 
+**Local graph.** **Open local literature graph** shows, in the right sidebar, the works around the active note, up to one to three citations away (the **Depth** slider), in either direction, and follows the note you open. A note outside the literature folder, such as a draft that cites works with citation links, is shown at the center with the works it cites.
+
 **Generations.** By default the graph shows the works of your vault (generation 0). With generation 1, it also shows, smaller and in the theme's color for unresolved notes, the works outside your vault that they cite; with generation 2, the works those cite. These come from OpenAlex. Since this can mean tens of thousands of works, a work outside the vault is shown only if enough works of the graph cite it (by default at least one), and the graph keeps at most a set number of works (by default 3000), the most cited first; the status line says how many were left out. Clicking a work outside the vault opens its DOI.
 
 **Color groups.** As in Obsidian's graph view, notes can be colored by groups, set in the plugin settings, one per line as `query = color`; a note takes the color of the first group it matches:

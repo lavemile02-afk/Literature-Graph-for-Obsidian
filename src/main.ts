@@ -49,6 +49,11 @@ export default class LiteratureGraphPlugin extends Plugin {
 			callback: () => void this.openGraph(),
 		});
 		this.addCommand({
+			id: 'open-local-literature-graph',
+			name: 'Open local literature graph',
+			callback: () => void this.openLocalGraph(),
+		});
+		this.addCommand({
 			id: 'open-citations-panel',
 			name: 'Open citations panel',
 			callback: () => void this.openCitationsPanel(),
@@ -126,9 +131,22 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	/** Opens the literature graph in a new tab, or shows the open one. */
 	async openGraph() {
-		const existing = this.app.workspace.getLeavesOfType(GRAPH_VIEW)[0];
+		const existing = this.app.workspace
+			.getLeavesOfType(GRAPH_VIEW)
+			.find((leaf) => (leaf.getViewState().state as { local?: boolean } | undefined)?.local !== true);
 		const leaf = existing ?? this.app.workspace.getLeaf('tab');
-		if (!existing) await leaf.setViewState({ type: GRAPH_VIEW, active: true });
+		if (!existing) await leaf.setViewState({ type: GRAPH_VIEW, active: true, state: { local: false } });
+		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	/** Opens the local literature graph (around the active note) in the right sidebar. */
+	async openLocalGraph() {
+		const existing = this.app.workspace
+			.getLeavesOfType(GRAPH_VIEW)
+			.find((leaf) => (leaf.getViewState().state as { local?: boolean } | undefined)?.local === true);
+		const leaf = existing ?? this.app.workspace.getRightLeaf(false);
+		if (!leaf) return;
+		if (!existing) await leaf.setViewState({ type: GRAPH_VIEW, active: false, state: { local: true, depth: 1 } });
 		await this.app.workspace.revealLeaf(leaf);
 	}
 

@@ -106,3 +106,7 @@
 .literature-graph-controls .setting-item {
 	padding: var(--size-4-2) 0;
 }
+
+.literature-graph-view:not(.is-local) .literature-graph-local-only {
+	display: none;
+}

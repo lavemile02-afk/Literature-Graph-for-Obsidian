@@ -11,7 +11,7 @@ import {
 	SimulationLinkDatum,
 	SimulationNodeDatum,
 } from 'd3-force';
-import { debounce, ItemView, Keymap, Setting, WorkspaceLeaf, setIcon } from 'obsidian';
+import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon } from 'obsidian';
 import { Application, Container, FederatedPointerEvent, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { CitationIndex } from './citationIndex';
 import { colorFor, parseColorGroups } from './colorGroups';
@@ -67,6 +67,8 @@ function parseCssColor(css: string, fallback: string): ThemeColor {
 	return { color: (r << 16) + (g << 8) + b, alpha: a };
 }
 
+/** Starting zoom of the local graph. */
+const LOCAL_START_SCALE = 1.5;
 /** Radius of the shared circle texture, in pixels. */
 const CIRCLE_TEXTURE_RADIUS = 32;
 /** Largest node radius, for hit testing. */
@@ -114,6 +116,15 @@ export class LiteratureGraphView extends ItemView {
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
 	private loading = 0;
+	/** Local mode: only the works around the active note, up to `depth` citations away. */
+	private local = false;
+	private depth = 1;
+	/** Path of the note at the center of the local graph. */
+	private center: string | null = null;
+	/** The whole graph, of which the local mode shows a part. */
+	private fullGraph: LiteratureGraph | null = null;
+	/** Local mode: keep the center note in the middle until the user moves the view. */
+	private followCenter = true;
 	/** Text typed in the filter: works whose label or title contain it stand out. */
 	private filter = '';
 	/** Forces of the layout, changed with the sliders of the view. */
@@ -142,7 +153,35 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'Literature graph';
+		return this.local ? 'Local literature graph' : 'Literature graph';
+	}
+
+	getState(): Record<string, unknown> {
+		return { local: this.local, depth: this.depth };
+	}
+
+	async setState(state: unknown, result: ViewStateResult): Promise<void> {
+		const s = (state ?? {}) as { local?: boolean; depth?: number };
+		const wasLocal = this.local;
+		this.local = s.local === true;
+		this.depth = Math.min(3, Math.max(1, Number(s.depth) || 1));
+		await super.setState(state, result);
+		if (this.local !== wasLocal) {
+			this.contentEl.toggleClass('is-local', this.local);
+			// A local graph is small: start closer, as Obsidian's local graph does.
+			this.world.scale.set(this.local ? LOCAL_START_SCALE : 1);
+			this.followActiveNote();
+		}
+	}
+
+	/** In local mode, centers the graph on the active note. */
+	private followActiveNote(): void {
+		if (!this.local) return;
+		const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? null;
+		if (file && file.path !== this.center) {
+			this.center = file.path;
+			this.showCurrent();
+		}
 	}
 
 	getIcon(): string {
@@ -183,6 +222,8 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.index.on('changed', () => this.reload()));
+		this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveNote()));
+		this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.followActiveNote()));
 		await this.loadData();
 	}
 
@@ -220,13 +261,98 @@ export class LiteratureGraphView extends ItemView {
 		const run = ++this.loading;
 		await buildGraph(this.app, this.index, this.openAlex, this.settings(), this.options, {
 			onStage: (graph) => {
-				if (run === this.loading && this.pixi) this.show(graph);
+				if (run !== this.loading || !this.pixi) return;
+				this.fullGraph = graph;
+				this.showCurrent();
 			},
 			onStatus: (message) => {
 				if (run === this.loading) this.setStatus(`${this.summary}${this.summary ? ' · ' : ''}${message}`);
 			},
 		});
 		if (run === this.loading) this.setStatus(this.summary);
+	}
+
+	/** Shows the whole graph, or in local mode the part around the active note. */
+	private showCurrent(): void {
+		if (!this.fullGraph || !this.pixi) return;
+		if (!this.local) {
+			this.show(this.fullGraph);
+			return;
+		}
+		if (!this.center) this.followActiveNote();
+		this.followCenter = true;
+		this.show(this.localGraph(this.fullGraph, this.center));
+	}
+
+	/**
+	 * The works at most `depth` citations away from the center, in either
+	 * direction. A center that is not a literature note (a draft that cites
+	 * works, for example) is added with the works its citation links cite.
+	 */
+	private localGraph(graph: LiteratureGraph, center: string | null): LiteratureGraph {
+		if (!center) return { nodes: [], edges: [], leftOut: 0 };
+		const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+		const edges = [...graph.edges];
+		if (!nodes.has(center)) {
+			const file = this.app.vault.getAbstractFileByPath(center);
+			if (!(file instanceof TFile)) return { nodes: [], edges: [], leftOut: 0 };
+			nodes.set(center, {
+				id: center,
+				generation: 0,
+				file,
+				doi: null,
+				openAlexId: null,
+				label: file.basename,
+				title: file.basename,
+				citedBy: 0,
+			});
+			for (const link of this.index.linksFrom(file)) {
+				const work = this.index.resolve(link.target, link.text);
+				const target = work.kind === 'note' ? work.file.path : work.kind === 'doi' ? `doi:${work.doi}` : null;
+				if (!target || target === center) continue;
+				if (!nodes.has(target) && work.kind === 'doi') {
+					nodes.set(target, {
+						id: target,
+						generation: 1,
+						file: null,
+						doi: work.doi,
+						openAlexId: null,
+						label: link.text,
+						title: '',
+						citedBy: 0,
+					});
+				}
+				if (nodes.has(target)) edges.push({ source: center, target, sources: new Set(['link']) });
+			}
+		}
+		const adjacent = new Map<string, Set<string>>();
+		const connect = (a: string, b: string) => adjacent.set(a, (adjacent.get(a) ?? new Set<string>()).add(b));
+		for (const e of edges) {
+			connect(e.source, e.target);
+			connect(e.target, e.source);
+		}
+		const kept = new Set([center]);
+		let frontier = [center];
+		for (let d = 0; d < this.depth; d++) {
+			const next: string[] = [];
+			for (const id of frontier) {
+				for (const other of adjacent.get(id) ?? []) {
+					if (!kept.has(other)) {
+						kept.add(other);
+						next.push(other);
+					}
+				}
+			}
+			frontier = next;
+		}
+		return {
+			nodes: [...kept].flatMap((id) => {
+				const node = nodes.get(id);
+				return node ? [node] : [];
+			}),
+			edges: edges.filter((e) => kept.has(e.source) && kept.has(e.target)),
+			leftOut: 0,
+		};
 	}
 
 	/** Shows a graph, keeping the positions of the nodes already shown. */
@@ -269,6 +395,7 @@ export class LiteratureGraphView extends ItemView {
 			}
 		}
 		this.applyColorGroups();
+		if (this.local && this.nodes.length <= MAX_FILTER_LABELS) for (const node of this.nodes) this.ensureLabel(node);
 		// Labels of the vault's works; others get one on hover.
 		for (const node of this.nodes) if (node.data.generation === 0) this.ensureLabel(node);
 
@@ -317,6 +444,15 @@ export class LiteratureGraphView extends ItemView {
 		this.redraw();
 	}
 
+	/** Moves the view so that the local graph's center note is in the middle. */
+	private centerOnNote(): void {
+		const pixi = this.pixi;
+		const node = this.nodes.find((n) => n.data.id === this.center);
+		if (!pixi || !node) return;
+		const scale = this.world.scale.x;
+		this.world.position.set(pixi.screen.width / 2 - (node.x ?? 0) * scale, pixi.screen.height / 2 - (node.y ?? 0) * scale);
+	}
+
 	/** Whether a work matches the filter (always true without a filter). */
 	private matches(node: SimNode): boolean {
 		if (!this.filter) return true;
@@ -363,6 +499,16 @@ export class LiteratureGraphView extends ItemView {
 				this.redraw();
 			}),
 		);
+		new Setting(body)
+			.setName('Depth')
+			.setDesc('Local graph: how many citations away from the active note.')
+			.setClass('literature-graph-local-only')
+			.addSlider((slider) =>
+				slider.setLimits(1, 3, 1).setValue(this.depth).onChange((value) => {
+					this.depth = value;
+					this.showCurrent();
+				}),
+			);
 		new Setting(body)
 			.setName('Generations')
 			.setDesc('Works outside the vault cited by it (1), and by those (2).')
@@ -454,6 +600,7 @@ export class LiteratureGraphView extends ItemView {
 	private redraw(withEdges = true): void {
 		const theme = this.theme;
 		if (!theme || !this.pixi) return;
+		if (this.local && this.followCenter) this.centerOnNote();
 		const scale = this.world.scale.x;
 		const focus = this.hovered;
 		const lit = (n: SimNode) => (!focus || n === focus || focus.neighbors.has(n)) && this.matches(n);
@@ -501,7 +648,7 @@ export class LiteratureGraphView extends ItemView {
 	private drawNodes(theme: Theme, scale: number, focus: SimNode | null, lit: (n: SimNode) => boolean): void {
 		for (const node of this.nodes) {
 			const base =
-				node === focus
+				node === focus || (this.local && node.data.id === this.center)
 					? theme.focused
 					: node.data.generation === 0
 						? (node.groupColor ?? theme.node)
@@ -531,6 +678,7 @@ export class LiteratureGraphView extends ItemView {
 			const nearFocus = focus !== null && (node === focus || focus.neighbors.has(node));
 			if (focus) label.alpha = nearFocus ? 1 : node.data.generation === 0 ? 0.1 * fade : 0;
 			else if (this.filter) label.alpha = this.matches(node) ? 1 : 0;
+			else if (this.local) label.alpha = 1;
 			else label.alpha = node.data.generation === 0 ? fade : 0;
 		}
 	}
@@ -591,6 +739,7 @@ export class LiteratureGraphView extends ItemView {
 				this.dragged.fx = p.x;
 				this.dragged.fy = p.y;
 			} else if (this.panning) {
+				this.followCenter = false;
 				this.world.position.set(e.global.x - this.panning.x, e.global.y - this.panning.y);
 				this.redraw();
 			} else {
@@ -620,6 +769,7 @@ export class LiteratureGraphView extends ItemView {
 			'wheel',
 			(e: WheelEvent) => {
 				e.preventDefault();
+				this.followCenter = false;
 				const factor = Math.exp(-e.deltaY * 0.0015);
 				const scale = Math.min(6, Math.max(0.05, this.world.scale.x * factor));
 				const rect = pixi.canvas.getBoundingClientRect();
