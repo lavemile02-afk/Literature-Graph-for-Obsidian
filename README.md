@@ -2,7 +2,21 @@
 
 An Obsidian plugin for literature notes written in Markdown (for example, papers converted from PDF).
 
-> **Status: early development.** Citation links can be copied from a selection and open the cited passage; the other features are planned.
+Cite a passage of a literature note with a link that opens it exactly there, check and export your citations, build APA reference lists, and explore how the works of your vault cite each other in a panel and a graph view of their own.
+
+## Features
+
+- **Citation links to a passage.** Cite a work as usual, "(Author et al., 2016)", with a link that opens its note at the exact cited passage. Nothing is added to the cited note, and the link does not appear in Obsidian's graph view or backlinks. Copy such a link from a selection in one click.
+- **Checking, export and reference lists.** Find broken or changed citations, copy a note without its links for a word processor, and insert an APA reference list in English or French.
+- **Citations panel.** The works a note cites and the notes that cite it, on two levels, including the reference lists of papers converted from PDF.
+- **Literature graph.** A graph view of the citations between your literature notes, and optionally the works outside your vault they cite, in the style of Obsidian's graph view; also as a local graph around the active note.
+- **Bibliographic data from OpenAlex**, cached for offline use (network access can be turned off).
+
+## Installation
+
+The plugin is not yet in Obsidian's community plugin directory. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/lavemile02-afk/Literature-Graph-for-Obsidian/releases/latest), put them in `<vault>/.obsidian/plugins/literature-graph-md/`, then enable **Literature Graph.md** in **Settings → Community plugins**. It requires Obsidian 1.13.7 or later, on desktop.
+
+Then, in the plugin settings, choose the **literature folder** (the folder of your literature notes) and the **citation language**, and check the names of the properties that hold each work's citation text, authors, year, reference, title and DOI.
 
 ## Citation links
 
@@ -57,6 +71,16 @@ Clicking a citation link opens the note and selects the passage (editing view) o
 
 **Insert reference list** inserts, at the cursor, the reference list of the works cited by the note's citation links, sorted alphabetically as in APA style. Each reference comes from the work's reference property (by default `Citation`), converted to the citation language: "&" or "et", "(Eds.)" or "(dir.)", "In" or "Dans", "(2nd ed.)" or "(2e éd.)", "[Doctoral dissertation, …]" or "(Thèse de doctorat)", "[Preprint]" or "[Prépublication]", "n.d." or "s.d.". When several works share the same in-text citation, they get letters (2016a, 2016b) and a notice says which letters to use in the text.
 
+### For scripts and AI agents
+
+Citation links are plain text, so a script or an AI assistant can write and check them without Obsidian:
+
+1. Copy six to fifteen consecutive words of the passage, word for word, from the note's Markdown (not from the PDF).
+2. Percent-encode `note` and `q` (and `qe`), including `(`, `)`, `!`, `'` and `*`, with a library function (for example `encodeURIComponent` plus those five characters, or Python's `urllib.parse.quote(value, safe="")`). Put `q` last.
+3. Check the link: decode `q` and make sure it occurs in the note after this normalization of both texts, which is what the plugin does: lower case; accents removed (Unicode NFKD, combining marks dropped); `*`, `_`, `` ` ``, `~` and `\` removed; HTML tags removed (`<br>`, `<p>`, `<li>`, `<td>`… count as a space); typographic quotes made straight; every dash or hyphen removed together with the whitespace around it; every other run of whitespace turned into one space. A link whose passage cannot be found this way should not be delivered.
+
+Because citation links are URLs, Obsidian does not treat them as internal links: nothing is added to the cited note, and they do not appear in the graph view or in backlinks.
+
 ## Citations panel
 
 **Open citations panel** (command or ribbon icon) shows, in the right sidebar, for the active note:
@@ -101,27 +125,6 @@ The view looks like Obsidian's graph view and follows your theme (it uses the sa
 ## Network use
 
 When **Use OpenAlex** is on (the default), the plugin sends requests to [OpenAlex](https://openalex.org) (`api.openalex.org`), a free and open index of scholarly works, to get bibliographic data: the requests contain DOIs and OpenAlex work ids only, plus the contact email if you set one in the settings. Answers are cached in `openalex-cache.json` in the plugin folder, so they stay available offline and each work is requested only once. Turn **Use OpenAlex** off to make no network requests at all; the cache is still used.
-
-### For scripts and AI agents
-
-Citation links are plain text, so a script or an AI assistant can write and check them without Obsidian:
-
-1. Copy six to fifteen consecutive words of the passage, word for word, from the note's Markdown (not from the PDF).
-2. Percent-encode `note` and `q` (and `qe`), including `(`, `)`, `!`, `'` and `*`, with a library function (for example `encodeURIComponent` plus those five characters, or Python's `urllib.parse.quote(value, safe="")`). Put `q` last.
-3. Check the link: decode `q` and make sure it occurs in the note after this normalization of both texts, which is what the plugin does: lower case; accents removed (Unicode NFKD, combining marks dropped); `*`, `_`, `` ` ``, `~` and `\` removed; HTML tags removed (`<br>`, `<p>`, `<li>`, `<td>`… count as a space); typographic quotes made straight; every dash or hyphen removed together with the whitespace around it; every other run of whitespace turned into one space. A link whose passage cannot be found this way should not be delivered.
-
-Because citation links are URLs, Obsidian does not treat them as internal links: nothing is added to the cited note, and they do not appear in the graph view or in backlinks.
-
-## Planned features
-
-- **Passage citation links.** Cite a paper as usual, "(Author et al., 2016)", with a link that opens the paper's note at the exact cited passage. The link is a plain `obsidian://cite?...` URL: nothing is added to the cited note, and the link does not appear in Obsidian's graph view or backlinks.
-- **Cited works panel.** A sidebar listing the works cited by the active note and the notes that cite it, on two levels.
-- **Literature graph.** A separate graph view of citations between your literature notes, and optionally the works they cite that are not in your vault.
-- **Bibliographic data from OpenAlex** for works outside your vault (network access, can be turned off).
-
-## Installation
-
-Not yet published in the community plugin directory. To try it, copy `main.js`, `manifest.json` and `styles.css` from a release into `<vault>/.obsidian/plugins/literature-graph-md/`, then enable the plugin in **Settings → Community plugins**.
 
 ## Development
 

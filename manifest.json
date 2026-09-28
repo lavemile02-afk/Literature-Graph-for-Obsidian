@@ -1,7 +1,7 @@
 {
 	"id": "literature-graph-md",
 	"name": "Literature Graph.md",
-	"version": "0.0.1",
+	"version": "1.0.0",
 	"minAppVersion": "1.13.7",
 	"description": "Citation links that open a note at the exact cited passage, and a citation graph of your Markdown literature notes.",
 	"author": "Émile Lavoie",
