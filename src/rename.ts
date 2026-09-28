@@ -2,6 +2,7 @@ import { App, Notice, TAbstractFile, TFile, TFolder } from 'obsidian';
 import { citationUrl, noteParam } from './citationLink';
 import type { CitationIndex } from './citationIndex';
 import { citationLinksIn } from './links';
+import { resolveCitedNote } from './navigation';
 
 /**
  * After a note or folder is renamed, rewrites the `note` parameter of the
@@ -26,7 +27,12 @@ export async function updateLinksAfterRename(
 		if (renamed instanceof TFolder) {
 			return n.startsWith(`${oldPath}/`) ? renamed.path + n.slice(oldPath.length) : null;
 		}
-		if (renamed instanceof TFile && (n === oldNoExt || n === oldName)) return noteParam(app, renamed);
+		if (renamed instanceof TFile && (n === oldNoExt || n === oldName)) {
+			// A link by name that still finds a note after the rename was aimed
+			// at another note with the same name: leave it.
+			if (n === oldName && n !== oldNoExt && resolveCitedNote(app, n)) return null;
+			return noteParam(app, renamed);
+		}
 		return null;
 	};
 
