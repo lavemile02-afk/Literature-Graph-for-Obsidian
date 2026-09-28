@@ -35,6 +35,14 @@ interface CacheFile {
 	works: Record<string, WorkSummary>;
 	/** DOI → OpenAlex id, or null when OpenAlex does not know the DOI. */
 	doiToId: Record<string, string | null>;
+	/** Work id → the most cited works that cite it, and how many cite it in all. */
+	citedBy?: Record<string, { total: number; ids: string[] }>;
+}
+
+/** Works citing a work: the most cited ones first, with the total count. */
+export interface CitingWorks {
+	total: number;
+	works: WorkSummary[];
 }
 
 interface RawWork {
@@ -181,6 +189,37 @@ export class OpenAlexClient {
 		const missing = ids.filter((id) => !this.cache.works[id]);
 		if (missing.length > 0 && this.options().enabled) await this.fetchBy('openalex_id', missing);
 		return ids.map((id) => this.cache.works[id]).filter((w): w is WorkSummary => w !== undefined);
+	}
+
+	/**
+	 * The works that cite a work, most cited first (at most `limit`), and how
+	 * many cite it in all. Cached; null when not cached and OpenAlex is off.
+	 */
+	async citingWorks(id: string, limit = 50): Promise<CitingWorks | null> {
+		await this.load();
+		const citedBy = (this.cache.citedBy ??= {});
+		let entry = citedBy[id];
+		if (!entry) {
+			if (!this.options().enabled) return null;
+			const data = (await this.request('/works', {
+				filter: `cites:${id}`,
+				sort: 'cited_by_count:desc',
+				'per-page': String(Math.min(limit, 200)),
+				select: SELECT,
+			})) as { meta?: { count?: number }; results?: RawWork[] } | null;
+			const works = (data?.results ?? []).map(summarize);
+			for (const work of works) {
+				this.cache.works[work.id] = work;
+				if (work.doi) this.cache.doiToId[work.doi] = work.id;
+			}
+			entry = { total: data?.meta?.count ?? works.length, ids: works.map((w) => w.id) };
+			citedBy[id] = entry;
+			this.scheduleSave();
+		}
+		return {
+			total: entry.total,
+			works: entry.ids.map((i) => this.cache.works[i]).filter((w): w is WorkSummary => w !== undefined),
+		};
 	}
 
 	/** Whether a DOI was already looked up (found or not). */

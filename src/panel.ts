@@ -8,23 +8,32 @@ import type { LiteratureGraphSettings } from './settings';
 
 export const CITATIONS_VIEW = 'literature-graph-citations';
 
-/** A work cited by the active note, with the links that cite it. */
-interface CitedEntry {
-	work: CitedWork;
+/** A work shown in the panel: a note of the vault, a work known by DOI or OpenAlex id, or a broken link. */
+interface WorkRow {
+	kind: 'note' | 'doi' | 'broken';
+	file: TFile | null;
+	doi: string | null;
+	/** OpenAlex id, when known. */
+	openAlexId: string | null;
 	label: string;
 	detail: string;
-	links: CitationLink[];
 }
 
+/** How many works citing a work are listed at the second level. */
+const CITING_LIMIT = 50;
+
 /**
- * Sidebar view listing, for the active note, the works it cites and the notes
- * that cite it. A work of the vault opens at the beginning of its note; each
- * cited passage opens precisely; a work outside the vault opens its DOI.
+ * Sidebar view listing, for the active note, the works it cites, the notes
+ * that cite it, and (from OpenAlex) the references of its work. Each work
+ * expands to its own references and citing works: a tree of two levels.
+ *
+ * A work of the vault opens at the beginning of its note; each cited passage
+ * opens precisely; a work outside the vault opens its DOI.
  */
 export class CitationsView extends ItemView {
 	private file: TFile | null = null;
-	/** Keys of the entries the user expanded, kept across refreshes. */
-	private readonly expanded = new Set<string>();
+	/** Keys of the entries the user toggled, kept across refreshes. */
+	private readonly toggled = new Set<string>();
 	private readonly refresh = debounce(() => this.render(), 300, true);
 
 	constructor(
@@ -57,8 +66,7 @@ export class CitationsView extends ItemView {
 
 	/** Shows the note of the active Markdown view (the panel itself is ignored). */
 	private followActiveNote(): void {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		const file = view?.file ?? null;
+		const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? null;
 		if (file && file !== this.file) {
 			this.file = file;
 			this.render();
@@ -78,152 +86,306 @@ export class CitationsView extends ItemView {
 		}
 		root.createDiv({ cls: 'literature-graph-panel-title', text: file.basename });
 
-		const cited = this.citedEntries(file);
-		const citesSection = this.section(root, 'cites', 'Cites', cited.length);
-		if (cited.length === 0) citesSection.createDiv({ cls: 'search-empty-state', text: 'No citation links.' });
-		for (const entry of cited) this.renderCited(citesSection, entry);
+		// Cites: works cited by the note's citation links.
+		const cited = this.citedByLinks(file);
+		const cites = this.section(root, 'cites', 'Cites', cited.length, true);
+		if (cited.length === 0) cites.createDiv({ cls: 'search-empty-state', text: 'No citation links.' });
+		for (const { row, links } of cited) this.renderWork(cites, row, `cites:${this.rowKey(row)}`, 1, links);
 
+		// Cited by: notes of the vault whose citation links cite this note.
 		const citing = this.index.citing(file).sort((a, b) => a.path.localeCompare(b.path));
-		const citedBySection = this.section(root, 'cited-by', 'Cited by', citing.length);
-		if (citing.length === 0) citedBySection.createDiv({ cls: 'search-empty-state', text: 'No note cites this one.' });
-		for (const { path, links } of citing) this.renderCiting(citedBySection, path, links);
+		const citedBy = this.section(root, 'cited-by', 'Cited by', citing.length, true);
+		if (citing.length === 0) citedBy.createDiv({ cls: 'search-empty-state', text: 'No note cites this one.' });
+		for (const { path, links } of citing) this.renderCitingNote(citedBy, path, links);
 
+		// References of the work, from OpenAlex, when the note has a DOI.
 		const doi = this.index.doiForFile(file);
-		if (doi) void this.renderReferences(root, file, doi);
+		if (doi) void this.renderOpenAlexReferences(root, file, doi);
 	}
 
-	/** Groups the citation links of a note by the work they cite. */
-	private citedEntries(file: TFile): CitedEntry[] {
-		const byKey = new Map<string, CitedEntry>();
-		for (const link of this.index.linksFrom(file)) {
-			const work = this.index.resolve(link.target, link.text);
-			const key = work.kind === 'note' ? `note:${work.file.path}` : work.kind === 'doi' ? `doi:${work.doi}` : `broken:${work.text}`;
-			let entry = byKey.get(key);
-			if (!entry) {
-				entry = { work, ...this.describe(work, link), links: [] };
-				byKey.set(key, entry);
-			}
-			entry.links.push(link);
-		}
-		return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+	// ----- Rows and sections -----
+
+	private rowKey(row: WorkRow): string {
+		return row.file?.path ?? row.doi ?? row.openAlexId ?? row.label;
 	}
 
-	private describe(work: CitedWork, link: CitationLink): { label: string; detail: string } {
-		if (work.kind === 'note') {
-			const title: unknown = this.app.metadataCache.getFileCache(work.file)?.frontmatter?.[this.settings().titleProperty];
-			return {
-				label: citationText(this.app, work.file, this.settings()),
-				detail: typeof title === 'string' && title ? title : work.file.basename,
-			};
-		}
-		if (work.kind === 'doi') return { label: link.text, detail: `https://doi.org/${work.doi}` };
-		return { label: link.text, detail: `Not found: ${work.text || 'the link has no note or DOI'}` };
-	}
-
-	/** A collapsible section with a heading and a count. */
-	private section(root: HTMLElement, key: string, title: string, count: number): HTMLElement {
-		const section = root.createDiv({ cls: 'literature-graph-section' });
-		const header = section.createDiv({ cls: 'tree-item-self is-clickable literature-graph-section-header' });
-		const collapse = header.createDiv({ cls: 'tree-item-icon collapse-icon' });
-		setIcon(collapse, 'right-triangle');
-		header.createDiv({ cls: 'tree-item-inner', text: title });
-		header.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(count) });
-		const children = section.createDiv({ cls: 'tree-item-children' });
-		const closedKey = `section:${key}`;
-		const apply = () => {
-			const closed = this.expanded.has(closedKey);
-			section.toggleClass('is-collapsed', closed);
-			collapse.toggleClass('is-collapsed', closed);
-			children.toggle(!closed);
+	private rowForFile(file: TFile): WorkRow {
+		const title: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings().titleProperty];
+		return {
+			kind: 'note',
+			file,
+			doi: this.index.doiForFile(file),
+			openAlexId: null,
+			label: citationText(this.app, file, this.settings()),
+			detail: typeof title === 'string' && title ? title : file.basename,
 		};
-		header.addEventListener('click', () => {
-			if (this.expanded.has(closedKey)) this.expanded.delete(closedKey);
-			else this.expanded.add(closedKey);
+	}
+
+	private rowForWork(work: WorkSummary): WorkRow {
+		const file = work.doi ? this.index.fileForDoi(work.doi) : null;
+		if (file) return { ...this.rowForFile(file), openAlexId: work.id };
+		return {
+			kind: 'doi',
+			file: null,
+			doi: work.doi,
+			openAlexId: work.id,
+			label: workCitation(work, this.settings().citationLanguage),
+			detail: work.title,
+		};
+	}
+
+	private rowForCited(work: CitedWork, link: CitationLink): WorkRow {
+		if (work.kind === 'note') return this.rowForFile(work.file);
+		if (work.kind === 'doi') {
+			return { kind: 'doi', file: null, doi: work.doi, openAlexId: null, label: link.text, detail: `https://doi.org/${work.doi}` };
+		}
+		return {
+			kind: 'broken',
+			file: null,
+			doi: null,
+			openAlexId: null,
+			label: link.text,
+			detail: `Not found: ${work.text || 'the link has no note or DOI'}`,
+		};
+	}
+
+	/** The works cited by a note's citation links, grouped, with the links. */
+	private citedByLinks(file: TFile): { row: WorkRow; links: CitationLink[] }[] {
+		const byKey = new Map<string, { row: WorkRow; links: CitationLink[] }>();
+		for (const link of this.index.linksFrom(file)) {
+			const row = this.rowForCited(this.index.resolve(link.target, link.text), link);
+			const key = `${row.kind}:${this.rowKey(row)}`;
+			const entry = byKey.get(key) ?? { row, links: [] };
+			entry.links.push(link);
+			byKey.set(key, entry);
+		}
+		return [...byKey.values()].sort((a, b) => a.row.label.localeCompare(b.row.label));
+	}
+
+	/**
+	 * An expandable row. `defaultOpen` sets the state before any toggle; the
+	 * children are built by `fill` the first time the row opens.
+	 */
+	private expandable(
+		parent: HTMLElement,
+		key: string,
+		defaultOpen: boolean,
+		buildSelf: (self: HTMLElement) => void,
+		fill: (children: HTMLElement) => void,
+		cls = 'tree-item',
+	): HTMLElement {
+		const item = parent.createDiv({ cls });
+		const self = item.createDiv({ cls: 'tree-item-self is-clickable' });
+		const toggle = self.createDiv({ cls: 'tree-item-icon collapse-icon' });
+		setIcon(toggle, 'right-triangle');
+		buildSelf(self);
+		const children = item.createDiv({ cls: 'tree-item-children' });
+		let filled = false;
+		const isOpen = () => this.toggled.has(key) !== defaultOpen;
+		const apply = () => {
+			const open = isOpen();
+			item.toggleClass('is-collapsed', !open);
+			toggle.toggleClass('is-collapsed', !open);
+			children.toggle(open);
+			if (open && !filled) {
+				filled = true;
+				fill(children);
+			}
+		};
+		toggle.addEventListener('click', (evt) => {
+			evt.stopPropagation();
+			if (this.toggled.has(key)) this.toggled.delete(key);
+			else this.toggled.add(key);
 			apply();
 		});
 		apply();
+		// A click on a section header (no own action) toggles it too.
+		if (!self.hasClass('has-action')) self.addEventListener('click', () => toggle.click());
 		return children;
 	}
 
-	/** One cited work, which expands to show the cited passages. */
-	private renderCited(parent: HTMLElement, entry: CitedEntry): void {
-		const key = entry.work.kind === 'note' ? entry.work.file.path : entry.detail;
-		const item = parent.createDiv({ cls: `tree-item literature-graph-work is-${entry.work.kind}` });
-		const self = item.createDiv({ cls: 'tree-item-self is-clickable' });
-		const toggle = self.createDiv({ cls: 'tree-item-icon collapse-icon' });
-		setIcon(toggle, 'right-triangle');
-		const status = self.createDiv({ cls: 'literature-graph-status' });
-		setIcon(status, entry.work.kind === 'note' ? 'file-check' : entry.work.kind === 'doi' ? 'external-link' : 'file-x');
-		status.setAttr(
-			'aria-label',
-			entry.work.kind === 'note' ? 'In the vault' : entry.work.kind === 'doi' ? 'Outside the vault (DOI)' : 'Broken link',
+	/** A top-level section with a heading and a count. */
+	private section(root: HTMLElement, key: string, title: string, count: number | string, defaultOpen: boolean): HTMLElement {
+		return this.expandable(
+			root,
+			`section:${key}`,
+			defaultOpen,
+			(self) => {
+				self.addClass('literature-graph-section-header');
+				self.createDiv({ cls: 'tree-item-inner', text: title });
+				self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(count) });
+			},
+			() => undefined,
+			'tree-item literature-graph-section',
 		);
-		const inner = self.createDiv({ cls: 'tree-item-inner' });
-		inner.createDiv({ cls: 'literature-graph-work-label', text: entry.label });
-		inner.createDiv({ cls: 'literature-graph-work-detail', text: entry.detail });
-		self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(entry.links.length) });
+	}
 
-		const passages = item.createDiv({ cls: 'tree-item-children' });
-		const apply = () => {
-			const open = this.expanded.has(key);
-			item.toggleClass('is-collapsed', !open);
-			toggle.toggleClass('is-collapsed', !open);
-			passages.toggle(open);
+	/**
+	 * A work. At level 1 it expands to its cited passages (if any), its
+	 * references and the works citing it; at level 2 it does not expand.
+	 */
+	private renderWork(parent: HTMLElement, row: WorkRow, key: string, level: 1 | 2, links: CitationLink[] = []): void {
+		const buildSelf = (self: HTMLElement) => {
+			self.addClass('has-action');
+			const status = self.createDiv({ cls: 'literature-graph-status' });
+			setIcon(status, row.kind === 'note' ? 'file-check' : row.kind === 'doi' ? 'external-link' : 'file-x');
+			status.setAttr('aria-label', row.kind === 'note' ? 'In the vault' : row.kind === 'doi' ? 'Outside the vault' : 'Broken link');
+			const inner = self.createDiv({ cls: 'tree-item-inner' });
+			inner.createDiv({ cls: 'literature-graph-work-label', text: row.label });
+			const detail = inner.createDiv({ cls: 'literature-graph-work-detail', text: row.detail });
+			if (links.length > 0) {
+				self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(links.length) });
+			}
+			self.addEventListener('click', () => this.openRow(row));
+			// Works cited only by DOI: show their title from OpenAlex.
+			if (row.kind === 'doi' && row.doi && !row.openAlexId) void this.fillTitle(row, detail);
 		};
-		toggle.addEventListener('click', (evt) => {
-			evt.stopPropagation();
-			if (this.expanded.has(key)) this.expanded.delete(key);
-			else this.expanded.add(key);
-			apply();
-		});
-		self.addEventListener('click', () => this.openWork(entry.work));
-		for (const link of entry.links) {
-			const passage = passages.createDiv({ cls: 'tree-item-self is-clickable literature-graph-passage' });
-			passage.setText(link.target.q ? `“${link.target.q}${link.target.qe ? ` … ${link.target.qe}` : ''}”` : '(whole work)');
-			passage.addEventListener('click', () => {
-				void openCitation(this.app, link.target, false, (doi) => this.index.fileForDoi(doi));
-			});
+		const cls = `tree-item literature-graph-work is-${row.kind}`;
+		if (level === 2 || row.kind === 'broken') {
+			if (links.length === 0) {
+				const item = parent.createDiv({ cls });
+				buildSelf(item.createDiv({ cls: 'tree-item-self is-clickable' }));
+				return;
+			}
 		}
-		apply();
+		this.expandable(parent, key, false, buildSelf, (children) => {
+			for (const link of links) this.renderPassage(children, link);
+			if (level === 1 && row.kind !== 'broken') {
+				this.renderRelated(children, row, `${key}/refs`, 'references');
+				this.renderRelated(children, row, `${key}/cited-by`, 'citing');
+			}
+		}, cls);
+	}
+
+	private renderPassage(parent: HTMLElement, link: CitationLink): void {
+		const passage = parent.createDiv({ cls: 'tree-item-self is-clickable literature-graph-passage' });
+		passage.setText(link.target.q ? `“${link.target.q}${link.target.qe ? ` … ${link.target.qe}` : ''}”` : '(whole work)');
+		passage.addEventListener('click', () => {
+			void openCitation(this.app, link.target, false, (doi) => this.index.fileForDoi(doi));
+		});
+	}
+
+	/** "References" or "Cited by" of a work, loaded when opened. */
+	private renderRelated(parent: HTMLElement, row: WorkRow, key: string, which: 'references' | 'citing'): void {
+		let flair: HTMLElement | null = null;
+		this.expandable(
+			parent,
+			key,
+			false,
+			(self) => {
+				self.addClass('literature-graph-subsection');
+				self.createDiv({ cls: 'tree-item-inner', text: which === 'references' ? 'References' : 'Cited by' });
+				flair = self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: '' });
+			},
+			(children) => void this.fillRelated(children, row, which, flair),
+			'tree-item literature-graph-related',
+		);
+	}
+
+	private async fillRelated(
+		children: HTMLElement,
+		row: WorkRow,
+		which: 'references' | 'citing',
+		flair: HTMLElement | null,
+	): Promise<void> {
+		const status = children.createDiv({ cls: 'search-empty-state', text: 'Loading…' });
+		const rows = new Map<string, WorkRow>();
+		let total: number | null = null;
+		let note = '';
+
+		// From the vault's citation links.
+		if (row.file) {
+			const files =
+				which === 'references'
+					? this.index.linksFrom(row.file).map((l) => this.index.resolve(l.target, l.text))
+					: this.index.citing(row.file).map((c) => ({ kind: 'note' as const, file: this.app.vault.getAbstractFileByPath(c.path) }));
+			for (const work of files) {
+				if (work.kind === 'note' && work.file instanceof TFile) {
+					const r = this.rowForFile(work.file);
+					rows.set(this.rowKey(r), r);
+				}
+			}
+		}
+
+		// From OpenAlex.
+		try {
+			const id = row.openAlexId ?? (row.doi ? (await this.openAlex.workByDoi(row.doi))?.id : undefined);
+			if (id) {
+				if (which === 'references') {
+					const [work] = await this.openAlex.worksByIds([id]);
+					const refs = work ? await this.openAlex.worksByIds(work.references) : [];
+					total = work?.references.length ?? null;
+					for (const w of refs) {
+						const r = this.rowForWork(w);
+						if (!rows.has(this.rowKey(r))) rows.set(this.rowKey(r), r);
+					}
+				} else {
+					const citing = await this.openAlex.citingWorks(id, CITING_LIMIT);
+					if (citing) {
+						total = citing.total;
+						if (citing.total > citing.works.length) note = `The ${citing.works.length} most cited of ${citing.total} works.`;
+						for (const w of citing.works) {
+							const r = this.rowForWork(w);
+							if (!rows.has(this.rowKey(r))) rows.set(this.rowKey(r), r);
+						}
+					}
+				}
+			}
+		} catch (error) {
+			console.error('Literature Graph.md: OpenAlex request failed', error);
+			note = 'OpenAlex could not be reached; showing what is known locally.';
+		}
+
+		status.remove();
+		const sorted = [...rows.values()].sort((a, b) => a.label.localeCompare(b.label));
+		flair?.setText(String(total !== null ? Math.max(total, sorted.length) : sorted.length));
+		if (sorted.length === 0) children.createDiv({ cls: 'search-empty-state', text: note || 'None known.' });
+		for (const r of sorted) this.renderWork(children, r, '', 2);
+		if (sorted.length > 0 && note) children.createDiv({ cls: 'search-empty-state', text: note });
+	}
+
+	/** Title of a work cited only by DOI, from OpenAlex (cached). */
+	private async fillTitle(row: WorkRow, detail: HTMLElement): Promise<void> {
+		try {
+			const work = row.doi ? await this.openAlex.workByDoi(row.doi) : null;
+			if (work) {
+				row.openAlexId = work.id;
+				detail.setText(work.title);
+			}
+		} catch {
+			// Offline: keep the DOI as the detail.
+		}
 	}
 
 	/** One note that cites the active note, which expands to its citing lines. */
-	private renderCiting(parent: HTMLElement, path: string, links: CitationLink[]): void {
+	private renderCitingNote(parent: HTMLElement, path: string, links: CitationLink[]): void {
 		const citing = this.app.vault.getAbstractFileByPath(path);
 		if (!(citing instanceof TFile)) return;
-		const key = `citing:${path}`;
-		const item = parent.createDiv({ cls: 'tree-item literature-graph-citing' });
-		const self = item.createDiv({ cls: 'tree-item-self is-clickable' });
-		const toggle = self.createDiv({ cls: 'tree-item-icon collapse-icon' });
-		setIcon(toggle, 'right-triangle');
-		self.createDiv({ cls: 'tree-item-inner', text: citing.basename });
-		self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(links.length) });
-		const lines = item.createDiv({ cls: 'tree-item-children' });
-		const apply = () => {
-			const open = this.expanded.has(key);
-			item.toggleClass('is-collapsed', !open);
-			toggle.toggleClass('is-collapsed', !open);
-			lines.toggle(open);
-		};
-		toggle.addEventListener('click', (evt) => {
-			evt.stopPropagation();
-			if (this.expanded.has(key)) this.expanded.delete(key);
-			else this.expanded.add(key);
-			apply();
-		});
-		self.addEventListener('click', () => void openFileAtLine(this.app, citing, 0));
-		for (const link of links) {
-			const row = lines.createDiv({ cls: 'tree-item-self is-clickable literature-graph-passage' });
-			row.setText(`Line ${link.line + 1}: ${link.text}`);
-			row.addEventListener('click', () => void openFileAtLine(this.app, citing, link.line));
-		}
-		apply();
+		this.expandable(
+			parent,
+			`citing:${path}`,
+			false,
+			(self) => {
+				self.addClass('has-action');
+				self.createDiv({ cls: 'tree-item-inner', text: citing.basename });
+				self.createDiv({ cls: 'tree-item-flair-outer' }).createSpan({ cls: 'tree-item-flair', text: String(links.length) });
+				self.addEventListener('click', () => void openFileAtLine(this.app, citing, 0));
+			},
+			(children) => {
+				for (const link of links) {
+					const row = children.createDiv({ cls: 'tree-item-self is-clickable literature-graph-passage' });
+					row.setText(`Line ${link.line + 1}: ${link.text}`);
+					row.addEventListener('click', () => void openFileAtLine(this.app, citing, link.line));
+				}
+			},
+			'tree-item literature-graph-citing',
+		);
 	}
 
 	/** The bibliography of the active note's work, from OpenAlex (cached). */
-	private async renderReferences(root: HTMLElement, file: TFile, doi: string): Promise<void> {
-		const section = this.section(root, 'references', 'References (OpenAlex)', 0);
-		const count = section.parentElement?.querySelector('.tree-item-flair');
+	private async renderOpenAlexReferences(root: HTMLElement, file: TFile, doi: string): Promise<void> {
+		const section = this.section(root, 'references', 'References (OpenAlex)', '', true);
+		const flair = section.parentElement?.querySelector(':scope > .tree-item-self .tree-item-flair');
 		const status = section.createDiv({ cls: 'search-empty-state', text: 'Loading…' });
 		let works: WorkSummary[] = [];
 		let known = 0;
@@ -236,7 +398,7 @@ export class CitationsView extends ItemView {
 						? 'OpenAlex does not know this DOI.'
 						: 'OpenAlex is turned off in the settings.',
 				);
-				count?.setText('–');
+				flair?.setText('–');
 				return;
 			}
 			known = work.references.length;
@@ -247,32 +409,14 @@ export class CitationsView extends ItemView {
 			return;
 		}
 		if (this.file !== file) return;
-		count?.setText(String(known));
+		flair?.setText(String(known));
 		if (known === 0) {
 			status.setText('OpenAlex lists no references for this work.');
 			return;
 		}
 		status.remove();
-		const language = this.settings().citationLanguage;
-		const rows = works
-			.map((w) => ({ work: w, label: workCitation(w, language), file: w.doi ? this.index.fileForDoi(w.doi) : null }))
-			.sort((a, b) => a.label.localeCompare(b.label));
-		for (const row of rows) {
-			const kind = row.file ? 'note' : 'doi';
-			const item = section.createDiv({ cls: `tree-item literature-graph-work is-${kind}` });
-			const self = item.createDiv({ cls: 'tree-item-self is-clickable' });
-			const icon = self.createDiv({ cls: 'literature-graph-status' });
-			setIcon(icon, row.file ? 'file-check' : 'external-link');
-			icon.setAttr('aria-label', row.file ? 'In the vault' : 'Outside the vault');
-			const inner = self.createDiv({ cls: 'tree-item-inner' });
-			inner.createDiv({ cls: 'literature-graph-work-label', text: row.label });
-			inner.createDiv({ cls: 'literature-graph-work-detail', text: row.work.title });
-			const target = row.file;
-			self.addEventListener('click', () => {
-				if (target) void openFileAtLine(this.app, target, 0);
-				else window.open(row.work.doi ? `https://doi.org/${row.work.doi}` : `https://openalex.org/${row.work.id}`);
-			});
-		}
+		const rows = works.map((w) => this.rowForWork(w)).sort((a, b) => a.label.localeCompare(b.label));
+		for (const row of rows) this.renderWork(section, row, `refs:${this.rowKey(row)}`, 1);
 		if (works.length < known) {
 			section.createDiv({
 				cls: 'search-empty-state',
@@ -281,8 +425,9 @@ export class CitationsView extends ItemView {
 		}
 	}
 
-	private openWork(work: CitedWork): void {
-		if (work.kind === 'note') void openFileAtLine(this.app, work.file, 0);
-		else if (work.kind === 'doi') window.open(`https://doi.org/${work.doi}`);
+	private openRow(row: WorkRow): void {
+		if (row.file) void openFileAtLine(this.app, row.file, 0);
+		else if (row.doi) window.open(`https://doi.org/${row.doi}`);
+		else if (row.openAlexId) window.open(`https://openalex.org/${row.openAlexId}`);
 	}
 }
