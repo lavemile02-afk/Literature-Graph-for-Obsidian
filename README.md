@@ -55,6 +55,13 @@ Clicking a citation link opens the note and selects the passage (editing view) o
 
 **Insert reference list** inserts, at the cursor, the reference list of the works cited by the note's citation links, sorted alphabetically as in APA style. Each reference comes from the work's reference property (by default `Citation`), converted to the citation language: "&" or "et", "(Eds.)" or "(dir.)", "In" or "Dans", "(2nd ed.)" or "(2e éd.)", "[Doctoral dissertation, …]" or "(Thèse de doctorat)", "[Preprint]" or "[Prépublication]", "n.d." or "s.d.". When several works share the same in-text citation, they get letters (2016a, 2016b) and a notice says which letters to use in the text.
 
+## Citations panel
+
+**Open citations panel** (command or ribbon icon) shows, in the right sidebar, for the active note:
+
+- **Cites**: the works it cites, with how many times each is cited. A work of your vault opens at the beginning of its note; a work outside your vault, cited by DOI, opens `https://doi.org/…`; a broken link is shown in red. Expand a work to see the cited passages; click one to open it.
+- **Cited by**: the notes that cite it. Expand one to see the lines of its citations; click one to go there.
+
 ### For scripts and AI agents
 
 Citation links are plain text, so a script or an AI assistant can write and check them without Obsidian:

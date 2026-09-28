@@ -8,6 +8,7 @@ import { withoutCitationLinks } from './links';
 import { buildReferenceList } from './references';
 import { updateLinksAfterRename } from './rename';
 import { openCitation } from './navigation';
+import { CITATIONS_VIEW, CitationsView } from './panel';
 import {
 	DEFAULT_SETTINGS,
 	LiteratureGraphSettings,
@@ -30,6 +31,14 @@ export default class LiteratureGraphPlugin extends Plugin {
 			void openCitation(this.app, parseCitationParams(params), false, fileForDoi);
 		});
 		registerCitationClicks(this, fileForDoi);
+
+		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings));
+		this.addRibbonIcon('quote', 'Open citations panel', () => void this.openCitationsPanel());
+		this.addCommand({
+			id: 'open-citations-panel',
+			name: 'Open citations panel',
+			callback: () => void this.openCitationsPanel(),
+		});
 
 		this.addCommand({
 			id: 'copy-citation-link',
@@ -90,6 +99,15 @@ export default class LiteratureGraphPlugin extends Plugin {
 		if (!link) return;
 		await navigator.clipboard.writeText(link);
 		new Notice('Citation link copied.');
+	}
+
+	/** Shows the citations panel in the right sidebar. */
+	async openCitationsPanel() {
+		const existing = this.app.workspace.getLeavesOfType(CITATIONS_VIEW)[0];
+		const leaf = existing ?? this.app.workspace.getRightLeaf(false);
+		if (!leaf) return;
+		if (!existing) await leaf.setViewState({ type: CITATIONS_VIEW, active: true });
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	/** Builds the citation index, then keeps it up to date. */

@@ -6,3 +6,41 @@
 	background-color: var(--text-highlight-bg);
 	color: var(--text-normal);
 }
+
+/* Citations panel. Built from Obsidian's own tree classes, like the backlinks pane. */
+.literature-graph-panel-title {
+	font-weight: var(--font-semibold);
+	padding: var(--size-4-2) var(--size-4-2) var(--size-4-1);
+}
+
+.literature-graph-section-header {
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+}
+
+.literature-graph-status {
+	display: flex;
+	align-items: center;
+	margin-inline-end: var(--size-4-1);
+	color: var(--text-success);
+}
+
+.literature-graph-work.is-doi .literature-graph-status {
+	color: var(--text-muted);
+}
+
+.literature-graph-work.is-broken .literature-graph-status,
+.literature-graph-work.is-broken .literature-graph-work-label {
+	color: var(--text-error);
+}
+
+.literature-graph-work-detail {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.literature-graph-passage {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	padding-inline-start: var(--size-4-8);
+}
