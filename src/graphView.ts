@@ -1,29 +1,26 @@
-import {
-	forceCenter,
-	forceCollide,
-	forceLink,
-	forceManyBody,
-	forceSimulation,
-	ForceCenter,
-	ForceLink,
-	ForceManyBody,
-	Simulation,
-	SimulationLinkDatum,
-	SimulationNodeDatum,
-} from 'd3-force';
 import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon } from 'obsidian';
-import { Application, Container, FederatedPointerEvent, Graphics, Sprite, Text, Texture } from 'pixi.js';
+import { Application, Container, FederatedPointerEvent, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
+import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
 import { colorFor, parseColorGroups } from './colorGroups';
+import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
+import { LabelBox, placeLabels } from './labels';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
+import type { Forces, LayoutUpdate } from './layout';
+import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
 export const GRAPH_VIEW = 'literature-graph-graph';
 
-interface SimNode extends SimulationNodeDatum {
+interface SimNode {
 	data: GraphNode;
+	/** Place of the node in the layout's list. */
+	index: number;
+	/** Position given by the layout; undefined until its first step for a new work. */
+	x?: number;
+	y?: number;
 	/** A white circle, tinted and scaled to the node's color and radius. */
 	sprite: Sprite;
 	/** Color of the node's color group, if any. */
@@ -33,7 +30,7 @@ interface SimNode extends SimulationNodeDatum {
 	neighbors: Set<SimNode>;
 }
 
-interface SimLink extends SimulationLinkDatum<SimNode> {
+interface SimLink {
 	data: GraphEdge;
 	source: SimNode;
 	target: SimNode;
@@ -76,16 +73,76 @@ const MAX_NODE_RADIUS = 40;
 /** Labels appear when zoomed in past this scale (Obsidian's graph behaves the same). */
 const LABEL_FADE_START = 0.7;
 const LABEL_FADE_END = 1.2;
-/** While the layout moves, about this many edges are redrawn per step (the rest wait). */
-const EDGES_PER_FRAME = 4000;
 /** At most this many labels are shown for the works matching the filter. */
 const MAX_FILTER_LABELS = 300;
 /** At most this many labels of works outside the vault are shown around a hovered node. */
 const MAX_NEIGHBOR_LABELS = 40;
+/** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
+const FOCUS_FADE_STEP = 0.3;
+/** Share of the way the camera and the wheel zoom move at each frame. */
+const CAMERA_STEP = 0.14;
+const ZOOM_STEP = 0.3;
+/** Alpha of the edges that do not touch the hovered node. */
+const DIMMED_EDGE_ALPHA = 0.08;
+/** Arrowhead size, in pixels on screen; arrowheads are hidden when zoomed out past this scale. */
+const ARROW_SIZE = 4;
+const ARROW_MIN_SCALE = 0.5;
 
 function radiusOf(node: GraphNode): number {
 	const r = node.generation === 0 ? 4 + Math.sqrt(node.citedBy) * 2.2 : 2 + Math.sqrt(node.citedBy) * 1.2;
 	return Math.min(MAX_NODE_RADIUS, r);
+}
+
+/**
+ * A set of edges drawn as one mesh of one color: one draw call and one buffer
+ * update per frame, however many edges there are.
+ */
+class EdgeMesh {
+	readonly mesh: Mesh<MeshGeometry>;
+	private links: SimLink[] = [];
+	private positions: Float32Array<ArrayBufferLike> = new Float32Array(0);
+
+	constructor() {
+		this.mesh = new Mesh({ geometry: EdgeMesh.geometry(0), texture: Texture.WHITE });
+	}
+
+	/** A geometry for `count` edges (at least one, so the mesh stays valid). */
+	private static geometry(count: number): MeshGeometry {
+		const n = Math.max(1, count);
+		const positions = new Float32Array(n * VERTICES_PER_EDGE * 2);
+		return new MeshGeometry({ positions, uvs: new Float32Array(positions.length), indices: edgeIndices(n) });
+	}
+
+	setLinks(links: SimLink[]): void {
+		this.links = links;
+		const old = this.mesh.geometry;
+		const geometry = EdgeMesh.geometry(links.length);
+		this.positions = geometry.positions;
+		this.mesh.geometry = geometry;
+		old.destroy();
+		this.mesh.visible = links.length > 0;
+	}
+
+	/** Moves the edges to their nodes' current positions. */
+	update(width: number, arrow: number): void {
+		if (this.links.length === 0) return;
+		const out = this.positions;
+		const ends = { x1: 0, y1: 0, x2: 0, y2: 0, targetRadius: 0 };
+		this.links.forEach((link, i) => {
+			ends.x1 = link.source.x ?? 0;
+			ends.y1 = link.source.y ?? 0;
+			ends.x2 = link.target.x ?? 0;
+			ends.y2 = link.target.y ?? 0;
+			ends.targetRadius = link.target.radius;
+			writeEdge(out, i, ends, width, arrow);
+		});
+		this.mesh.geometry.getBuffer('aPosition').update();
+	}
+
+	style(color: ThemeColor, alpha: number): void {
+		this.mesh.tint = color.color;
+		this.mesh.alpha = alpha;
+	}
 }
 
 /**
@@ -94,24 +151,50 @@ function radiusOf(node: GraphNode): number {
  * the vault that they cite (generation 1) and that those cite (generation 2),
  * drawn like Obsidian's graph view with its colors, with PixiJS and a d3-force
  * simulation.
+ *
+ * Nothing is drawn unless something changes: a frame is requested when the
+ * layout moves, the pointer hovers a node, the camera moves or the data
+ * changes, and frames stop when all is still (or when the view is hidden).
  */
 export class LiteratureGraphView extends ItemView {
 	private pixi: Application | null = null;
 	private readonly world = new Container();
-	private readonly edgesLayer = new Graphics();
+	private readonly vaultEdges = new EdgeMesh();
+	private readonly outsideEdges = new EdgeMesh();
+	private readonly focusEdges = new EdgeMesh();
 	private readonly nodesLayer = new Container();
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
-	private simulation: Simulation<SimNode, SimLink> | null = null;
+	/** The layout, run in a web worker. */
+	private layout: LayoutRunner | null = null;
+	/** Number of the graph last sent to the layout. */
+	private layoutGraph = 0;
 	private nodes: SimNode[] = [];
 	private links: SimLink[] = [];
 	private theme: Theme | null = null;
+	/** The node under the pointer. */
 	private hovered: SimNode | null = null;
+	/** The node highlighted on screen: the hovered one, or the last one while its highlight fades out. */
+	private shownFocus: SimNode | null = null;
+	/** How much the highlight is shown, from 0 to 1. */
+	private focusLevel = 0;
 	private dragged: SimNode | null = null;
 	private dragMoved = false;
 	private dragStart = { x: 0, y: 0 };
 	private panning: { x: number; y: number } | null = null;
+	/** Wheel zoom in progress: the zoom to reach, and the point that stays under the pointer. */
+	private zoom: { scale: number; px: number; py: number; wx: number; wy: number } | null = null;
+	/** Where the camera goes by itself: fit the whole graph, center the local note, or nowhere (moved by the user). */
+	private cameraMode: 'fit' | 'center' | null = 'fit';
+	private frameId: number | null = null;
+	private frameWindow: Window | null = null;
+	/** Whether frames stopped because the view was hidden; they resume when it shows again. */
+	private paused = false;
+	/** The edges must be rebuilt at the next frame. */
+	private edgesDirty = true;
+	private lastEdgeScale = 0;
 	private statusEl: HTMLElement | null = null;
+	private controlsEl: HTMLElement | null = null;
 	private summary = '';
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
@@ -123,13 +206,10 @@ export class LiteratureGraphView extends ItemView {
 	private center: string | null = null;
 	/** The whole graph, of which the local mode shows a part. */
 	private fullGraph: LiteratureGraph | null = null;
-	/** Local mode: keep the center note in the middle until the user moves the view. */
-	private followCenter = true;
 	/** Text typed in the filter: works whose label or title contain it stand out. */
 	private filter = '';
 	/** Forces of the layout, changed with the sliders of the view. */
-	private forces = { repel: 90, linkDistance: 60, center: 0.05 };
-	private ticks = 0;
+	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.05 };
 	private readonly reload = debounce(() => void this.loadData(), 2000, true);
 
 	constructor(
@@ -169,17 +249,25 @@ export class LiteratureGraphView extends ItemView {
 		if (this.local !== wasLocal) {
 			this.contentEl.toggleClass('is-local', this.local);
 			// A local graph is small: start closer, as Obsidian's local graph does.
-			this.world.scale.set(this.local ? LOCAL_START_SCALE : 1);
-			this.followActiveNote();
+			this.setCamera({ ...this.getCamera(), scale: this.local ? LOCAL_START_SCALE : 1 });
+			this.cameraMode = this.local ? 'center' : 'fit';
+			this.center = this.activeNotePath();
+			this.showCurrent();
 		}
+	}
+
+	/** The active note, or the last one active when a view that is not a note has the focus. */
+	private activeNotePath(): string | null {
+		const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? this.app.workspace.getActiveFile();
+		return file?.path ?? null;
 	}
 
 	/** In local mode, centers the graph on the active note. */
 	private followActiveNote(): void {
 		if (!this.local) return;
-		const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? null;
-		if (file && file.path !== this.center) {
-			this.center = file.path;
+		const path = this.activeNotePath();
+		if (path && path !== this.center) {
+			this.center = path;
 			this.showCurrent();
 		}
 	}
@@ -197,39 +285,73 @@ export class LiteratureGraphView extends ItemView {
 
 		const pixi = new Application();
 		await pixi.init({
-			resizeTo: container,
+			width: Math.max(1, container.clientWidth),
+			height: Math.max(1, container.clientHeight),
 			backgroundAlpha: 0,
 			antialias: true,
 			resolution: activeWindow.devicePixelRatio,
 			autoDensity: true,
+			// Frames are drawn on demand (see `requestFrame`), not 60 times a second.
+			autoStart: false,
 		});
+		pixi.ticker.stop();
 		this.pixi = pixi;
 		container.prepend(pixi.canvas);
 		// One circle texture, drawn once, shared by every node.
 		const circle = new Graphics().circle(CIRCLE_TEXTURE_RADIUS, CIRCLE_TEXTURE_RADIUS, CIRCLE_TEXTURE_RADIUS).fill(0xffffff);
 		this.circleTexture = pixi.renderer.generateTexture({ target: circle, resolution: 2, antialias: true });
 		circle.destroy();
-		this.world.addChild(this.edgesLayer, this.nodesLayer, this.labelsLayer);
+		this.world.addChild(
+			this.outsideEdges.mesh,
+			this.vaultEdges.mesh,
+			this.focusEdges.mesh,
+			this.nodesLayer,
+			this.labelsLayer,
+		);
 		pixi.stage.addChild(this.world);
 		this.world.position.set(pixi.screen.width / 2, pixi.screen.height / 2);
 		this.setUpInteractions(pixi);
+		this.layout = new LayoutRunner(this.contentEl.win, (update) => this.onLayout(update));
 
 		this.readTheme();
 		this.registerEvent(
 			this.app.workspace.on('css-change', () => {
 				this.readTheme();
-				this.redraw();
+				this.invalidate();
 			}),
 		);
 		this.registerEvent(this.index.on('changed', () => this.reload()));
 		this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveNote()));
-		this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.followActiveNote()));
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', () => {
+				this.followActiveNote();
+				this.resume();
+			}),
+		);
+		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
 		await this.loadData();
+	}
+
+	onResize(): void {
+		const pixi = this.pixi;
+		if (!pixi) return;
+		const width = this.contentEl.clientWidth;
+		const height = this.contentEl.clientHeight;
+		if (width > 0 && height > 0 && (width !== pixi.screen.width || height !== pixi.screen.height)) {
+			// Keep the same point of the graph in the middle.
+			const camera = this.getCamera();
+			pixi.renderer.resize(width, height);
+			this.setCamera(camera);
+		}
+		this.resume();
 	}
 
 	async onClose(): Promise<void> {
 		this.loading++;
-		this.simulation?.stop();
+		this.layout?.destroy();
+		this.layout = null;
+		if (this.frameId !== null) this.frameWindow?.cancelAnimationFrame(this.frameId);
+		this.frameId = null;
 		this.pixi?.destroy(true, { children: true });
 		this.pixi = null;
 	}
@@ -282,8 +404,8 @@ export class LiteratureGraphView extends ItemView {
 			this.show(this.fullGraph);
 			return;
 		}
-		if (!this.center) this.followActiveNote();
-		this.followCenter = true;
+		this.center ??= this.activeNotePath();
+		this.cameraMode = 'center';
 		this.show(this.localGraph(this.fullGraph, this.center));
 	}
 
@@ -369,14 +491,24 @@ export class LiteratureGraphView extends ItemView {
 		this.labelsLayer.removeChildren();
 
 		const byId = new Map<string, SimNode>();
-		this.nodes = graph.nodes.map((data) => {
+		this.nodes = graph.nodes.map((data, index) => {
 			const old = previous.get(data.id);
 			const radius = radiusOf(data);
 			const sprite = new Sprite(this.circleTexture ?? Texture.WHITE);
 			sprite.anchor.set(0.5);
 			sprite.scale.set(radius / CIRCLE_TEXTURE_RADIUS);
 			this.nodesLayer.addChild(sprite);
-			const node: SimNode = { data, x: old?.x, y: old?.y, sprite, groupColor: null, label: null, radius, neighbors: new Set() };
+			const node: SimNode = {
+				data,
+				index,
+				x: old?.x,
+				y: old?.y,
+				sprite,
+				groupColor: null,
+				label: null,
+				radius,
+				neighbors: new Set(),
+			};
 			byId.set(data.id, node);
 			return node;
 		});
@@ -397,33 +529,31 @@ export class LiteratureGraphView extends ItemView {
 				node.y = (anchor.y ?? 0) + (Math.random() - 0.5) * 60;
 			}
 		}
+		// The hovered node was replaced by a new one.
+		this.hovered = this.hovered ? (byId.get(this.hovered.data.id) ?? null) : null;
+		this.shownFocus = this.shownFocus ? (byId.get(this.shownFocus.data.id) ?? null) : null;
+		this.dragged = null;
+		if (!this.shownFocus) this.focusLevel = 0;
+
+		const outside = (l: SimLink) => l.source.data.generation > 0 || l.target.data.generation > 0;
+		this.vaultEdges.setLinks(this.links.filter((l) => !outside(l)));
+		this.outsideEdges.setLinks(this.links.filter(outside));
+		this.updateFocusEdges();
+
 		this.applyColorGroups();
 		if (this.local && this.nodes.length <= MAX_FILTER_LABELS) for (const node of this.nodes) this.ensureLabel(node);
 		// Labels of the vault's works; others get one on hover.
 		for (const node of this.nodes) if (node.data.generation === 0) this.ensureLabel(node);
+		this.labelMatches();
 
-		const many = this.nodes.length > 1000;
-		const inVault = (l: SimLink) => l.source.data.generation === 0 && l.target.data.generation === 0;
-		this.simulation?.stop();
-		this.simulation = forceSimulation<SimNode, SimLink>(this.nodes)
-			.force(
-				'link',
-				forceLink<SimNode, SimLink>(this.links)
-					.distance((l) => (inVault(l) ? this.forces.linkDistance : this.forces.linkDistance * 0.66))
-					.strength((l) => (inVault(l) ? 0.4 : 0.15)),
-			)
-			.force(
-				'charge',
-				forceManyBody<SimNode>()
-					.strength((n) => (n.data.generation === 0 ? -this.forces.repel : -this.forces.repel * 0.28))
-					.distanceMax(many ? 300 : 600),
-			)
-			.force('center', forceCenter(0, 0).strength(this.forces.center))
-			// Collisions cost much with many nodes, where they matter little.
-			.force('collide', many ? null : forceCollide<SimNode>((n) => n.radius + 1))
-			.on('tick', () => this.onTick())
-			.on('end', () => this.redraw());
-		if (previous.size > 0) this.simulation.alpha(0.5);
+		this.layout?.send({
+			type: 'start',
+			graph: ++this.layoutGraph,
+			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, generation: n.data.generation, radius: n.radius })),
+			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
+			forces: this.forces,
+			alpha: previous.size > 0 ? 0.5 : 1,
+		});
 
 		const counts = [0, 0, 0];
 		for (const n of this.nodes) counts[n.data.generation] = (counts[n.data.generation] ?? 0) + 1;
@@ -434,6 +564,7 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+		this.invalidate();
 	}
 
 	/** Gives each note of the vault the color of its color group (settings). */
@@ -444,16 +575,50 @@ export class LiteratureGraphView extends ItemView {
 			const css = node.data.file ? colorOf(node.data.file) : null;
 			node.groupColor = css ? parseCssColor(css, '#999999') : null;
 		}
-		this.redraw();
+		this.invalidate();
 	}
 
-	/** Moves the view so that the local graph's center note is in the middle. */
-	private centerOnNote(): void {
-		const pixi = this.pixi;
-		const node = this.nodes.find((n) => n.data.id === this.center);
-		if (!pixi || !node) return;
+	/** The camera matching the current position and zoom of the graph. */
+	private getCamera(): Camera {
 		const scale = this.world.scale.x;
-		this.world.position.set(pixi.screen.width / 2 - (node.x ?? 0) * scale, pixi.screen.height / 2 - (node.y ?? 0) * scale);
+		const width = this.pixi?.screen.width ?? 0;
+		const height = this.pixi?.screen.height ?? 0;
+		return { x: (width / 2 - this.world.x) / scale, y: (height / 2 - this.world.y) / scale, scale };
+	}
+
+	private setCamera(camera: Camera): void {
+		const width = this.pixi?.screen.width ?? 0;
+		const height = this.pixi?.screen.height ?? 0;
+		this.world.scale.set(camera.scale);
+		this.world.position.set(width / 2 - camera.x * camera.scale, height / 2 - camera.y * camera.scale);
+	}
+
+	/** Where the camera is going by itself, if anywhere. */
+	private cameraGoal(): Camera | null {
+		if (this.cameraMode === 'fit') {
+			const screen = this.pixi?.screen;
+			if (!screen) return null;
+			// The open control panel hides the right of the view: fit the graph beside it.
+			const panel = this.controlsEl;
+			const covered =
+				panel && !panel.hasClass('is-collapsed') && panel.offsetWidth < screen.width / 2 ? panel.offsetWidth + 16 : 0;
+			const width = screen.width - covered;
+			const fit = fitCamera(this.nodes, width, screen.height, this.local ? LOCAL_START_SCALE : 1.5);
+			if (fit) fit.x += covered / 2 / fit.scale;
+			return fit;
+		}
+		if (this.cameraMode === 'center') {
+			const node = this.nodes.find((n) => n.data.id === this.center);
+			return node ? { x: node.x ?? 0, y: node.y ?? 0, scale: this.world.scale.x } : null;
+		}
+		return null;
+	}
+
+	/** Moves the camera so the whole graph is in view, and keeps it so while the layout moves. */
+	fitToView(): void {
+		this.cameraMode = 'fit';
+		this.zoom = null;
+		this.requestFrame();
 	}
 
 	/** Whether a work matches the filter (always true without a filter). */
@@ -472,34 +637,47 @@ export class LiteratureGraphView extends ItemView {
 
 	/** Changes the forces of the running layout. */
 	private applyForces(): void {
-		const sim = this.simulation;
-		if (!sim) return;
-		const inVault = (l: SimLink) => l.source.data.generation === 0 && l.target.data.generation === 0;
-		sim.force<ForceLink<SimNode, SimLink>>('link')?.distance((l) =>
-			inVault(l) ? this.forces.linkDistance : this.forces.linkDistance * 0.66,
-		);
-		sim.force<ForceManyBody<SimNode>>('charge')?.strength((n) =>
-			n.data.generation === 0 ? -this.forces.repel : -this.forces.repel * 0.28,
-		);
-		sim.force<ForceCenter<SimNode>>('center')?.strength(this.forces.center);
-		sim.alpha(0.5).restart();
+		this.layout?.send({ type: 'forces', forces: { ...this.forces } });
+	}
+
+	/** New positions from the layout. */
+	private onLayout(update: LayoutUpdate): void {
+		// Positions of an older graph, sent before the layout got the new one.
+		if (update.graph !== this.layoutGraph) return;
+		const p = update.positions;
+		for (const node of this.nodes) {
+			// The dragged node is where the pointer is, which may be newer.
+			if (node === this.dragged && this.dragMoved) continue;
+			node.x = p[node.index * 2];
+			node.y = p[node.index * 2 + 1];
+		}
+		this.edgesDirty = true;
+		this.requestFrame();
 	}
 
 	/** The panel of the view, like the controls of Obsidian's graph view. */
 	private buildControls(container: HTMLElement): void {
 		const panel = container.createDiv({ cls: 'literature-graph-controls' });
+		this.controlsEl = panel;
 		const header = panel.createDiv({ cls: 'literature-graph-controls-header' });
+		const fit = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Fit the graph to the view' } });
+		setIcon(fit, 'maximize');
+		fit.addEventListener('click', () => this.fitToView());
 		const toggle = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Show or hide the controls' } });
 		setIcon(toggle, 'settings-2');
 		const body = panel.createDiv({ cls: 'literature-graph-controls-body' });
-		toggle.addEventListener('click', () => panel.toggleClass('is-collapsed', !panel.hasClass('is-collapsed')));
+		toggle.addEventListener('click', () => {
+			panel.toggleClass('is-collapsed', !panel.hasClass('is-collapsed'));
+			// The room left for the graph changed.
+			if (this.cameraMode === 'fit') this.requestFrame();
+		});
 
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
 		new Setting(body).setName('Filter').addSearch((search) =>
 			search.setPlaceholder('Author, year or title').onChange((value) => {
 				this.filter = value.trim().toLowerCase();
 				this.labelMatches();
-				this.redraw();
+				this.invalidate();
 			}),
 		);
 		new Setting(body)
@@ -565,7 +743,9 @@ export class LiteratureGraphView extends ItemView {
 		);
 		new Setting(body).addButton((button) =>
 			button.setButtonText('Restart layout').onClick(() => {
-				this.simulation?.alpha(1).restart();
+				this.layout?.send({ type: 'reheat', alpha: 1 });
+				if (!this.local) this.cameraMode = 'fit';
+				this.requestFrame();
 			}),
 		);
 		body.createDiv({
@@ -582,76 +762,112 @@ export class LiteratureGraphView extends ItemView {
 		});
 		label.anchor.set(0.5, 0);
 		label.resolution = 2;
+		label.visible = false;
 		node.label = label;
 		this.labelsLayer.addChild(label);
 		return label;
 	}
 
+	/** Something shown changed: draw everything again at the next frame. */
+	private invalidate(): void {
+		this.edgesDirty = true;
+		this.requestFrame();
+	}
+
+	/** Asks for one frame; frames keep coming while something moves. */
+	private requestFrame(): void {
+		if (this.frameId !== null || !this.pixi || this.paused) return;
+		const win = this.contentEl.win;
+		this.frameWindow = win;
+		this.frameId = win.requestAnimationFrame(() => {
+			this.frameId = null;
+			this.frame();
+		});
+	}
+
+	/** Frames stopped while the view was hidden: start them again. */
+	private resume(): void {
+		if (!this.paused) return;
+		this.paused = false;
+		this.invalidate();
+	}
+
 	/**
-	 * Called at each step of the layout. With many edges, rebuilding them is
-	 * the slowest part, so they are redrawn only every few steps while the
-	 * layout moves; nodes are redrawn at every step.
+	 * One frame: a step of the layout, of the hover highlight's fade and of the
+	 * camera, then drawing. Asks for another frame while anything still moves.
 	 */
-	private onTick(): void {
-		this.ticks++;
-		const every = Math.max(1, Math.ceil(this.links.length / EDGES_PER_FRAME));
-		const settling = (this.simulation?.alpha() ?? 0) > 0.02;
-		this.redraw(!settling || this.ticks % every === 0);
-	}
-
-	/** Draws nodes and labels (and edges, unless told not to) at their current positions. */
-	private redraw(withEdges = true): void {
+	private frame(): void {
+		const pixi = this.pixi;
 		const theme = this.theme;
-		if (!theme || !this.pixi) return;
-		if (this.local && this.followCenter) this.centerOnNote();
-		const scale = this.world.scale.x;
-		const focus = this.hovered;
-		const lit = (n: SimNode) => (!focus || n === focus || focus.neighbors.has(n)) && this.matches(n);
-		if (withEdges) this.drawEdges(theme, scale, focus);
-		this.drawNodes(theme, scale, focus, lit);
-	}
+		if (!pixi || !theme) return;
+		// A hidden view (another tab in front) costs nothing; `resume` restarts it.
+		if (!this.contentEl.isShown()) {
+			this.paused = true;
+			return;
+		}
+		let again = false;
 
-	private drawEdges(theme: Theme, scale: number, focus: SimNode | null): void {
-		const width = 1 / Math.max(scale, 0.5);
-		const edges = this.edgesLayer;
-		edges.clear();
-		for (const link of this.links) {
-			const { source: s, target: t } = link;
-			const on = focus !== null && (s === focus || t === focus);
-			const outside = s.data.generation > 0 || t.data.generation > 0;
-			const color = on ? theme.focused : theme.line;
-			const alpha = focus && !on ? 0.08 : outside && !on ? color.alpha * 0.45 : color.alpha;
-			const x1 = s.x ?? 0;
-			const y1 = s.y ?? 0;
-			const x2 = t.x ?? 0;
-			const y2 = t.y ?? 0;
-			edges.moveTo(x1, y1).lineTo(x2, y2).stroke({ width, color: color.color, alpha });
-			// Arrowhead at the edge of the cited work, when zoomed in enough to see it.
-			const len = Math.hypot(x2 - x1, y2 - y1);
-			if (scale > 0.5 && len > t.radius + 6) {
-				const ux = (x2 - x1) / len;
-				const uy = (y2 - y1) / len;
-				const tipX = x2 - ux * (t.radius + 1);
-				const tipY = y2 - uy * (t.radius + 1);
-				const size = 4;
-				edges
-					.poly([
-						tipX,
-						tipY,
-						tipX - ux * size * 1.6 - uy * size,
-						tipY - uy * size * 1.6 + ux * size,
-						tipX - ux * size * 1.6 + uy * size,
-						tipY - uy * size * 1.6 - ux * size,
-					])
-					.fill({ color: color.color, alpha });
+		// Hover highlight: fades in and out.
+		const target = this.hovered ? 1 : 0;
+		if (this.focusLevel !== target) {
+			const step = target - this.focusLevel;
+			this.focusLevel = Math.abs(step) < 0.02 ? target : this.focusLevel + step * FOCUS_FADE_STEP;
+			this.focusLevel = Math.min(1, Math.max(0, this.focusLevel));
+			again = true;
+		}
+		if (this.focusLevel === 0 && !this.hovered && this.shownFocus) {
+			this.shownFocus = null;
+			this.updateFocusEdges();
+		}
+
+		// Camera: a wheel zoom in progress, or the camera going by itself.
+		const scaleBefore = this.world.scale.x;
+		if (this.zoom) {
+			const z = this.zoom;
+			const next = approach({ x: 0, y: 0, scale: scaleBefore }, { x: 0, y: 0, scale: z.scale }, ZOOM_STEP).scale;
+			this.world.scale.set(next);
+			this.world.position.set(z.px - z.wx * next, z.py - z.wy * next);
+			if (next === z.scale) this.zoom = null;
+			else again = true;
+		} else if (this.cameraMode) {
+			const goal = this.cameraGoal();
+			if (goal) {
+				const current = this.getCamera();
+				const next = approach(current, goal, CAMERA_STEP);
+				this.setCamera(next);
+				if (next.x !== goal.x || next.y !== goal.y || next.scale !== goal.scale) again = true;
 			}
 		}
+		if (this.world.scale.x !== this.lastEdgeScale) this.edgesDirty = true;
+
+		this.draw(theme);
+		pixi.render();
+		if (again) this.requestFrame();
 	}
 
-	private drawNodes(theme: Theme, scale: number, focus: SimNode | null, lit: (n: SimNode) => boolean): void {
+	/** Draws the edges (when needed), the nodes and the labels at their current positions. */
+	private draw(theme: Theme): void {
+		const scale = this.world.scale.x;
+		const level = this.focusLevel;
+		const focus = this.shownFocus;
+		if (this.edgesDirty) {
+			this.edgesDirty = false;
+			this.lastEdgeScale = scale;
+			const width = 1 / Math.max(scale, 0.5);
+			const arrow = scale > ARROW_MIN_SCALE ? ARROW_SIZE / Math.max(scale, 1) : 0;
+			this.vaultEdges.update(width, arrow);
+			this.outsideEdges.update(width, arrow);
+			this.focusEdges.update(width * 1.5, arrow);
+		}
+		const lerp = (a: number, b: number) => a + (b - a) * level;
+		this.vaultEdges.style(theme.line, lerp(theme.line.alpha, DIMMED_EDGE_ALPHA));
+		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45, DIMMED_EDGE_ALPHA));
+		this.focusEdges.style(theme.focused, theme.focused.alpha * level);
+
 		for (const node of this.nodes) {
+			const near = !focus || node === focus || focus.neighbors.has(node);
 			const base =
-				node === focus || (this.local && node.data.id === this.center)
+				(node === focus && level > 0.5) || (this.local && node.data.id === this.center)
 					? theme.focused
 					: node.data.generation === 0
 						? (node.groupColor ?? theme.node)
@@ -660,55 +876,95 @@ export class LiteratureGraphView extends ItemView {
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
 			sprite.tint = base.color;
-			sprite.alpha = base.alpha * genAlpha * (lit(node) ? 1 : 0.2);
+			sprite.alpha = base.alpha * genAlpha * (near ? 1 : lerp(1, 0.2)) * (this.matches(node) ? 1 : 0.2);
 		}
 
 		// Labels: the vault's works fade in with the zoom; around a hovered node,
 		// its neighbors' labels are shown too.
 		const fade = Math.min(1, Math.max(0, (scale - LABEL_FADE_START) / (LABEL_FADE_END - LABEL_FADE_START)));
-		if (focus) {
-			this.ensureLabel(focus);
-			let shown = 0;
-			for (const n of focus.neighbors) {
-				if (n.data.generation === 0 || shown++ < MAX_NEIGHBOR_LABELS) this.ensureLabel(n);
-			}
-		}
+		const labelScale = 1 / Math.max(scale, 0.35);
+		const screen = this.pixi?.screen;
+		const candidates: { label: Text; box: LabelBox }[] = [];
 		for (const node of this.nodes) {
 			const label = node.label;
 			if (!label) continue;
+			const normal = this.filter
+				? this.matches(node)
+					? 1
+					: 0
+				: this.local
+					? 1
+					: node.data.generation === 0
+						? fade
+						: 0;
+			let alpha = normal;
+			let tier = node.data.generation === 0 ? 1 : 0;
+			if (focus) {
+				const near = node === focus || focus.neighbors.has(node);
+				alpha = lerp(normal, near ? 1 : node.data.generation === 0 ? 0.1 * fade : 0);
+				if (node === focus) tier = 4;
+				else if (near) tier += 2;
+			}
+			label.visible = false;
+			if (alpha <= 0.01) continue;
+			label.alpha = alpha;
 			label.position.set(node.x ?? 0, (node.y ?? 0) + node.radius + 3);
-			label.scale.set(1 / Math.max(scale, 0.35));
-			const nearFocus = focus !== null && (node === focus || focus.neighbors.has(node));
-			if (focus) label.alpha = nearFocus ? 1 : node.data.generation === 0 ? 0.1 * fade : 0;
-			else if (this.filter) label.alpha = this.matches(node) ? 1 : 0;
-			else if (this.local) label.alpha = 1;
-			else label.alpha = node.data.generation === 0 ? fade : 0;
+			label.scale.set(labelScale);
+			// The label's box on screen; labels off screen are not drawn at all.
+			const width = label.width * scale;
+			const height = label.height * scale;
+			const x = this.world.x + label.x * scale - width / 2;
+			const y = this.world.y + label.y * scale;
+			if (screen && (x > screen.width || y > screen.height || x + width < 0 || y + height < 0)) continue;
+			candidates.push({ label, box: { x, y, width, height, priority: tier * 1e6 + node.data.citedBy } });
 		}
+		// Of labels that would cover one another, only the most important is shown.
+		const shown = placeLabels(candidates.map((c) => c.box));
+		candidates.forEach((c, i) => (c.label.visible = shown[i] ?? false));
+	}
+
+	/** The edges of the highlighted node, drawn over the others in the focus color. */
+	private updateFocusEdges(): void {
+		const focus = this.shownFocus;
+		this.focusEdges.setLinks(focus ? this.links.filter((l) => l.source === focus || l.target === focus) : []);
+		this.edgesDirty = true;
 	}
 
 	private setHovered(node: SimNode | null): void {
 		if (this.dragged) return;
 		this.hovered = node;
-		this.redraw();
+		if (node && node !== this.shownFocus) {
+			this.shownFocus = node;
+			this.ensureLabel(node);
+			let shown = 0;
+			for (const n of node.neighbors) {
+				if (n.data.generation === 0 || shown++ < MAX_NEIGHBOR_LABELS) this.ensureLabel(n);
+			}
+			this.updateFocusEdges();
+		}
+		this.requestFrame();
 	}
 
 	/** The node under a point of the canvas, if any. */
 	private nodeAt(global: { x: number; y: number }): SimNode | null {
-		if (!this.simulation) return null;
 		const p = this.world.toLocal(global);
 		const slack = 3 / this.world.scale.x;
-		const node = this.simulation.find(p.x, p.y, MAX_NODE_RADIUS + slack);
-		if (!node) return null;
-		return Math.hypot((node.x ?? 0) - p.x, (node.y ?? 0) - p.y) <= node.radius + slack ? node : null;
+		// The node drawn on top (the last one) wins, as on screen.
+		for (let i = this.nodes.length - 1; i >= 0; i--) {
+			const node = this.nodes[i];
+			if (!node || node.x === undefined || node.y === undefined) continue;
+			const r = node.radius + slack;
+			const dx = node.x - p.x;
+			const dy = node.y - p.y;
+			if (dx * dx + dy * dy <= r * r) return node;
+		}
+		return null;
 	}
 
 	private startDrag(node: SimNode, event: FederatedPointerEvent): void {
 		this.dragged = node;
 		this.dragMoved = false;
 		this.dragStart = { x: event.global.x, y: event.global.y };
-		node.fx = node.x;
-		node.fy = node.y;
-		this.simulation?.alphaTarget(0.3).restart();
 	}
 
 	/** Opens a work: its note, or else its DOI or OpenAlex page. */
@@ -724,6 +980,11 @@ export class LiteratureGraphView extends ItemView {
 		}
 	}
 
+	/** The user moved the view: the camera stops moving by itself. */
+	private takeCamera(): void {
+		this.cameraMode = null;
+	}
+
 	private setUpInteractions(pixi: Application): void {
 		const stage = pixi.stage;
 		stage.eventMode = 'static';
@@ -736,15 +997,23 @@ export class LiteratureGraphView extends ItemView {
 		});
 		stage.on('globalpointermove', (e: FederatedPointerEvent) => {
 			if (this.dragged) {
-				if (Math.hypot(e.global.x - this.dragStart.x, e.global.y - this.dragStart.y) > 3) this.dragMoved = true;
+				if (!this.dragMoved && Math.hypot(e.global.x - this.dragStart.x, e.global.y - this.dragStart.y) > 3) {
+					this.dragMoved = true;
+					this.takeCamera();
+				}
 				if (!this.dragMoved) return;
+				// The node follows the pointer at once; the layout moves the others.
 				const p = this.world.toLocal(e.global);
-				this.dragged.fx = p.x;
-				this.dragged.fy = p.y;
+				this.dragged.x = p.x;
+				this.dragged.y = p.y;
+				this.layout?.send({ type: 'drag', index: this.dragged.index, x: p.x, y: p.y });
+				this.edgesDirty = true;
+				this.requestFrame();
 			} else if (this.panning) {
-				this.followCenter = false;
+				this.takeCamera();
+				this.zoom = null;
 				this.world.position.set(e.global.x - this.panning.x, e.global.y - this.panning.y);
-				this.redraw();
+				this.requestFrame();
 			} else {
 				const node = this.nodeAt(e.global);
 				pixi.canvas.style.cursor = node ? 'pointer' : '';
@@ -759,32 +1028,42 @@ export class LiteratureGraphView extends ItemView {
 			this.panning = null;
 			if (!node) return;
 			this.dragged = null;
-			node.fx = null;
-			node.fy = null;
-			this.simulation?.alphaTarget(0);
+			if (this.dragMoved) this.layout?.send({ type: 'release', index: node.index });
 			if (!this.dragMoved) this.openNode(node, e);
+			this.requestFrame();
 		};
 		stage.on('pointerup', release);
 		stage.on('pointerupoutside', release);
 
-		// Zoom around the pointer.
+		// Zoom around the pointer, smoothly: each wheel step changes the zoom to
+		// reach, and the frames move toward it keeping the point under the pointer.
 		pixi.canvas.addEventListener(
 			'wheel',
 			(e: WheelEvent) => {
 				e.preventDefault();
-				this.followCenter = false;
-				const factor = Math.exp(-e.deltaY * 0.0015);
-				const scale = Math.min(6, Math.max(0.05, this.world.scale.x * factor));
+				this.takeCamera();
 				const rect = pixi.canvas.getBoundingClientRect();
 				const px = e.clientX - rect.left;
 				const py = e.clientY - rect.top;
-				const wx = (px - this.world.x) / this.world.scale.x;
-				const wy = (py - this.world.y) / this.world.scale.y;
-				this.world.scale.set(scale);
-				this.world.position.set(px - wx * scale, py - wy * scale);
-				this.redraw();
+				const scale = this.world.scale.x;
+				const from = this.zoom?.scale ?? scale;
+				// Pixel and line wheels (trackpads send many small pixel steps).
+				const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+				this.zoom = {
+					scale: clampScale(from * Math.exp(-delta * 0.0015)),
+					px,
+					py,
+					wx: (px - this.world.x) / scale,
+					wy: (py - this.world.y) / scale,
+				};
+				this.requestFrame();
 			},
 			{ passive: false },
 		);
+		// Double click on the background: fit the graph to the view.
+		pixi.canvas.addEventListener('dblclick', (e: MouseEvent) => {
+			const rect = pixi.canvas.getBoundingClientRect();
+			if (!this.nodeAt({ x: e.clientX - rect.left, y: e.clientY - rect.top })) this.fitToView();
+		});
 	}
 }

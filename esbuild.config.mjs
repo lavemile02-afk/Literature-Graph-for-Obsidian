@@ -16,6 +16,33 @@ The licenses of all bundled packages are in THIRD-PARTY-NOTICES.md in the reposi
 
 const prod = process.argv[2] === 'production';
 
+// The layout's web worker (src/layoutWorker.ts) is bundled on its own and
+// embedded in main.js as text: a plugin is a single file, so the worker is
+// started from a Blob.
+const layoutWorker = {
+	name: 'layout-worker',
+	setup(build) {
+		build.onResolve({ filter: /^layout-worker:code$/ }, (args) => ({ path: args.path, namespace: 'layout-worker' }));
+		build.onLoad({ filter: /.*/, namespace: 'layout-worker' }, async () => {
+			const result = await esbuild.build({
+				entryPoints: ['src/layoutWorker.ts'],
+				bundle: true,
+				write: false,
+				format: 'iife',
+				target: 'es2021',
+				minify: prod,
+				metafile: true,
+				logLevel: 'silent',
+			});
+			return {
+				contents: result.outputFiles[0].text,
+				loader: 'text',
+				watchFiles: Object.keys(result.metafile.inputs),
+			};
+		});
+	},
+};
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
@@ -45,6 +72,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: 'main.js',
 	minify: prod,
+	plugins: [layoutWorker],
 });
 
 if (prod) {
