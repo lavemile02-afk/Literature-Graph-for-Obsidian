@@ -23,6 +23,10 @@ export interface LiteratureGraphSettings {
 	doiProperty: string;
 	/** Rewrite citation links when the cited note is renamed. */
 	updateLinksOnRename: boolean;
+	/** Look up bibliographic data on OpenAlex (network access). */
+	openAlexEnabled: boolean;
+	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
+	openAlexEmail: string;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -36,6 +40,8 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	useNoteNameAsCitation: false,
 	doiProperty: 'DOI',
 	updateLinksOnRename: true,
+	openAlexEnabled: true,
+	openAlexEmail: '',
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
@@ -97,6 +103,22 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'DOI property',
 						desc: 'Property that holds the DOI of a work. A link that cites a DOI opens the note with that DOI, if there is one.',
 						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: 'Bibliographies',
+				items: [
+					{
+						name: 'Use OpenAlex',
+						desc: 'Look up the references of your works, and works outside your vault, on OpenAlex (api.openalex.org), a free and open index of scholarly works. Requests send DOIs and OpenAlex ids only. Answers are cached in the plugin folder, so they stay available offline.',
+						control: { type: 'toggle', key: 'openAlexEnabled' },
+					},
+					{
+						name: 'Contact email for OpenAlex',
+						desc: 'Optional. OpenAlex asks for an email address to contact you if a problem occurs, and answers such requests faster. It is sent with every request.',
+						control: { type: 'text', key: 'openAlexEmail', placeholder: 'you@example.org' },
 					},
 				],
 			},

@@ -20,3 +20,6 @@ data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# OpenAlex cache written by the plugin when it is tested from this folder
+openalex-cache.json

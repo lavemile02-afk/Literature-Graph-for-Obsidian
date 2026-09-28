@@ -29,4 +29,10 @@ export default defineConfig(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		rules: {
+			// "OpenAlex" is a proper name (https://openalex.org).
+			'obsidianmd/ui/sentence-case': ['warn', { ignoreWords: ['OpenAlex'] }],
+		},
+	},
 );

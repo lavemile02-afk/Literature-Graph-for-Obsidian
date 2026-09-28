@@ -3,6 +3,7 @@ import { citationText } from './citationLink';
 import type { CitationIndex, CitedWork } from './citationIndex';
 import type { CitationLink } from './links';
 import { openCitation, openFileAtLine } from './navigation';
+import { OpenAlexClient, WorkSummary, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
 export const CITATIONS_VIEW = 'literature-graph-citations';
@@ -30,6 +31,7 @@ export class CitationsView extends ItemView {
 		leaf: WorkspaceLeaf,
 		private readonly index: CitationIndex,
 		private readonly settings: () => LiteratureGraphSettings,
+		private readonly openAlex: OpenAlexClient,
 	) {
 		super(leaf);
 	}
@@ -85,6 +87,9 @@ export class CitationsView extends ItemView {
 		const citedBySection = this.section(root, 'cited-by', 'Cited by', citing.length);
 		if (citing.length === 0) citedBySection.createDiv({ cls: 'search-empty-state', text: 'No note cites this one.' });
 		for (const { path, links } of citing) this.renderCiting(citedBySection, path, links);
+
+		const doi = this.index.doiForFile(file);
+		if (doi) void this.renderReferences(root, file, doi);
 	}
 
 	/** Groups the citation links of a note by the work they cite. */
@@ -213,6 +218,67 @@ export class CitationsView extends ItemView {
 			row.addEventListener('click', () => void openFileAtLine(this.app, citing, link.line));
 		}
 		apply();
+	}
+
+	/** The bibliography of the active note's work, from OpenAlex (cached). */
+	private async renderReferences(root: HTMLElement, file: TFile, doi: string): Promise<void> {
+		const section = this.section(root, 'references', 'References (OpenAlex)', 0);
+		const count = section.parentElement?.querySelector('.tree-item-flair');
+		const status = section.createDiv({ cls: 'search-empty-state', text: 'Loading…' });
+		let works: WorkSummary[] = [];
+		let known = 0;
+		try {
+			const work = await this.openAlex.workByDoi(doi);
+			if (this.file !== file) return;
+			if (!work) {
+				status.setText(
+					this.settings().openAlexEnabled || this.openAlex.isKnownDoi(doi)
+						? 'OpenAlex does not know this DOI.'
+						: 'OpenAlex is turned off in the settings.',
+				);
+				count?.setText('–');
+				return;
+			}
+			known = work.references.length;
+			works = await this.openAlex.worksByIds(work.references);
+		} catch (error) {
+			console.error('Literature Graph.md: OpenAlex request failed', error);
+			if (this.file === file) status.setText('OpenAlex could not be reached; showing what is cached.');
+			return;
+		}
+		if (this.file !== file) return;
+		count?.setText(String(known));
+		if (known === 0) {
+			status.setText('OpenAlex lists no references for this work.');
+			return;
+		}
+		status.remove();
+		const language = this.settings().citationLanguage;
+		const rows = works
+			.map((w) => ({ work: w, label: workCitation(w, language), file: w.doi ? this.index.fileForDoi(w.doi) : null }))
+			.sort((a, b) => a.label.localeCompare(b.label));
+		for (const row of rows) {
+			const kind = row.file ? 'note' : 'doi';
+			const item = section.createDiv({ cls: `tree-item literature-graph-work is-${kind}` });
+			const self = item.createDiv({ cls: 'tree-item-self is-clickable' });
+			const icon = self.createDiv({ cls: 'literature-graph-status' });
+			setIcon(icon, row.file ? 'file-check' : 'external-link');
+			icon.setAttr('aria-label', row.file ? 'In the vault' : 'Outside the vault');
+			const inner = self.createDiv({ cls: 'tree-item-inner' });
+			inner.createDiv({ cls: 'literature-graph-work-label', text: row.label });
+			inner.createDiv({ cls: 'literature-graph-work-detail', text: row.work.title });
+			const target = row.file;
+			self.addEventListener('click', () => {
+				if (target) void openFileAtLine(this.app, target, 0);
+				else window.open(row.work.doi ? `https://doi.org/${row.work.doi}` : `https://openalex.org/${row.work.id}`);
+			});
+		}
+		if (works.length < known) {
+			section.createDiv({
+				cls: 'search-empty-state',
+				text: `${known - works.length} references could not be loaded (offline, or not in OpenAlex).`,
+			});
+		}
 	}
 
 	private openWork(work: CitedWork): void {

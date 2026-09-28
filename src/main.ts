@@ -8,6 +8,7 @@ import { withoutCitationLinks } from './links';
 import { buildReferenceList } from './references';
 import { updateLinksAfterRename } from './rename';
 import { openCitation } from './navigation';
+import { OpenAlexClient } from './openalex';
 import { CITATIONS_VIEW, CitationsView } from './panel';
 import {
 	DEFAULT_SETTINGS,
@@ -18,12 +19,17 @@ import {
 export default class LiteratureGraphPlugin extends Plugin {
 	settings!: LiteratureGraphSettings;
 	index!: CitationIndex;
+	openAlex!: OpenAlexClient;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new LiteratureGraphSettingTab(this.app, this));
 
 		this.index = new CitationIndex(this.app, () => this.settings.doiProperty);
+		this.openAlex = new OpenAlexClient(this.app, `${this.manifest.dir ?? ''}/openalex-cache.json`, () => ({
+			enabled: this.settings.openAlexEnabled,
+			email: this.settings.openAlexEmail,
+		}));
 		const fileForDoi = (doi: string) => this.index.fileForDoi(doi);
 		this.app.workspace.onLayoutReady(() => void this.startIndex());
 
@@ -32,7 +38,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		});
 		registerCitationClicks(this, fileForDoi);
 
-		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings));
+		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings, this.openAlex));
 		this.addRibbonIcon('quote', 'Open citations panel', () => void this.openCitationsPanel());
 		this.addCommand({
 			id: 'open-citations-panel',
@@ -170,6 +176,10 @@ export default class LiteratureGraphPlugin extends Plugin {
 	async copyWithoutCitationLinks(file: TFile) {
 		await navigator.clipboard.writeText(withoutCitationLinks(await this.app.vault.read(file)));
 		new Notice('Note copied without citation links.');
+	}
+
+	onunload() {
+		void this.openAlex.flush();
 	}
 
 	async loadSettings() {
