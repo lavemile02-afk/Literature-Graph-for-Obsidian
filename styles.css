@@ -74,3 +74,35 @@
 	color: var(--text-muted);
 	pointer-events: none;
 }
+
+.literature-graph-controls {
+	position: absolute;
+	top: var(--size-4-2);
+	right: var(--size-4-2);
+	width: 280px;
+	max-height: calc(100% - var(--size-4-8));
+	overflow-y: auto;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+	padding: var(--size-4-1) var(--size-4-3);
+}
+
+.literature-graph-controls.is-collapsed {
+	width: auto;
+	padding: var(--size-4-1);
+}
+
+.literature-graph-controls.is-collapsed .literature-graph-controls-body {
+	display: none;
+}
+
+.literature-graph-controls-header {
+	display: flex;
+	justify-content: flex-end;
+}
+
+.literature-graph-controls .setting-item {
+	padding: var(--size-4-2) 0;
+}

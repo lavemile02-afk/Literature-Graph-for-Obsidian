@@ -4,11 +4,14 @@ import {
 	forceLink,
 	forceManyBody,
 	forceSimulation,
+	ForceCenter,
+	ForceLink,
+	ForceManyBody,
 	Simulation,
 	SimulationLinkDatum,
 	SimulationNodeDatum,
 } from 'd3-force';
-import { debounce, ItemView, Keymap, WorkspaceLeaf } from 'obsidian';
+import { debounce, ItemView, Keymap, Setting, WorkspaceLeaf, setIcon } from 'obsidian';
 import { Application, Container, FederatedPointerEvent, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { CitationIndex } from './citationIndex';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
@@ -70,6 +73,8 @@ const LABEL_FADE_START = 0.7;
 const LABEL_FADE_END = 1.2;
 /** While the layout moves, about this many edges are redrawn per step (the rest wait). */
 const EDGES_PER_FRAME = 4000;
+/** At most this many labels are shown for the works matching the filter. */
+const MAX_FILTER_LABELS = 300;
 /** At most this many labels of works outside the vault are shown around a hovered node. */
 const MAX_NEIGHBOR_LABELS = 40;
 
@@ -106,6 +111,10 @@ export class LiteratureGraphView extends ItemView {
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
 	private loading = 0;
+	/** Text typed in the filter: works whose label or title contain it stand out. */
+	private filter = '';
+	/** Forces of the layout, changed with the sliders of the view. */
+	private forces = { repel: 90, linkDistance: 60, center: 0.05 };
 	private ticks = 0;
 	private readonly reload = debounce(() => void this.loadData(), 2000, true);
 
@@ -142,6 +151,7 @@ export class LiteratureGraphView extends ItemView {
 		container.empty();
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
+		this.buildControls(container);
 
 		const pixi = new Application();
 		await pixi.init({
@@ -265,16 +275,16 @@ export class LiteratureGraphView extends ItemView {
 			.force(
 				'link',
 				forceLink<SimNode, SimLink>(this.links)
-					.distance((l) => (inVault(l) ? 60 : 40))
+					.distance((l) => (inVault(l) ? this.forces.linkDistance : this.forces.linkDistance * 0.66))
 					.strength((l) => (inVault(l) ? 0.4 : 0.15)),
 			)
 			.force(
 				'charge',
 				forceManyBody<SimNode>()
-					.strength((n) => (n.data.generation === 0 ? -90 : -25))
+					.strength((n) => (n.data.generation === 0 ? -this.forces.repel : -this.forces.repel * 0.28))
 					.distanceMax(many ? 300 : 600),
 			)
-			.force('center', forceCenter(0, 0).strength(0.05))
+			.force('center', forceCenter(0, 0).strength(this.forces.center))
 			// Collisions cost much with many nodes, where they matter little.
 			.force('collide', many ? null : forceCollide<SimNode>((n) => n.radius + 1))
 			.on('tick', () => this.onTick())
@@ -290,6 +300,114 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+	}
+
+	/** Whether a work matches the filter (always true without a filter). */
+	private matches(node: SimNode): boolean {
+		if (!this.filter) return true;
+		const text = `${node.data.label} ${node.data.title}`.toLowerCase();
+		return text.includes(this.filter);
+	}
+
+	/** Labels for the works matching the filter (at most a few hundred). */
+	private labelMatches(): void {
+		if (!this.filter) return;
+		let shown = 0;
+		for (const node of this.nodes) if (this.matches(node) && shown++ < MAX_FILTER_LABELS) this.ensureLabel(node);
+	}
+
+	/** Changes the forces of the running layout. */
+	private applyForces(): void {
+		const sim = this.simulation;
+		if (!sim) return;
+		const inVault = (l: SimLink) => l.source.data.generation === 0 && l.target.data.generation === 0;
+		sim.force<ForceLink<SimNode, SimLink>>('link')?.distance((l) =>
+			inVault(l) ? this.forces.linkDistance : this.forces.linkDistance * 0.66,
+		);
+		sim.force<ForceManyBody<SimNode>>('charge')?.strength((n) =>
+			n.data.generation === 0 ? -this.forces.repel : -this.forces.repel * 0.28,
+		);
+		sim.force<ForceCenter<SimNode>>('center')?.strength(this.forces.center);
+		sim.alpha(0.5).restart();
+	}
+
+	/** The panel of the view, like the controls of Obsidian's graph view. */
+	private buildControls(container: HTMLElement): void {
+		const panel = container.createDiv({ cls: 'literature-graph-controls' });
+		const header = panel.createDiv({ cls: 'literature-graph-controls-header' });
+		const toggle = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Show or hide the controls' } });
+		setIcon(toggle, 'settings-2');
+		const body = panel.createDiv({ cls: 'literature-graph-controls-body' });
+		toggle.addEventListener('click', () => panel.toggleClass('is-collapsed', !panel.hasClass('is-collapsed')));
+
+		const reloadSoon = debounce(() => void this.loadData(), 600, true);
+		new Setting(body).setName('Filter').addSearch((search) =>
+			search.setPlaceholder('Author, year or title').onChange((value) => {
+				this.filter = value.trim().toLowerCase();
+				this.labelMatches();
+				this.redraw();
+			}),
+		);
+		new Setting(body)
+			.setName('Generations')
+			.setDesc('Works outside the vault cited by it (1), and by those (2).')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ '0': '0', '1': '1', '2': '2' })
+					.setValue(String(this.options.generations))
+					.onChange((value) => {
+						this.options.generations = Number(value);
+						reloadSoon();
+					}),
+			);
+		new Setting(body)
+			.setName('Minimum citations')
+			.setDesc('For a work outside the vault to be shown.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(1, 10, 1)
+					.setValue(this.options.minCitations)
+					.onChange((value) => {
+						this.options.minCitations = value;
+						reloadSoon();
+					}),
+			);
+		new Setting(body).setName('Repel force').addSlider((slider) =>
+			slider
+				.setLimits(10, 300, 10)
+				.setValue(this.forces.repel)
+				.onChange((value) => {
+					this.forces.repel = value;
+					this.applyForces();
+				}),
+		);
+		new Setting(body).setName('Link distance').addSlider((slider) =>
+			slider
+				.setLimits(20, 200, 10)
+				.setValue(this.forces.linkDistance)
+				.onChange((value) => {
+					this.forces.linkDistance = value;
+					this.applyForces();
+				}),
+		);
+		new Setting(body).setName('Center force').addSlider((slider) =>
+			slider
+				.setLimits(0, 0.3, 0.01)
+				.setValue(this.forces.center)
+				.onChange((value) => {
+					this.forces.center = value;
+					this.applyForces();
+				}),
+		);
+		new Setting(body).addButton((button) =>
+			button.setButtonText('Restart layout').onClick(() => {
+				this.simulation?.alpha(1).restart();
+			}),
+		);
+		body.createDiv({
+			cls: 'setting-item-description',
+			text: 'These changes last while this view is open; defaults are in the plugin settings.',
+		});
 	}
 
 	private ensureLabel(node: SimNode): Text {
@@ -323,7 +441,7 @@ export class LiteratureGraphView extends ItemView {
 		if (!theme || !this.pixi) return;
 		const scale = this.world.scale.x;
 		const focus = this.hovered;
-		const lit = (n: SimNode) => !focus || n === focus || focus.neighbors.has(n);
+		const lit = (n: SimNode) => (!focus || n === focus || focus.neighbors.has(n)) && this.matches(n);
 		if (withEdges) this.drawEdges(theme, scale, focus);
 		this.drawNodes(theme, scale, focus, lit);
 	}
@@ -392,6 +510,7 @@ export class LiteratureGraphView extends ItemView {
 			label.scale.set(1 / Math.max(scale, 0.35));
 			const nearFocus = focus !== null && (node === focus || focus.neighbors.has(node));
 			if (focus) label.alpha = nearFocus ? 1 : node.data.generation === 0 ? 0.1 * fade : 0;
+			else if (this.filter) label.alpha = this.matches(node) ? 1 : 0;
 			else label.alpha = node.data.generation === 0 ? fade : 0;
 		}
 	}
