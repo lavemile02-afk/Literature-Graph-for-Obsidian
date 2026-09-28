@@ -81,6 +81,7 @@ export class CitationsView extends ItemView {
 		this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveNote()));
 		this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.followActiveNote()));
 		this.registerEvent(this.index.on('changed', () => this.refresh()));
+		this.registerEvent(this.index.on('moved', () => this.refresh()));
 		this.followActiveNote();
 	}
 

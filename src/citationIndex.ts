@@ -104,13 +104,21 @@ export class CitationIndex extends Events {
 		this.bibByDoi.clear();
 		this.worksByKey.clear();
 		this.workKeyByPath.clear();
+		this.descriptions.clear();
 		for (const file of this.app.vault.getMarkdownFiles()) await this.indexFile(file, false);
 		this.trigger('changed');
 	}
 
-	/** Re-reads one note. */
+	/**
+	 * Re-reads one note. Triggers "changed" when what the note cites, its DOI,
+	 * its reference list or the description of its work changed (the graph
+	 * depends on these), and "moved" when only the lines of its citation links
+	 * moved (the panel shows them); typing elsewhere triggers nothing.
+	 */
 	async indexFile(file: TFile, notify = true): Promise<void> {
 		const text = await this.app.vault.cachedRead(file);
+		const before = this.signature(file.path);
+		const beforeLines = this.linesOf(file.path);
 		const links = text.includes(CITE_URL_PREFIX) ? citationLinksIn(text) : [];
 		if (links.length > 0) this.linksByPath.set(file.path, links);
 		else this.linksByPath.delete(file.path);
@@ -118,7 +126,39 @@ export class CitationIndex extends Events {
 		const literature = this.isLiterature(file);
 		this.setBibliography(file.path, literature ? bibliographyEntries(text) : []);
 		this.setWorkKey(file.path, literature ? this.workKey(file) : null);
-		if (notify) this.trigger('changed');
+		this.descriptions.set(file.path, this.describe(file));
+		if (!notify) return;
+		if (this.signature(file.path) !== before) this.trigger('changed');
+		else if (this.linesOf(file.path) !== beforeLines) this.trigger('moved');
+	}
+
+	/** Properties that describe a note's work (they change labels and matches). */
+	private readonly descriptions = new Map<string, string>();
+
+	private describe(file: TFile): string {
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		const s = this.settings();
+		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, s.referenceProperty]
+			.map((key) => JSON.stringify(fm[key] ?? null))
+			.join('|');
+	}
+
+	/** Everything about a note that other notes or the graph depend on. */
+	private signature(path: string): string {
+		return [
+			(this.linksByPath.get(path) ?? []).map((l) => `${l.text}\u0000${l.url}`).join('\u0001'),
+			this.doiByPath.get(path) ?? '',
+			(this.bibByPath.get(path) ?? []).map((e) => e.text).join('\u0001'),
+			this.workKeyByPath.get(path) ?? '',
+			this.descriptions.get(path) ?? '',
+		].join('\u0002');
+	}
+
+	private linesOf(path: string): string {
+		return [
+			...(this.linksByPath.get(path) ?? []).map((l) => l.line),
+			...(this.bibByPath.get(path) ?? []).map((e) => e.line),
+		].join(',');
 	}
 
 	/** Forgets a deleted note. */
@@ -127,6 +167,7 @@ export class CitationIndex extends Events {
 		this.setDoi(path, null);
 		this.setBibliography(path, []);
 		this.setWorkKey(path, null);
+		this.descriptions.delete(path);
 		this.trigger('changed');
 	}
 
@@ -144,6 +185,9 @@ export class CitationIndex extends Events {
 		this.setBibliography(file.path, literature ? entries : []);
 		this.setWorkKey(oldPath, null);
 		this.setWorkKey(file.path, literature ? this.workKey(file) : null);
+		const description = this.descriptions.get(oldPath);
+		this.descriptions.delete(oldPath);
+		if (description !== undefined) this.descriptions.set(file.path, description);
 		this.trigger('changed');
 	}
 
