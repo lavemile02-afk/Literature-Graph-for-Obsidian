@@ -75,3 +75,22 @@ test('keeps the parentheses of a DOI', () => {
 		'10.1016/s0022-1694(97)00037-1',
 	);
 });
+
+test('reads entries that start with an anchor or a bare number, under linked headings', () => {
+	const note = [
+		'# [References](#page-49-0)',
+		'<span id="page-14-2"></span>Autio, A., Ala-Aho, P. (2020). Implications of peat soil conceptualization.',
+		'- 1 IUCN (1980) World Conservation Strategy.',
+		'# FURTHER READINGS',
+		'- Smith, J. (2001). A further reading about peat.',
+	].join('\n');
+	const entries = bibliographyEntries(note);
+	assert.deepEqual(
+		entries.map((e) => [e.firstAuthor, e.year]),
+		[
+			['Autio', '2020'],
+			['IUCN', '1980'],
+			['Smith', '2001'],
+		],
+	);
+});

@@ -28,9 +28,10 @@ export interface BibEntry {
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const SECTION_TITLE =
-	/^(?:\d+(?:\.\d+)*\.?\s+)?(references(?: cited)?|literature cited|cited literature|works cited|bibliography|bibliographie|references and notes|références(?: bibliographiques| citées)?|liste des références|literatur(?:verzeichnis)?)\s*:?$/i;
+	/^(?:\d+(?:\.\d+)*\.?\s+)?(references(?: cited)?|literature cited|cited literature|works cited|bibliography|bibliographie|references and notes|further readings?|suggested readings?|sources|références(?: bibliographiques| citées)?|liste des références|lectures suggérées|literatur(?:verzeichnis)?)\s*:?$/i;
 const BOLD_TITLE = /^\*\*([^*]+)\*\*\s*:?\s*$/;
-const LIST_MARKER = /^(?:[-*+]\s+|\d{1,4}[.)]\s+|\[\d{1,4}\]\s*)/;
+// List markers and numbering: "- ", "12. ", "12) ", "[12]", and "12 " before a capital ("1 IUCN (1980)").
+const LIST_MARKER = /^(?:[-*+]\s+|\d{1,4}[.)]\s+|\[\d{1,4}\]\s*|\d{1,3}\s+(?=\p{Lu}))/u;
 // A DOI may contain balanced parentheses: 10.1016/s0022-1694(97)00037-1.
 const DOI = /\b10\.\d{4,9}\/(?:[^\s"'<>[\],;()]+|\([^\s()<>]*\))+/i;
 const YEAR_IN_PARENS = /\((1[5-9]\d{2}|20\d{2})[a-z]?[),]/;
@@ -40,6 +41,7 @@ const YEAR = /\b(1[5-9]\d{2}|20\d{2})[a-z]?\b/;
 function plainHeading(text: string): string {
 	return text
 		.replace(/<[^<>]*>/g, '')
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
 		.replace(/[*_`]/g, '')
 		.replace(/\{#[^}]*\}\s*$/, '')
 		.trim();
@@ -73,6 +75,9 @@ export function familyOf(author: string): string {
 /** Reads one entry; null when the line does not look like a reference. */
 export function parseEntry(raw: string, line: number): BibEntry | null {
 	let text = raw.trim();
+	for (let i = 0; i < 2; i++) text = text.replace(LIST_MARKER, '').trim();
+	// Anchors left by the PDF conversion: <span id="page-14-2"></span>Autio, A.…
+	text = text.replace(/^(?:<(?:span|a)\b[^<>]*>\s*<\/(?:span|a)>\s*)+/i, '').trim();
 	for (let i = 0; i < 2; i++) text = text.replace(LIST_MARKER, '').trim();
 	if (text.length < 20 || text.startsWith('![') || text.startsWith('|') || text.startsWith('<')) return null;
 	const head = text.slice(0, 200);
