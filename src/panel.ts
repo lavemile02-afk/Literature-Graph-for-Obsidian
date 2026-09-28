@@ -460,9 +460,11 @@ export class CitationsView extends ItemView {
 			if (this.file !== file) return;
 			if (!work) {
 				status.setText(
-					this.settings().openAlexEnabled || this.openAlex.isKnownDoi(doi)
+					this.openAlex.isKnownDoi(doi)
 						? 'OpenAlex does not know this DOI.'
-						: 'OpenAlex is turned off in the settings.',
+						: !this.settings().openAlexEnabled
+							? 'OpenAlex is turned off in the settings.'
+							: (this.openAlex.lastError?.message ?? 'OpenAlex could not be reached.'),
 				);
 				flair?.setText('–');
 				return;
@@ -486,7 +488,9 @@ export class CitationsView extends ItemView {
 		if (works.length < known) {
 			section.createDiv({
 				cls: 'search-empty-state',
-				text: `${known - works.length} references could not be loaded (offline, or not in OpenAlex).`,
+				text: `${known - works.length} references could not be loaded (${
+					this.openAlex.isRateLimited ? 'OpenAlex refuses requests for now' : 'offline, or not in OpenAlex'
+				}).`,
 			});
 		}
 	}

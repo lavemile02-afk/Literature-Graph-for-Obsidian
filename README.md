@@ -67,9 +67,17 @@ Clicking a citation link opens the note and selects the passage (editing view) o
 - **Check citations in this note** lists the citation links whose note or passage cannot be found, or whose passage was changed, with a link to each line.
 - **Copy note without citation links** copies the note with each link replaced by its text, "(Smith et al., 2020)", for pasting into a word processor, where `obsidian://` links would only work with Obsidian installed.
 
-### Reference list
+### Reference list and APA in-text citations
 
-**Insert reference list** inserts, at the cursor, the reference list of the works cited by the note's citation links, sorted alphabetically as in APA style. Each reference comes from the work's reference property (by default `Citation`), converted to the citation language: "&" or "et", "(Eds.)" or "(dir.)", "In" or "Dans", "(2nd ed.)" or "(2e éd.)", "[Doctoral dissertation, …]" or "(Thèse de doctorat)", "[Preprint]" or "[Prépublication]", "n.d." or "s.d.". When several works share the same in-text citation, they get letters (2016a, 2016b) and a notice says which letters to use in the text.
+**Insert reference list** inserts, at the cursor, the reference list of the works cited by the note's citation links, and brings the note's in-text citations in line with it, following APA 7th edition (one undoable change):
+
+- **Order** (APA 9.44–9.47): letter by letter on the surnames ("nothing precedes something": Brown before Browning), a one-author work before multi-author works with the same first author, then the year (no date first), then the title without its leading article.
+- **In-text citations** (APA 8.17–8.20): when two different works would get the same citation ("Smith et al., 2020"), as many names are written as needed to tell them apart ("Smith, Jones, et al., 2020"; every name if only the last one differs). Only works with the same authors and year get letters (2020a, 2020b), in reference-list order. When different first authors share a surname, their initials are added ("J. M. Taylor, 2020").
+- **Language**: references and citations are written in English or in the French adaptation of APA ("et", "(dir.)", "Dans", "(2e éd.)", "(Thèse de doctorat)", "[Prépublication]", "s.d."), whichever form the properties use.
+
+**Update in-text citations (APA)** does the second part alone. A citation link whose text is not a citation of its work (a custom text without the first author and year) is left as written.
+
+Each reference comes from the work's reference property (by default `Citation`); the order and the citations are computed from its authors, year and title properties.
 
 ### For scripts and AI agents
 
@@ -125,6 +133,8 @@ The view looks like Obsidian's graph view and follows your theme (it uses the sa
 ## Network use
 
 When **Use OpenAlex** is on (the default), the plugin sends requests to [OpenAlex](https://openalex.org) (`api.openalex.org`), a free and open index of scholarly works, to get bibliographic data: the requests contain DOIs and OpenAlex work ids only, plus the contact email if you set one in the settings. Answers are cached in `openalex-cache.json` in the plugin folder, so they stay available offline and each work is requested only once. Turn **Use OpenAlex** off to make no network requests at all; the cache is still used.
+
+Without an API key, OpenAlex allows each network a small free daily budget (renewed at midnight UTC); lookups by DOI or id are cheap, but a large literature graph can still use it up. When OpenAlex refuses requests, the plugin says so once, stops asking until the budget is back, and keeps using what is cached. A free API key (see [openalex.org](https://openalex.org)) has its own budget: store it with **OpenAlex API key** in the settings, which keeps it in Obsidian's secret storage rather than in the plugin's settings file.
 
 ## Development
 

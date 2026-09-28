@@ -37,8 +37,8 @@ export default defineConfig(
 	},
 	{
 		rules: {
-			// "OpenAlex" is a proper name (https://openalex.org).
-			'obsidianmd/ui/sentence-case': ['warn', { ignoreWords: ['OpenAlex'] }],
+			// "OpenAlex" is a proper name (https://openalex.org), "APA" an acronym.
+			'obsidianmd/ui/sentence-case': ['warn', { ignoreWords: ['OpenAlex', 'APA'] }],
 		},
 	},
 );

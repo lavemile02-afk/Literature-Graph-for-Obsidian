@@ -73,6 +73,16 @@ function summarize(raw: RawWork): WorkSummary {
 	};
 }
 
+/** OpenAlex refuses requests for now: its free daily budget is used up, or it is overloaded. */
+export class OpenAlexLimitError extends Error {
+	constructor(readonly until: number) {
+		super(
+			`OpenAlex refuses requests until ${new Date(until).toLocaleTimeString()}. Without an API key, OpenAlex allows a small free daily budget per network; a free key (see the plugin settings) has its own budget.`,
+		);
+		this.name = 'OpenAlexLimitError';
+	}
+}
+
 export class OpenAlexClient {
 	private cache: CacheFile = { version: CACHE_VERSION, works: {}, doiToId: {} };
 	private loaded = false;
@@ -83,7 +93,7 @@ export class OpenAlexClient {
 	constructor(
 		private readonly app: App,
 		private readonly cachePath: string,
-		private readonly options: () => { enabled: boolean; email: string },
+		private readonly options: () => { enabled: boolean; email: string; apiKey: string },
 	) {}
 
 	/** Reads the cache file, once. */
@@ -123,17 +133,64 @@ export class OpenAlexClient {
 		await this.app.vault.adapter.write(this.cachePath, JSON.stringify(this.cache));
 	}
 
+	/**
+	 * Until when OpenAlex refuses requests (429). Without an API key, OpenAlex
+	 * gives a small free daily budget per network, renewed at midnight UTC;
+	 * once it is used up, the plugin stops asking until then, instead of
+	 * sending requests that are sure to be refused.
+	 */
+	private limitedUntil = 0;
+
+	/** Called once each time OpenAlex starts refusing requests. */
+	onLimit: ((error: OpenAlexLimitError) => void) | null = null;
+	/** The last failure of a request, if the last attempt failed. */
+	lastError: Error | null = null;
+
+	/**
+	 * Runs a fetch; when it fails, keeps what was cached and remembers the
+	 * error, so that callers show cached data rather than nothing.
+	 */
+	private async tryFetch(fetch: () => Promise<unknown>): Promise<void> {
+		try {
+			await fetch();
+			this.lastError = null;
+		} catch (error) {
+			this.lastError = error instanceof Error ? error : new Error(String(error));
+			if (!(error instanceof OpenAlexLimitError)) console.error('Literature Graph.md: OpenAlex request failed', error);
+		}
+	}
+
+	/** Whether OpenAlex is refusing requests for now (daily budget or overload). */
+	get isRateLimited(): boolean {
+		return Date.now() < this.limitedUntil;
+	}
+
 	/** GET a path of the API, one request at a time, below the rate limit. */
 	private request(path: string, params: Record<string, string>): Promise<unknown> {
-		const { email } = this.options();
+		const { email, apiKey } = this.options();
 		const query = new URLSearchParams(params);
 		if (email.trim()) query.set('mailto', email.trim());
 		const run = async () => {
+			if (this.isRateLimited) throw new OpenAlexLimitError(this.limitedUntil);
 			const wait = this.lastRequest + MIN_INTERVAL_MS - Date.now();
 			if (wait > 0) await sleep(wait);
 			this.lastRequest = Date.now();
-			const response = await requestUrl({ url: `${API}${path}?${query.toString()}`, throw: false });
+			const response = await requestUrl({
+				url: `${API}${path}?${query.toString()}`,
+				headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+				throw: false,
+			});
 			if (response.status === 404) return null;
+			if (response.status === 429) {
+				const text = response.text.toLowerCase();
+				// A used-up daily budget comes back at midnight UTC; an overload soon.
+				const midnight = new Date();
+				midnight.setUTCHours(24, 0, 0, 0);
+				this.limitedUntil = text.includes('budget') ? midnight.getTime() : Date.now() + 60_000;
+				const error = new OpenAlexLimitError(this.limitedUntil);
+				this.onLimit?.(error);
+				throw error;
+			}
 			if (response.status >= 400) throw new Error(`OpenAlex answered ${response.status}`);
 			return response.json as unknown;
 		};
@@ -197,7 +254,7 @@ export class OpenAlexClient {
 		await this.load();
 		const wanted = dois.map(normalizeDoi);
 		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId)))];
-		if (missing.length > 0 && this.options().enabled) await this.fetchBy('doi', missing, onProgress);
+		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('doi', missing, onProgress));
 		return wanted
 			.map((d) => this.cache.doiToId[d])
 			.map((id) => (id ? this.cache.works[id] : undefined))
@@ -209,7 +266,7 @@ export class OpenAlexClient {
 		await this.load();
 		const known = this.cache.missingIds ?? {};
 		const missing = ids.filter((id) => !this.cache.works[id] && !known[id]);
-		if (missing.length > 0 && this.options().enabled) await this.fetchBy('openalex_id', missing, onProgress);
+		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('openalex_id', missing, onProgress));
 		return ids.map((id) => this.cache.works[id]).filter((w): w is WorkSummary => w !== undefined);
 	}
 
@@ -222,7 +279,7 @@ export class OpenAlexClient {
 		const citedBy = (this.cache.citedBy ??= {});
 		let entry = citedBy[id];
 		if (!entry) {
-			if (!this.options().enabled) return null;
+			if (!this.options().enabled || this.isRateLimited) return null;
 			const data = (await this.request('/works', {
 				filter: `cites:${id}`,
 				sort: 'cited_by_count:desc',

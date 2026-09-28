@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bibliographyEntries, entryMatches, isReferenceHeading, nameKey, parseEntry } from '../src/bibliography';
+import { bibliographyEntries, entryMatches, familyOf, isReferenceHeading, nameKey, parseEntry } from '../src/bibliography';
 
 test('recognizes reference-list headings in many forms', () => {
 	for (const heading of [
@@ -57,4 +57,21 @@ test('matches an entry to a work only with the title, not the author and year al
 
 test('reduces names for comparison', () => {
 	assert.equal(nameKey('González-Pérez'), 'gonzalezperez');
+});
+
+test('finds family names in every author style', () => {
+	assert.equal(familyOf('Keller J'), 'Keller');
+	assert.equal(familyOf('R. A. Gatenby'), 'Gatenby');
+	assert.equal(familyOf('Heikkinen J. E. P.'), 'Heikkinen');
+	assert.equal(familyOf('Van den Brink'), 'Van den Brink');
+	assert.equal(familyOf('WHO'), 'WHO');
+	assert.equal(familyOf('J.S.'), '');
+	assert.deepEqual(parseEntry('Keller J, Bauers AK, et al. 2006. Nutrient control of microbial carbon cycling.', 0)?.authors, ['keller', 'bauers']);
+});
+
+test('keeps the parentheses of a DOI', () => {
+	assert.equal(
+		parseEntry('Price, J. S. (1997). Soil moisture. J. Hydrol. https://doi.org/10.1016/S0022-1694(97)00037-1.', 0)?.doi,
+		'10.1016/s0022-1694(97)00037-1',
+	);
 });

@@ -269,7 +269,10 @@ export class LiteratureGraphView extends ItemView {
 				if (run === this.loading) this.setStatus(`${this.summary}${this.summary ? ' · ' : ''}${message}`);
 			},
 		});
-		if (run === this.loading) this.setStatus(this.summary);
+		if (run === this.loading) {
+			const limited = this.openAlex.isRateLimited ? ' · OpenAlex refuses requests for now: cached data only' : '';
+			this.setStatus(this.summary + limited);
+		}
 	}
 
 	/** Shows the whole graph, or in local mode the part around the active note. */

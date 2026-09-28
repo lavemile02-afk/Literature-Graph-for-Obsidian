@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, SettingDefinitionItem } from 'obsidian';
+import { App, Plugin, PluginSettingTab, SecretComponent, SettingDefinitionItem } from 'obsidian';
 
 export type CitationLanguage = 'en' | 'fr';
 
@@ -29,6 +29,8 @@ export interface LiteratureGraphSettings {
 	openAlexEnabled: boolean;
 	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
 	openAlexEmail: string;
+	/** Name of the secret (Obsidian's secret storage) that holds an OpenAlex API key. */
+	openAlexKeySecret: string;
 	/** Generations shown by default in the literature graph: 0, 1 or 2. */
 	graphGenerations: number;
 	/** A work outside the vault is shown if at least this many works of the graph cite it. */
@@ -53,6 +55,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	highlightSeconds: 5,
 	openAlexEnabled: true,
 	openAlexEmail: '',
+	openAlexKeySecret: '',
 	graphGenerations: 0,
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
@@ -62,7 +65,11 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 export class LiteratureGraphSettingTab extends PluginSettingTab {
 	constructor(
 		app: App,
-		private readonly owner: Plugin & { onSettingsChanged: () => void },
+		private readonly owner: Plugin & {
+			onSettingsChanged: () => void;
+			settings: LiteratureGraphSettings;
+			saveSettings: () => Promise<void>;
+		},
 	) {
 		super(app, owner);
 	}
@@ -176,6 +183,20 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Contact email for OpenAlex',
 						desc: 'Optional. OpenAlex asks for an email address to contact you if a problem occurs, and answers such requests faster. It is sent with every request.',
 						control: { type: 'text', key: 'openAlexEmail', placeholder: 'you@example.org' },
+					},
+					{
+						name: 'OpenAlex API key',
+						desc: 'Optional but recommended. Without a key, OpenAlex allows a small free daily budget shared by everyone on your network, which a large literature graph can use up. A free key (openalex.org) has its own budget. The key is kept in Obsidian\'s secret storage, not in the plugin settings.',
+						render: (setting) => {
+							setting.addComponent((el) =>
+								new SecretComponent(this.app, el)
+									.setValue(this.owner.settings.openAlexKeySecret)
+									.onChange(async (value) => {
+										this.owner.settings.openAlexKeySecret = value;
+										await this.owner.saveSettings();
+									}),
+							);
+						},
 					},
 				],
 			},

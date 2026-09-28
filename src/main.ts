@@ -5,11 +5,11 @@ import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink, citationUrl } from './citationLink';
 import { registerCitationClicks } from './clicks';
 import { setHighlightDuration } from './highlight';
-import { withCanonicalCitationLinks, withoutCitationLinks } from './links';
+import { citationLinksIn, withCanonicalCitationLinks, withoutCitationLinks } from './links';
 import { findExactPassages, findPassage } from './passage';
-import { buildReferenceList } from './references';
+import { apaWorkOf, buildReferenceList, citedWorks, inTextCitations } from './references';
 import { updateLinksAfterRename } from './rename';
-import { openCitation } from './navigation';
+import { openCitation, resolveCitedNote } from './navigation';
 import { OpenAlexClient } from './openalex';
 import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
@@ -33,7 +33,11 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.openAlex = new OpenAlexClient(this.app, `${this.manifest.dir ?? ''}/openalex-cache.json`, () => ({
 			enabled: this.settings.openAlexEnabled,
 			email: this.settings.openAlexEmail,
+			apiKey: this.settings.openAlexKeySecret
+				? (this.app.secretStorage.getSecret(this.settings.openAlexKeySecret) ?? '')
+				: '',
 		}));
+		this.openAlex.onLimit = (error) => new Notice(error.message, 12000);
 		const fileForDoi = (doi: string) => this.index.fileForDoi(doi);
 		this.app.workspace.onLayoutReady(() => void this.startIndex());
 
@@ -84,6 +88,11 @@ export default class LiteratureGraphPlugin extends Plugin {
 			id: 'insert-reference-list',
 			name: 'Insert reference list',
 			editorCallback: (editor) => this.insertReferenceList(editor),
+		});
+		this.addCommand({
+			id: 'update-in-text-citations',
+			name: 'Update in-text citations (APA)',
+			editorCallback: (editor) => this.updateInTextCitations(editor),
 		});
 		this.addCommand({
 			id: 'check-citations',
@@ -231,23 +240,80 @@ export default class LiteratureGraphPlugin extends Plugin {
 	 * and says which in-text citations need a letter (2020a, 2020b).
 	 */
 	insertReferenceList(editor: Editor) {
-		const list = buildReferenceList(this.app, editor.getValue(), this.settings, (doi) =>
-			this.index.fileForDoi(doi),
-		);
+		const fileForDoi = (doi: string) => this.index.fileForDoi(doi);
+		const list = buildReferenceList(this.app, editor.getValue(), this.settings, fileForDoi);
 		if (!list.text) {
 			new Notice('This note cites no work of the vault.');
 			return;
 		}
-		editor.replaceSelection(`${list.text}\n`);
+		// One undoable change: the in-text citations, then the list at the cursor.
+		const at = editor.posToOffset(editor.getCursor('from'));
+		const end = editor.posToOffset(editor.getCursor('to'));
+		const { changes, skipped } = this.citationTextChanges(editor.getValue(), list.citations);
+		editor.transaction({
+			changes: [
+				...changes.map((c) => ({ from: editor.offsetToPos(c.from), to: editor.offsetToPos(c.to), text: c.text })),
+				{ from: editor.offsetToPos(at), to: editor.offsetToPos(end), text: `${list.text}\n` },
+			],
+		});
 		const messages: string[] = [];
-		for (const { citation, letters } of list.lettered) {
-			messages.push(`"${citation}" is shared by several works: write ${letters.join(', ')} in the text, as in the list.`);
+		if (changes.length > 0) messages.push(`Updated ${changes.length} in-text citation${changes.length > 1 ? 's' : ''} to follow APA.`);
+		if (list.disambiguated.length > 0) {
+			messages.push(`Told apart as APA requires: ${list.disambiguated.map((d) => d.citation).join('; ')}.`);
 		}
-		if (list.skipped.length > 0) {
-			messages.push(`Not in the list (no note in the vault): ${list.skipped.join('; ')}.`);
-		}
+		if (skipped > 0) messages.push(`${skipped} citation link${skipped > 1 ? 's were' : ' was'} left as written (custom text).`);
+		if (list.skipped.length > 0) messages.push(`Not in the list (no note in the vault): ${list.skipped.join('; ')}.`);
 		if (messages.length > 0) new Notice(messages.join('\n\n'), 15000);
 	}
+
+	/** Rewrites the in-text citations of the active note so that they follow APA 7. */
+	updateInTextCitations(editor: Editor) {
+		const fileForDoi = (doi: string) => this.index.fileForDoi(doi);
+		const { files } = citedWorks(this.app, editor.getValue(), fileForDoi);
+		const labels = new Map([...inTextCitations(this.app, files, this.settings)].map(([path, c]) => [path, c.label]));
+		const { changes, skipped } = this.citationTextChanges(editor.getValue(), labels);
+		if (changes.length > 0) {
+			editor.transaction({
+				changes: changes.map((c) => ({ from: editor.offsetToPos(c.from), to: editor.offsetToPos(c.to), text: c.text })),
+			});
+		}
+		const parts = [
+			changes.length === 0
+				? 'The in-text citations already follow APA.'
+				: `Updated ${changes.length} in-text citation${changes.length > 1 ? 's' : ''} to follow APA.`,
+		];
+		if (skipped > 0) parts.push(`${skipped} left as written (custom text).`);
+		new Notice(parts.join(' '));
+	}
+
+	/**
+	 * The changes that give each citation link of a text its APA citation. A
+	 * link whose text does not look like a citation of its work (a custom
+	 * text, without the first author and the year) is left as written.
+	 */
+	citationTextChanges(text: string, labels: Map<string, string>): { changes: { from: number; to: number; text: string }[]; skipped: number } {
+		const changes: { from: number; to: number; text: string }[] = [];
+		let skipped = 0;
+		const plain = (t: string) => t.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+		for (const link of citationLinksIn(text)) {
+			const { note, doi } = link.target;
+			const file = (note ? resolveCitedNote(this.app, note) : null) ?? (doi ? this.index.fileForDoi(doi) : null);
+			const label = file ? labels.get(file.path) : undefined;
+			if (!file || !label) continue;
+			const current = link.text.replace(/\\([[\]])/g, '$1');
+			if (current === label) continue;
+			const work = apaWorkOf(this.app, file, this.settings);
+			const family = work.authors[0]?.family ?? '';
+			const year = work.year.replace(/\D/g, '');
+			if (!family || !plain(current).includes(plain(family)) || (year && !current.includes(year))) {
+				skipped++;
+				continue;
+			}
+			changes.push({ from: link.from + 1, to: link.from + 1 + link.text.length, text: label.replace(/([[\]])/g, '\\$1') });
+		}
+		return { changes, skipped };
+	}
+
 
 	/** Checks the citation links of a note and lists those that need attention. */
 	async checkNote(file: TFile) {

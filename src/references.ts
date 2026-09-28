@@ -1,4 +1,5 @@
 import { App, TFile } from 'obsidian';
+import { ApaWork, InTextCitation, apaCitations, compareApa, parseAuthors } from './apa';
 import { citationText, familyNames } from './citationLink';
 import { citationLinksIn } from './links';
 import { resolveCitedNote } from './navigation';
@@ -80,28 +81,70 @@ export function localizeReference(reference: string, language: CitationLanguage)
 	return ref;
 }
 
-/** Sort key: letters without accents or case, so that APA alphabetical order holds. */
-function sortKey(reference: string): string {
-	return reference
-		.normalize('NFKD')
-		.replace(/\p{M}/gu, '')
-		.replace(/[_*]/g, '')
-		.toLowerCase();
-}
-
 export interface ReferenceList {
-	/** The references, one paragraph each. */
+	/** The references, one paragraph each, in APA order. */
 	text: string;
-	/** Citations that share a text and received letters, such as "Smith, 2020" → ["Smith, 2020a", "Smith, 2020b"]. */
-	lettered: { citation: string; letters: string[] }[];
+	/** In-text citation of each cited work (without parentheses), by note path, following APA 7. */
+	citations: Map<string, string>;
+	/** Works whose citation needs more than the usual form: more names, initials or a letter. */
+	disambiguated: { path: string; citation: string }[];
 	/** Cited works that are not notes of the vault (DOI only, or broken links). */
 	skipped: string[];
 }
 
-interface Entry {
-	file: TFile;
-	reference: string;
-	citation: string;
+/** The works cited by citation links in a note: notes of the vault, and the rest. */
+export function citedWorks(
+	app: App,
+	noteText: string,
+	fileForDoi: (doi: string) => TFile | null,
+): { files: TFile[]; skipped: string[] } {
+	const files = new Set<TFile>();
+	const skipped = new Set<string>();
+	for (const link of citationLinksIn(noteText)) {
+		const { note, doi } = link.target;
+		const cited = (note ? resolveCitedNote(app, note) : null) ?? (doi ? fileForDoi(doi) : null);
+		if (cited) files.add(cited);
+		else skipped.add(doi ? `https://doi.org/${doi}` : link.text);
+	}
+	return { files: [...files], skipped: [...skipped] };
+}
+
+/** What APA needs about a work, from the note's properties. */
+export function apaWorkOf(app: App, file: TFile, settings: LiteratureGraphSettings): ApaWork {
+	const fm = app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+	const read = (key: string): string => {
+		const value: unknown = fm[key];
+		return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+	};
+	return {
+		id: file.path,
+		authors: parseAuthors(read(settings.authorsProperty)),
+		year: read(settings.yearProperty),
+		title: read(settings.titleProperty) || file.basename,
+	};
+}
+
+/**
+ * In-text citations of the works a note cites, following APA 7: the usual
+ * citation, or more names, initials or a letter when two works would share it.
+ */
+export function inTextCitations(
+	app: App,
+	files: TFile[],
+	settings: LiteratureGraphSettings,
+): Map<string, InTextCitation & { usual: string }> {
+	const works = files.map((f) => apaWorkOf(app, f, settings));
+	const apa = apaCitations(works, settings.citationLanguage);
+	const result = new Map<string, InTextCitation & { usual: string }>();
+	for (const file of files) {
+		const computed = apa.get(file.path);
+		// Without authors in the properties, keep the stored citation text.
+		const usual = citationText(app, file, settings);
+		const hasAuthors = (works.find((w) => w.id === file.path)?.authors.length ?? 0) > 0;
+		const label = computed && hasAuthors ? computed.label : usual;
+		result.set(file.path, { label, letter: computed?.letter ?? '', usual });
+	}
+	return result;
 }
 
 /** Builds the reference list of the works cited by citation links in a note. */
@@ -111,49 +154,41 @@ export function buildReferenceList(
 	settings: LiteratureGraphSettings,
 	fileForDoi: (doi: string) => TFile | null,
 ): ReferenceList {
-	const files = new Set<TFile>();
-	const skipped = new Set<string>();
-	for (const link of citationLinksIn(noteText)) {
-		const { note, doi } = link.target;
-		const cited = (note ? resolveCitedNote(app, note) : null) ?? (doi ? fileForDoi(doi) : null);
-		if (cited) files.add(cited);
-		else skipped.add(doi ? `https://doi.org/${doi}` : link.text);
-	}
+	const { files, skipped } = citedWorks(app, noteText, fileForDoi);
+	const works = new Map(files.map((f) => [f.path, apaWorkOf(app, f, settings)]));
+	const citations = inTextCitations(app, files, settings);
+	const noDate = settings.citationLanguage === 'fr' ? 's.d.' : 'n.d.';
 
-	const entries: Entry[] = [...files].map((file) => {
-		const fm = app.metadataCache.getFileCache(file)?.frontmatter ?? {};
-		const read = (key: string): string => {
-			const value: unknown = fm[key];
-			return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-		};
-		const stored = read(settings.referenceProperty);
-		const reference = stored
-			? localizeReference(stored, settings.citationLanguage)
-			: `${read(settings.authorsProperty) || file.basename} (${read(settings.yearProperty) || (settings.citationLanguage === 'fr' ? 's.d.' : 'n.d.')}). ${read(settings.titleProperty) || file.basename}.`;
-		return { file, reference, citation: citationText(app, file, settings) };
+	const sorted = [...files].sort((a, b) => {
+		const x = works.get(a.path);
+		const y = works.get(b.path);
+		return x && y ? compareApa(x, y) : 0;
 	});
-	entries.sort((a, b) => (sortKey(a.reference) < sortKey(b.reference) ? -1 : 1));
-
-	// Works with the same in-text citation get letters, in reference-list order.
-	const lettered: ReferenceList['lettered'] = [];
-	const groups = new Map<string, Entry[]>();
-	for (const e of entries) groups.set(e.citation, [...(groups.get(e.citation) ?? []), e]);
-	for (const [citation, group] of groups) {
-		if (group.length < 2) continue;
-		const letters: string[] = [];
-		group.forEach((e, i) => {
-			const letter = String.fromCharCode(97 + i);
-			e.reference = e.reference.replace(/\((\d{4}|s\.d\.|n\.d\.)\)/, (_m, year: string) =>
+	const references = sorted.map((file) => {
+		const fm = app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		const stored: unknown = fm[settings.referenceProperty];
+		const work = works.get(file.path);
+		let reference =
+			typeof stored === 'string' && stored.trim()
+				? localizeReference(stored.trim(), settings.citationLanguage)
+				: `${(fm[settings.authorsProperty] as string | undefined) ?? file.basename} (${work?.year || noDate}). ${work?.title ?? file.basename}.`;
+		const letter = citations.get(file.path)?.letter;
+		if (letter) {
+			reference = reference.replace(/\((\d{4}|s\.d\.|n\.d\.)\)/, (_m, year: string) =>
 				/\d/.test(year) ? `(${year}${letter})` : `(${year}-${letter})`,
 			);
-			letters.push(`${citation}${letter}`);
-		});
-		lettered.push({ citation, letters });
-	}
+		}
+		return reference;
+	});
 
+	const disambiguated = sorted
+		.map((f) => ({ path: f.path, citation: citations.get(f.path)?.label ?? '', usual: citations.get(f.path)?.usual ?? '' }))
+		.filter((c) => c.citation !== c.usual)
+		.map(({ path, citation }) => ({ path, citation }));
 	return {
-		text: entries.map((e) => e.reference).join('\n\n'),
-		lettered,
-		skipped: [...skipped],
+		text: references.join('\n\n'),
+		citations: new Map([...citations].map(([path, c]) => [path, c.label])),
+		disambiguated,
+		skipped,
 	};
 }

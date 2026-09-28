@@ -31,7 +31,8 @@ const SECTION_TITLE =
 	/^(?:\d+(?:\.\d+)*\.?\s+)?(references(?: cited)?|literature cited|cited literature|works cited|bibliography|bibliographie|references and notes|références(?: bibliographiques| citées)?|liste des références|literatur(?:verzeichnis)?)\s*:?$/i;
 const BOLD_TITLE = /^\*\*([^*]+)\*\*\s*:?\s*$/;
 const LIST_MARKER = /^(?:[-*+]\s+|\d{1,4}[.)]\s+|\[\d{1,4}\]\s*)/;
-const DOI = /\b10\.\d{4,9}\/[^\s)\]>"'<,;]+/i;
+// A DOI may contain balanced parentheses: 10.1016/s0022-1694(97)00037-1.
+const DOI = /\b10\.\d{4,9}\/(?:[^\s"'<>[\],;()]+|\([^\s()<>]*\))+/i;
 const YEAR_IN_PARENS = /\((1[5-9]\d{2}|20\d{2})[a-z]?[),]/;
 const YEAR = /\b(1[5-9]\d{2}|20\d{2})[a-z]?\b/;
 
@@ -49,9 +50,30 @@ export function isReferenceHeading(text: string): boolean {
 	return SECTION_TITLE.test(plainHeading(text));
 }
 
+/** An initial or a group of initials: "J", "AK", "J.", "J.E.P.", "M.-A.". */
+const INITIALS = /^(?:\p{Lu}{1,3}|(?:\p{Lu}\.[\s-]*)+\p{Lu}?\.?)$/u;
+
+/**
+ * The family name in one author of a reference list, whatever the style:
+ * "Keller J", "Keller, J.", "J. Keller", "Heikkinen J. E. P.", "Van den Brink".
+ * Initials before and after the name are dropped; returns '' for initials alone.
+ */
+export function familyOf(author: string): string {
+	const all = author.replace(/[()]/g, ' ').trim().split(/\s+/).filter(Boolean);
+	const tokens = [...all];
+	while (tokens.length > 0 && INITIALS.test(tokens[0] ?? '')) tokens.shift();
+	while (tokens.length > 0 && INITIALS.test(tokens[tokens.length - 1] ?? '')) tokens.pop();
+	const name = tokens.join(' ');
+	if (name) return name;
+	// A short all-capitals author is initials; a longer one is a group (WHO, FAO).
+	const whole = all.join(' ');
+	return /^\p{Lu}{3,}$/u.test(whole) ? whole : '';
+}
+
 /** Reads one entry; null when the line does not look like a reference. */
 export function parseEntry(raw: string, line: number): BibEntry | null {
-	const text = raw.trim().replace(LIST_MARKER, '').trim();
+	let text = raw.trim();
+	for (let i = 0; i < 2; i++) text = text.replace(LIST_MARKER, '').trim();
 	if (text.length < 20 || text.startsWith('![') || text.startsWith('|') || text.startsWith('<')) return null;
 	const head = text.slice(0, 200);
 	const year = (YEAR_IN_PARENS.exec(head) ?? YEAR.exec(head))?.[1] ?? null;
@@ -60,10 +82,10 @@ export function parseEntry(raw: string, line: number): BibEntry | null {
 	if (!year && !doi) return null;
 
 	// The first author is what comes before the first comma (or before the
-	// year when there is no comma), if it looks like a family name.
+	// year when there is no comma), if it looks like a name.
 	const plain = text.replace(/[*_]/g, '');
 	const cut = plain.search(/,|\s\(|\s(?:1[5-9]|20)\d{2}\b/);
-	const candidate = (cut > 0 ? plain.slice(0, cut) : '').trim();
+	const candidate = familyOf(cut > 0 ? plain.slice(0, cut) : '');
 	const firstAuthor = /^[\p{L}][\p{L}'’. -]{0,40}$/u.test(candidate) && !/\d/.test(candidate) ? candidate : null;
 
 	// Authors: the part before the year, split on commas, "&", "and", "et".
@@ -74,8 +96,8 @@ export function parseEntry(raw: string, line: number): BibEntry | null {
 		? authorPart
 				.replace(/\bet al\b.*$/i, '')
 				.split(/\s*(?:,|;|&|\band\b|\bet\b)\s*/)
-				.map((p) => p.replace(/[()]/g, '').trim())
-				.filter((p) => p !== '' && !/^(\p{Lu}\.?[\s.-]*)+$/u.test(p) && /\p{L}{2}/u.test(p))
+				.map(familyOf)
+				.filter((p) => /\p{L}{2}/u.test(p))
 				.map(nameKey)
 				.filter(Boolean)
 		: [];

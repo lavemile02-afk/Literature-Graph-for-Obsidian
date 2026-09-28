@@ -152,6 +152,9 @@ export async function buildGraph(
 	}
 	progress.onStage(g.snapshot());
 	if (options.generations < 1) return g.snapshot();
+	if (openAlex.isRateLimited) {
+		progress.onStatus('OpenAlex refuses requests for now: works outside the vault come from the cache only');
+	}
 
 	// ----- Generation 1: works outside the vault cited by the vault's works -----
 	const counts1 = new Map<string, number>();
