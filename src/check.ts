@@ -8,7 +8,8 @@ export type CitationStatus =
 	| 'approximate'
 	| 'passage-not-found'
 	| 'external'
-	| 'note-not-found';
+	| 'note-not-found'
+	| 'needs-brackets';
 
 export interface CheckedCitation {
 	link: CitationLink;
@@ -42,6 +43,10 @@ export async function checkCitations(
 			const match = findPassage(text, q, qe, occ);
 			status = !match ? 'passage-not-found' : match.approximate ? 'approximate' : 'ok';
 		}
+		// A readable URL with spaces but without angle brackets is not a link
+		// for Obsidian's reading view, even if it leads to its passage.
+		const bracketed = noteText.charAt(link.from + link.text.length + 3) === '<';
+		if (/\s/.test(link.url) && !bracketed) status = 'needs-brackets';
 		results.push({ link, status, cited });
 	}
 	return results;
@@ -56,6 +61,8 @@ function describe(result: CheckedCitation): string {
 			return `Passage not found in "${result.cited?.basename ?? ''}".`;
 		case 'note-not-found':
 			return note ? `No note named "${note}", and no DOI.` : 'The link has neither a note nor a DOI.';
+		case 'needs-brackets':
+			return 'Written readable without angle brackets, so it is not a link in the reading view: run "Convert readable citation links to encoded".';
 		case 'external':
 			return `No note for this work; the link opens https://doi.org/${doi ?? ''}.`;
 		default:
@@ -78,7 +85,7 @@ export class CitationCheckModal extends Modal {
 		this.setTitle(`Citations in "${this.file.basename}"`);
 
 		const count = (status: CitationStatus) => this.results.filter((r) => r.status === status).length;
-		const broken = count('passage-not-found') + count('note-not-found');
+		const broken = count('passage-not-found') + count('note-not-found') + count('needs-brackets');
 		const summary = [
 			`${this.results.length} citation links`,
 			`${count('ok')} OK`,

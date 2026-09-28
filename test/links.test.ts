@@ -50,3 +50,12 @@ test('converts readable citation links to the canonical encoded form', () => {
 	);
 	assert.equal(result.text.split('\n')[1], text.split('\n')[1]);
 });
+
+test('reads a readable citation link written without angle brackets', () => {
+	const line = '8. ([Bourgeois et al., 2016](obsidian://cite?note=Bourgeois et al., 2016 (1)&q=Once canopy cover at 40%)).';
+	const [link] = markdownLinksInLine(line);
+	assert.equal(link?.url, 'obsidian://cite?note=Bourgeois et al., 2016 (1)&q=Once canopy cover at 40%');
+	assert.equal(line.slice(link?.to), ').');
+	const fixed = withCanonicalCitationLinks(line, (l) => citationUrl(l.target)).text;
+	assert.equal(fixed, '8. ([Bourgeois et al., 2016](obsidian://cite?note=Bourgeois%20et%20al.%2C%202016%20%281%29&q=Once%20canopy%20cover%20at%2040%25)).');
+});

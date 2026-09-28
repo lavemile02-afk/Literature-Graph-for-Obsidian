@@ -34,7 +34,10 @@ export function registerBrokenLinkMarks(plugin: Plugin, index: CitationIndex): v
 				const line = view.state.doc.lineAt(pos);
 				if (line.text.includes(CITE_URL_PREFIX)) {
 					for (const link of markdownLinksInLine(line.text)) {
-						if (!link.url.startsWith(CITE_URL_PREFIX) || !isBroken(link.url)) continue;
+						if (!link.url.startsWith(CITE_URL_PREFIX)) continue;
+						// A readable URL with spaces needs angle brackets to be a link.
+						const bracketless = /\s/.test(link.url) && line.text.charAt(link.from + link.text.length + 3) !== '<';
+						if (!bracketless && !isBroken(link.url)) continue;
 						const start = line.from + link.from + 1;
 						builder.add(start, start + link.text.length, mark);
 					}

@@ -28,12 +28,16 @@ export function markdownLinksInLine(line: string): LineLink[] {
 			url = line.slice(destStart + 1, close);
 			to = close + 2;
 		} else {
-			// A bare destination ends at whitespace or at an unbalanced ")".
+			// A bare destination ends at whitespace or at an unbalanced ")". A
+			// citation URL written readable without angle brackets (not valid
+			// Markdown, but easy to type) is read up to its unbalanced ")", so
+			// that it can be checked and converted.
+			const lenient = line.startsWith(CITE_URL_PREFIX, destStart);
 			let depth = 0;
 			let end = destStart;
 			for (; end < line.length; end++) {
 				const ch = line.charAt(end);
-				if (/\s/.test(ch)) break;
+				if (/\s/.test(ch) && !lenient) break;
 				if (ch === '(') depth++;
 				if (ch === ')') {
 					if (depth === 0) break;
