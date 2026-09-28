@@ -58,9 +58,15 @@ The text of the link comes from the work's properties:
 
 The property names, and the language of the citation ("Smith & Jones" or "Smith et Jones"), can be changed in the plugin settings.
 
+### Citing a whole work
+
+**Insert citation** lists the works of the literature folder (search by author, year or title words) and inserts a citation link to the chosen work at the cursor; the link opens the work at the beginning. **Copy reference of this work** copies the full reference of the active note's work, in the citation language.
+
 ### Opening a citation link
 
 Clicking a citation link opens the note and selects the passage (editing view) or highlights it for a few seconds (reading view). Ctrl/Cmd-click or middle-click opens it in a new tab. The passage is found even if line breaks, hyphenation, emphasis or HTML tags differ; if it was changed since, the closest text is shown with a notice.
+
+**Previews.** Hovering a citation link shows the cited work and the passage in its context, like Obsidian's page previews (in the editor, hold Ctrl/Cmd, as for Obsidian's own links). A citation link whose work cannot be found (no note and no DOI) is shown in the error color.
 
 ### Checking and exporting
 

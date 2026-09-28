@@ -4,10 +4,13 @@ import { CitationIndex } from './citationIndex';
 import { CITE_ACTION, parseCitationParams } from './citation';
 import { buildCitationLink, citationUrl } from './citationLink';
 import { registerCitationClicks } from './clicks';
+import { registerCitationHover } from './hover';
+import { registerBrokenLinkMarks } from './decorations';
+import { InsertCitationModal } from './insertCitation';
 import { setHighlightDuration } from './highlight';
 import { citationLinksIn, withCanonicalCitationLinks, withoutCitationLinks } from './links';
 import { findExactPassages, findPassage } from './passage';
-import { apaWorkOf, buildReferenceList, citedWorks, inTextCitations } from './references';
+import { apaWorkOf, buildReferenceList, citedWorks, inTextCitations, localizeReference } from './references';
 import { updateLinksAfterRename } from './rename';
 import { openCitation, resolveCitedNote } from './navigation';
 import { OpenAlexClient } from './openalex';
@@ -45,6 +48,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 			void openCitation(this.app, parseCitationParams(params), false, fileForDoi);
 		});
 		registerCitationClicks(this, fileForDoi);
+		registerCitationHover(this, this.index, this.openAlex, () => this.settings);
+		registerBrokenLinkMarks(this, this.index);
 
 		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings, this.openAlex));
 		this.addRibbonIcon('quote', 'Open citations panel', () => void this.openCitationsPanel());
@@ -88,6 +93,25 @@ export default class LiteratureGraphPlugin extends Plugin {
 			id: 'insert-reference-list',
 			name: 'Insert reference list',
 			editorCallback: (editor) => this.insertReferenceList(editor),
+		});
+		this.addCommand({
+			id: 'insert-citation',
+			name: 'Insert citation',
+			editorCallback: (editor) => new InsertCitationModal(this.app, editor, this.index, this.settings).open(),
+		});
+		this.addCommand({
+			id: 'copy-reference',
+			name: 'Copy reference of this work',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				const stored: unknown = file ? this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings.referenceProperty] : null;
+				if (typeof stored !== 'string' || !stored.trim()) return false;
+				if (!checking) {
+					void navigator.clipboard.writeText(localizeReference(stored.trim(), this.settings.citationLanguage));
+					new Notice('Reference copied.');
+				}
+				return true;
+			},
 		});
 		this.addCommand({
 			id: 'update-in-text-citations',

@@ -12,6 +12,11 @@ export class Modal {}
 export class PluginSettingTab {}
 export class Plugin {}
 export class Setting {}
+export class HoverPopover {}
+export class SecretComponent {}
+export class SuggestModal {}
+export class FuzzySuggestModal {}
+export class Component {}
 export const requestUrl = () => Promise.reject(new Error('No network in tests'));
 export const debounce = <T extends unknown[]>(fn: (...args: T) => unknown) => fn;
 export const getAllTags = () => [];
