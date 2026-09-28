@@ -1,4 +1,4 @@
-import { PluginSettingTab, SettingDefinitionItem } from 'obsidian';
+import { App, Plugin, PluginSettingTab, SettingDefinitionItem } from 'obsidian';
 
 export type CitationLanguage = 'en' | 'fr';
 
@@ -33,6 +33,8 @@ export interface LiteratureGraphSettings {
 	graphMinCitations: number;
 	/** Most nodes in the literature graph. */
 	graphMaxNodes: number;
+	/** Color groups of the literature graph, one per line: "query = color". */
+	graphColorGroups: string;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -51,9 +53,22 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphGenerations: 0,
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
+	graphColorGroups: '',
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
+	constructor(
+		app: App,
+		private readonly owner: Plugin & { onSettingsChanged: () => void },
+	) {
+		super(app, owner);
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		await super.setControlValue(key, value);
+		this.owner.onSettingsChanged();
+	}
+
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		return [
 			{
@@ -133,6 +148,15 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Node limit',
 						desc: 'At most this many works in the graph; the most cited works outside the vault are kept. Large graphs take longer to load and to lay out.',
 						control: { type: 'number', key: 'graphMaxNodes', min: 100 },
+					},
+					{
+						name: 'Color groups',
+						desc: 'One group per line, "query = color"; a note takes the color of the first group it matches. Queries: tag:#name, path:text, file:text, [property:value], [property], or text in the name or title. Colors: any CSS color (#d9a441, rgb(…), hsl(…)). Lines starting with // are ignored.',
+						control: {
+							type: 'textarea',
+							key: 'graphColorGroups',
+							placeholder: 'tag:#review = #d9a441\n[Type:Book] = rgb(120, 170, 220)',
+						},
 					},
 				],
 			},

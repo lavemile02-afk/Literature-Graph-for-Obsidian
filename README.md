@@ -80,6 +80,16 @@ The notes' properties give the authors, year and title of each work (see the set
 
 **Generations.** By default the graph shows the works of your vault (generation 0). With generation 1, it also shows, smaller and in the theme's color for unresolved notes, the works outside your vault that they cite; with generation 2, the works those cite. These come from OpenAlex. Since this can mean tens of thousands of works, a work outside the vault is shown only if enough works of the graph cite it (by default at least one), and the graph keeps at most a set number of works (by default 3000), the most cited first; the status line says how many were left out. Clicking a work outside the vault opens its DOI.
 
+**Color groups.** As in Obsidian's graph view, notes can be colored by groups, set in the plugin settings, one per line as `query = color`; a note takes the color of the first group it matches:
+
+```
+tag:#review = #d9a441
+[Type:Book] = rgb(120, 170, 220)
+path:Theses = hsl(140, 40%, 55%)
+```
+
+Queries are `tag:#name` (nested tags included), `path:text`, `file:text`, `[property:value]` (the property contains the value), `[property]` (the property is not empty), or plain text found in the note's name or title. Works outside the vault keep the unresolved-node color.
+
 **Controls.** The panel at the top right filters the works by author, year or title, and changes the generations, the minimum citations and the forces of the layout for as long as the view is open (the defaults are in the plugin settings).
 
 The view looks like Obsidian's graph view and follows your theme (it uses the same `--graph-*` colors). Drag the background to move, scroll to zoom, drag a node to move it, hover a node to highlight its neighbors, and click a node to open its note (Ctrl/Cmd-click: new tab).

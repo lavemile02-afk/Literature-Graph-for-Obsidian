@@ -14,6 +14,7 @@ import {
 import { debounce, ItemView, Keymap, Setting, WorkspaceLeaf, setIcon } from 'obsidian';
 import { Application, Container, FederatedPointerEvent, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { CitationIndex } from './citationIndex';
+import { colorFor, parseColorGroups } from './colorGroups';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
 import { openFileAtLine } from './navigation';
 import type { OpenAlexClient } from './openalex';
@@ -25,6 +26,8 @@ interface SimNode extends SimulationNodeDatum {
 	data: GraphNode;
 	/** A white circle, tinted and scaled to the node's color and radius. */
 	sprite: Sprite;
+	/** Color of the node's color group, if any. */
+	groupColor: ThemeColor | null;
 	label: Text | null;
 	radius: number;
 	neighbors: Set<SimNode>;
@@ -244,7 +247,7 @@ export class LiteratureGraphView extends ItemView {
 			sprite.anchor.set(0.5);
 			sprite.scale.set(radius / CIRCLE_TEXTURE_RADIUS);
 			this.nodesLayer.addChild(sprite);
-			const node: SimNode = { data, x: old?.x, y: old?.y, sprite, label: null, radius, neighbors: new Set() };
+			const node: SimNode = { data, x: old?.x, y: old?.y, sprite, groupColor: null, label: null, radius, neighbors: new Set() };
 			byId.set(data.id, node);
 			return node;
 		});
@@ -265,6 +268,7 @@ export class LiteratureGraphView extends ItemView {
 				node.y = (anchor.y ?? 0) + (Math.random() - 0.5) * 60;
 			}
 		}
+		this.applyColorGroups();
 		// Labels of the vault's works; others get one on hover.
 		for (const node of this.nodes) if (node.data.generation === 0) this.ensureLabel(node);
 
@@ -300,6 +304,17 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+	}
+
+	/** Gives each note of the vault the color of its color group (settings). */
+	applyColorGroups(): void {
+		const s = this.settings();
+		const colorOf = colorFor(this.app, parseColorGroups(s.graphColorGroups), s.titleProperty);
+		for (const node of this.nodes) {
+			const css = node.data.file ? colorOf(node.data.file) : null;
+			node.groupColor = css ? parseCssColor(css, '#999999') : null;
+		}
+		this.redraw();
 	}
 
 	/** Whether a work matches the filter (always true without a filter). */
@@ -485,7 +500,12 @@ export class LiteratureGraphView extends ItemView {
 
 	private drawNodes(theme: Theme, scale: number, focus: SimNode | null, lit: (n: SimNode) => boolean): void {
 		for (const node of this.nodes) {
-			const base = node === focus ? theme.focused : node.data.generation === 0 ? theme.node : theme.unresolved;
+			const base =
+				node === focus
+					? theme.focused
+					: node.data.generation === 0
+						? (node.groupColor ?? theme.node)
+						: theme.unresolved;
 			const genAlpha = node.data.generation === 2 ? 0.55 : 1;
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
