@@ -28,7 +28,7 @@ Values are percent-encoded, like in any URL. This is the canonical form: it work
 ([Bourgeois et al., 2016](<obsidian://cite?note=Bourgeois et al., 2016&q=Once canopy cover passed a threshold>))
 ```
 
-The readable form breaks if the passage contains `>` or a line break, and it may not work outside Obsidian.
+The readable form breaks if the passage contains `>` or a line break, and it may not work outside Obsidian. **Convert readable citation links to encoded** rewrites the readable links of the active note in the canonical form.
 
 ### Creating a citation link
 

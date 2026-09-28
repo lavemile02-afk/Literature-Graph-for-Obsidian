@@ -2,10 +2,10 @@ import { Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, TFile } from 'o
 import { CitationCheckModal, checkCitations } from './check';
 import { CitationIndex } from './citationIndex';
 import { CITE_ACTION, parseCitationParams } from './citation';
-import { buildCitationLink } from './citationLink';
+import { buildCitationLink, citationUrl } from './citationLink';
 import { registerCitationClicks } from './clicks';
 import { setHighlightDuration } from './highlight';
-import { withoutCitationLinks } from './links';
+import { withCanonicalCitationLinks, withoutCitationLinks } from './links';
 import { findExactPassages, findPassage } from './passage';
 import { buildReferenceList } from './references';
 import { updateLinksAfterRename } from './rename';
@@ -92,6 +92,16 @@ export default class LiteratureGraphPlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				if (!file || file.extension !== 'md') return false;
 				if (!checking) void this.checkNote(file);
+				return true;
+			},
+		});
+		this.addCommand({
+			id: 'convert-readable-citation-links',
+			name: 'Convert readable citation links to encoded',
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== 'md') return false;
+				if (!checking) void this.convertReadableLinks(file);
 				return true;
 			},
 		});
@@ -249,6 +259,17 @@ export default class LiteratureGraphPlugin extends Plugin {
 			return;
 		}
 		new CitationCheckModal(this.app, file, results).open();
+	}
+
+	/** Rewrites the note's citation links in their canonical encoded form. */
+	async convertReadableLinks(file: TFile) {
+		let changed = 0;
+		await this.app.vault.process(file, (text) => {
+			const result = withCanonicalCitationLinks(text, (link) => citationUrl(link.target));
+			changed = result.changed;
+			return result.text;
+		});
+		new Notice(changed === 0 ? 'Every citation link is already encoded.' : `Converted ${changed} citation link${changed > 1 ? 's' : ''}.`);
 	}
 
 	/** Copies the note with each citation link replaced by its text, for export. */
