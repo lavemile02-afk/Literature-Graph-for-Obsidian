@@ -385,3 +385,11 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+
+/* "Citations from": one checkbox per source, on one line in the graph's panel. */
+.literature-graph-controls .setting-item-control .literature-graph-source {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+}

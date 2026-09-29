@@ -44,6 +44,12 @@ export interface LiteratureGraphSettings {
 	graphOutsideColor: string;
 	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
 	graphIncomingColor: string;
+	/** Also show the notes outside the literature folder linked by citation links. */
+	graphAllNotes: boolean;
+	/** Citations of the graph found in citation links, reference lists, OpenAlex. */
+	graphEdgeLinks: boolean;
+	graphEdgeBibliographies: boolean;
+	graphEdgeOpenAlex: boolean;
 	/** Template of the note of a work outside the vault (see `workNote.ts`); empty: the default template. */
 	noteTemplate: string;
 	/** Folder (anywhere on the computer) where free PDFs are downloaded; empty: the Downloads folder. */
@@ -74,6 +80,10 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphLayout: 'default',
 	graphOutsideColor: '',
 	graphIncomingColor: '',
+	graphAllNotes: false,
+	graphEdgeLinks: true,
+	graphEdgeBibliographies: true,
+	graphEdgeOpenAlex: true,
 	noteTemplate: '',
 	downloadFolder: '',
 	suggestionsFile: '',
@@ -175,6 +185,26 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Node limit',
 						desc: 'At most this many works in the graph; the most cited works outside the vault are kept. 0: no limit. Large graphs take longer to load (each work outside the vault is fetched once from OpenAlex, then kept) and to lay out; tens of thousands of works need a fast computer.',
 						control: { type: 'number', key: 'graphMaxNodes', min: 0 },
+					},
+					{
+						name: 'All notes of the vault',
+						desc: 'Also show the notes outside the literature folder that cite works with citation links (such as drafts or course notes), and the notes they cite that way. Only citation links count, never wikilinks. Can be changed in the graph for the time it stays open.',
+						control: { type: 'toggle', key: 'graphAllNotes' },
+					},
+					{
+						name: 'Citations from citation links',
+						desc: 'Draw the citations written as citation links to a passage. Can be changed in the graph for the time it stays open.',
+						control: { type: 'toggle', key: 'graphEdgeLinks' },
+					},
+					{
+						name: 'Citations from reference lists',
+						desc: 'Draw the citations found in the reference lists of your notes (and show their works without a DOI). Can be changed in the graph for the time it stays open.',
+						control: { type: 'toggle', key: 'graphEdgeBibliographies' },
+					},
+					{
+						name: 'Citations from OpenAlex',
+						desc: 'Draw the citations known to OpenAlex (the references of works with a DOI). Can be changed in the graph for the time it stays open.',
+						control: { type: 'toggle', key: 'graphEdgeOpenAlex' },
 					},
 					{
 						name: 'Repel force',

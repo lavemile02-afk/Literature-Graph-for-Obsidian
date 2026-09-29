@@ -56,6 +56,14 @@ export interface GraphOptions {
 	 * from the notes, without OpenAlex). On unless set to false.
 	 */
 	localWorks?: boolean;
+	/**
+	 * Also show the notes outside the literature folder that cite works with
+	 * citation links, and the notes they cite that way (never through
+	 * wikilinks). Off unless true.
+	 */
+	allNotes?: boolean;
+	/** Where citations may come from; a source set to false is left out (all by default). */
+	edgeSources?: Partial<Record<EdgeSource, boolean>>;
 }
 
 /**
@@ -91,8 +99,10 @@ class GraphBuilder {
 	readonly edges = new Map<string, GraphEdge>();
 	leftOut = 0;
 
+	constructor(readonly allowed: (source: EdgeSource) => boolean) {}
+
 	addEdge(from: string, to: string, source: EdgeSource): void {
-		if (from === to || !this.nodes.has(from) || !this.nodes.has(to)) return;
+		if (!this.allowed(source) || from === to || !this.nodes.has(from) || !this.nodes.has(to)) return;
 		const key = `${from}\u0000${to}`;
 		const edge = this.edges.get(key) ?? { source: from, target: to, sources: new Set<EdgeSource>() };
 		edge.sources.add(source);
@@ -126,12 +136,28 @@ export async function buildGraph(
 	options: GraphOptions,
 	progress: GraphProgress,
 ): Promise<LiteratureGraph> {
-	const g = new GraphBuilder();
+	const allowed = (source: EdgeSource) => options.edgeSources?.[source] !== false;
+	const g = new GraphBuilder(allowed);
 	const language = settings.citationLanguage;
 
 	// ----- Generation 0: the notes of the literature folder -----
 	const files = app.vault.getMarkdownFiles().filter((f) => index.isLiterature(f));
-	for (const file of files) {
+	// With "all notes": the other notes that cite with citation links, and the
+	// other notes they cite that way.
+	const others: TFile[] = [];
+	if (options.allNotes) {
+		const citing = app.vault.getMarkdownFiles().filter((f) => !index.isLiterature(f) && index.linksFrom(f).length > 0);
+		const shown = new Set<TFile>(citing);
+		for (const file of [...files, ...citing]) {
+			for (const link of index.linksFrom(file)) {
+				const work = index.resolve(link.target, link.text);
+				if (work.kind === 'note' && !index.isLiterature(work.file)) shown.add(work.file);
+			}
+		}
+		others.push(...[...shown].sort((a, b) => a.path.localeCompare(b.path)));
+	}
+	const allFiles = [...files, ...others];
+	for (const file of allFiles) {
 		const title: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.[settings.titleProperty];
 		g.nodes.set(file.path, {
 			id: file.path,
@@ -144,7 +170,7 @@ export async function buildGraph(
 			citedBy: 0,
 		});
 	}
-	for (const file of files) {
+	for (const file of allFiles) {
 		for (const link of index.linksFrom(file)) {
 			const work = index.resolve(link.target, link.text);
 			if (work.kind === 'note') g.addEdge(file.path, work.file.path, 'link');
@@ -188,49 +214,62 @@ export async function buildGraph(
 
 	// ----- Generation 1: works outside the vault cited by the vault's works -----
 	const counts1 = new Map<string, number>();
-	const citers1 = new Map<string, Set<string>>();
-	const cite = (counts: Map<string, number>, citers: Map<string, Set<string>>, from: string, to: string) => {
-		const set = citers.get(to) ?? new Set<string>();
-		if (set.has(from)) return;
-		set.add(from);
-		citers.set(to, set);
+	/** Cited work → citing work → where the citation was found. */
+	const citers1 = new Map<string, Map<string, EdgeSource>>();
+	const cite = (
+		counts: Map<string, number>,
+		citers: Map<string, Map<string, EdgeSource>>,
+		from: string,
+		to: string,
+		source: EdgeSource,
+	) => {
+		if (!allowed(source)) return;
+		const map = citers.get(to) ?? new Map<string, EdgeSource>();
+		if (map.has(from)) return;
+		map.set(from, source);
+		citers.set(to, map);
 		counts.set(to, (counts.get(to) ?? 0) + 1);
 	};
 	for (const work of vaultWorks) {
 		const from = pathById.get(work.id);
 		if (!from) continue;
-		for (const ref of work.references) if (!pathById.has(ref)) cite(counts1, citers1, from, ref);
+		for (const ref of work.references) if (!pathById.has(ref)) cite(counts1, citers1, from, ref, 'openalex');
 	}
 	// Works cited by DOI (citation links and reference lists) that are not notes
 	// of the vault. Their DOIs are looked up on OpenAlex first, so that a work
 	// found both ways is one node.
-	const citedDois = new Map<string, string[]>();
-	for (const file of files) {
+	const citedDois = new Map<string, { doi: string; source: EdgeSource }[]>();
+	for (const file of allFiles) {
 		citedDois.set(file.path, [
-			...index.linksFrom(file).map((l) => index.resolve(l.target, l.text)).flatMap((w) => (w.kind === 'doi' ? [w.doi] : [])),
-			...index.bibliographyOf(file).flatMap((e) => (e.doi && !index.resolveEntry(e, file.path) ? [e.doi] : [])),
-		]);
+			...index
+				.linksFrom(file)
+				.map((l) => index.resolve(l.target, l.text))
+				.flatMap((w) => (w.kind === 'doi' ? [{ doi: w.doi, source: 'link' as const }] : [])),
+			...index
+				.bibliographyOf(file)
+				.flatMap((e) => (e.doi && !index.resolveEntry(e, file.path) ? [{ doi: e.doi, source: 'bibliography' as const }] : [])),
+		].filter((c) => allowed(c.source)));
 	}
 	try {
-		const all = [...new Set([...citedDois.values()].flat())];
+		const all = [...new Set([...citedDois.values()].flat().map((c) => c.doi))];
 		await openAlex.worksByDois(all, (done, total) =>
 			progress.onStatus(`Looking up the DOIs of reference lists: ${done} of ${total}…`),
 		);
 	} catch (error) {
 		console.error('Literature Graph: OpenAlex request failed', error);
 	}
-	for (const file of files) {
-		for (const doi of citedDois.get(file.path) ?? []) {
+	for (const file of allFiles) {
+		for (const { doi, source } of citedDois.get(file.path) ?? []) {
 			const id = openAlex.cachedIdForDoi(doi);
 			const key = id ?? `doi:${doi}`;
-			if (!pathById.has(key)) cite(counts1, citers1, file.path, key);
+			if (!pathById.has(key)) cite(counts1, citers1, file.path, key, source);
 		}
 	}
 	// Works of the reference lists without a DOI, known only from the notes
 	// (no request). One work cited by several notes is one node; when OpenAlex
 	// already knows it (cited elsewhere with its DOI), it joins that node.
 	const localWorks = new Map<string, BibEntry>();
-	if (options.localWorks !== false) {
+	if (options.localWorks !== false && allowed('bibliography')) {
 		// Works OpenAlex knows, by first author and year, to recognize an entry
 		// without DOI by its title (as the vault's notes are).
 		const known = new Map<string, { id: string; title: string }[]>();
@@ -264,7 +303,7 @@ export async function buildGraph(
 				const id = openAlexWork(entry);
 				const target = id ?? `ref:${key}`;
 				if (!id && !localWorks.has(target)) localWorks.set(target, entry);
-				cite(counts1, citers1, file.path, target);
+				cite(counts1, citers1, file.path, target, 'bibliography');
 			}
 		}
 	}
@@ -298,7 +337,7 @@ export async function buildGraph(
 				citedBy: 0,
 				entry: { text: local.text, year: local.year ?? '' },
 			});
-			for (const from of citers1.get(key) ?? []) g.addEdge(from, key, 'bibliography');
+			for (const [from, source] of citers1.get(key) ?? []) g.addEdge(from, key, source);
 			continue;
 		}
 		// A work OpenAlex no longer has (merged or deleted): nothing to show or open.
@@ -316,19 +355,19 @@ export async function buildGraph(
 			title: work?.title ?? '',
 			citedBy: 0,
 		});
-		for (const from of citers1.get(key) ?? []) g.addEdge(from, key, 'openalex');
+		for (const [from, source] of citers1.get(key) ?? []) g.addEdge(from, key, source);
 	}
 	progress.onStage(g.snapshot());
 	if (options.generations < 2) return g.snapshot();
 
 	// ----- Generation 2: works cited by generation-1 works -----
 	const counts2 = new Map<string, number>();
-	const citers2 = new Map<string, Set<string>>();
+	const citers2 = new Map<string, Map<string, EdgeSource>>();
 	for (const work of works1) {
 		for (const ref of work.references) {
 			const known = pathById.get(ref) ?? (g.nodes.has(ref) ? ref : null);
 			if (known) g.addEdge(work.id, known, 'openalex');
-			else cite(counts2, citers2, work.id, ref);
+			else cite(counts2, citers2, work.id, ref, 'openalex');
 		}
 	}
 	const budget2 = options.maxNodes - g.nodes.size;
@@ -356,7 +395,7 @@ export async function buildGraph(
 			title: work?.title ?? '',
 			citedBy: 0,
 		});
-		for (const from of citers2.get(key) ?? []) g.addEdge(from, key, 'openalex');
+		for (const [from, source] of citers2.get(key) ?? []) g.addEdge(from, key, source);
 	}
 	const graph = g.snapshot();
 	progress.onStage(graph);

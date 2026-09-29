@@ -8,7 +8,7 @@ import { QuerySuggest, showNewGroupMenu } from './groupMenu';
 import { collectQueryData } from './groupQueries';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
-import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
+import { buildGraph, EdgeSource, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
 import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
@@ -314,6 +314,12 @@ export class LiteratureGraphView extends ItemView {
 			minCitations: Math.max(1, Number(s.graphMinCitations) || 1),
 			maxNodes: maxNodesOf(s.graphMaxNodes),
 			localWorks: true,
+			allNotes: s.graphAllNotes === true,
+			edgeSources: {
+				link: s.graphEdgeLinks !== false,
+				bibliography: s.graphEdgeBibliographies !== false,
+				openalex: s.graphEdgeOpenAlex !== false,
+			},
 		};
 		this.layoutStyle = s.graphLayout in LAYOUT_STYLES ? (s.graphLayout as LayoutStyle) : 'default';
 		const number = (value: unknown, fallback: number) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -1043,6 +1049,31 @@ export class LiteratureGraphView extends ItemView {
 					reloadSoon();
 				}),
 			);
+		new Setting(body)
+			.setName('All notes of the vault')
+			.setDesc('Also the notes outside the literature folder linked by citation links.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.options.allNotes === true).onChange((value) => {
+					this.options.allNotes = value;
+					reloadSoon();
+				}),
+			);
+		const sources: [EdgeSource, string][] = [
+			['link', 'Citation links'],
+			['bibliography', 'Reference lists'],
+			['openalex', 'OpenAlex'],
+		];
+		const from = new Setting(body).setName('Citations from').setDesc('Where the citations drawn are found.');
+		for (const [source, name] of sources) {
+			const label = from.controlEl.createEl('label', { cls: 'literature-graph-source' });
+			const box = label.createEl('input', { type: 'checkbox' });
+			box.checked = this.options.edgeSources?.[source] !== false;
+			label.appendText(name);
+			box.addEventListener('change', () => {
+				this.options.edgeSources = { ...this.options.edgeSources, [source]: box.checked };
+				reloadSoon();
+			});
+		}
 		new Setting(body)
 			.setName('Minimum citations')
 			.setDesc('For a work outside the vault to be shown.')
