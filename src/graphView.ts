@@ -2,7 +2,7 @@ import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResu
 import { Application, Container, FederatedPointerEvent, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
-import { colorFor, parseColorGroups } from './colorGroups';
+import { ColorGroup, colorFor, formatColorGroups, parseColorGroups } from './colorGroups';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
@@ -13,6 +13,14 @@ import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
 export const GRAPH_VIEW = 'literature-graph-graph';
+
+/** Which citations the local graph follows from its center. */
+type Direction = 'both' | 'out' | 'in';
+const DIRECTIONS: Record<Direction, string> = {
+	both: 'Cites and cited by',
+	out: 'Cites (links)',
+	in: 'Cited by (backlinks)',
+};
 
 interface SimNode {
 	data: GraphNode;
@@ -63,6 +71,15 @@ function parseCssColor(css: string, fallback: string): ThemeColor {
 	const [r = 136, g = 136, b = 136, a = 1] = parts;
 	return { color: (r << 16) + (g << 8) + b, alpha: a };
 }
+
+/** A CSS color as "#rrggbb", for the color picker. */
+function cssToHex(css: string): string {
+	const { color } = parseCssColor(css, '#999999');
+	return `#${color.toString(16).padStart(6, '0')}`;
+}
+
+/** Colors given to new groups, in turn. */
+const GROUP_PALETTE = ['#d9a441', '#6fa8dc', '#8fbc6a', '#d4736a', '#b48ecf', '#5fb3a8'];
 
 /** Starting zoom of the local graph. */
 const LOCAL_START_SCALE = 1.5;
@@ -207,6 +224,10 @@ export class LiteratureGraphView extends ItemView {
 	/** Local mode: only the works around the active note, up to `depth` citations away. */
 	private local = false;
 	private depth = 1;
+	/** Local mode: follow the citations of the center ("out"), the works citing it ("in"), or both. */
+	private direction: Direction = 'both';
+	/** Controls showing the view's state, updated when the state is restored. */
+	private syncControls: (() => void)[] = [];
 	/** Path of the note at the center of the local graph. */
 	private center: string | null = null;
 	/** The whole graph, of which the local mode shows a part. */
@@ -222,6 +243,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly index: CitationIndex,
 		private readonly openAlex: OpenAlexClient,
 		private readonly settings: () => LiteratureGraphSettings,
+		/** Saves the color groups (in their text form) and recolors every graph view. */
+		private readonly saveColorGroups: (text: string) => Promise<void>,
 	) {
 		super(leaf);
 		const s = settings();
@@ -242,15 +265,17 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { local: this.local, depth: this.depth };
+		return { local: this.local, depth: this.depth, direction: this.direction };
 	}
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
-		const s = (state ?? {}) as { local?: boolean; depth?: number };
+		const s = (state ?? {}) as { local?: boolean; depth?: number; direction?: string };
 		const wasLocal = this.local;
 		this.local = s.local === true;
 		this.depth = Math.min(3, Math.max(1, Number(s.depth) || 1));
+		if (s.direction && s.direction in DIRECTIONS) this.direction = s.direction as Direction;
 		await super.setState(state, result);
+		for (const sync of this.syncControls) sync();
 		if (this.local !== wasLocal) {
 			this.contentEl.toggleClass('is-local', this.local);
 			// A local graph is small: start closer, as Obsidian's local graph does.
@@ -416,8 +441,9 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
-	 * The works at most `depth` citations away from the center, in either
-	 * direction. A center that is not a literature note (a draft that cites
+	 * The works at most `depth` citations away from the center, following
+	 * citations in the chosen direction: the works it cites (and those they
+	 * cite...), the works citing it (and those citing them...), or both. A center that is not a literature note (a draft that cites
 	 * works, for example) is added with the works its citation links cite.
 	 */
 	private localGraph(graph: LiteratureGraph, center: string | null): LiteratureGraph {
@@ -458,9 +484,10 @@ export class LiteratureGraphView extends ItemView {
 		}
 		const adjacent = new Map<string, Set<string>>();
 		const connect = (a: string, b: string) => adjacent.set(a, (adjacent.get(a) ?? new Set<string>()).add(b));
+		// An edge goes from the citing work (source) to the cited one (target).
 		for (const e of edges) {
-			connect(e.source, e.target);
-			connect(e.target, e.source);
+			if (this.direction !== 'in') connect(e.source, e.target);
+			if (this.direction !== 'out') connect(e.target, e.source);
 		}
 		const kept = new Set([center]);
 		let frontier = [center];
@@ -575,6 +602,7 @@ export class LiteratureGraphView extends ItemView {
 
 	/** Gives each note of the vault the color of its color group (settings). */
 	applyColorGroups(): void {
+		for (const sync of this.syncControls) sync();
 		const s = this.settings();
 		const colorOf = colorFor(this.app, parseColorGroups(s.graphColorGroups), s.titleProperty);
 		for (const node of this.nodes) {
@@ -700,12 +728,33 @@ export class LiteratureGraphView extends ItemView {
 			.setName('Depth')
 			.setDesc('Local graph: how many citations away from the active note.')
 			.setClass('literature-graph-local-only')
-			.addSlider((slider) =>
+			.addSlider((slider) => {
 				slider.setLimits(1, 3, 1).setValue(this.depth).onChange((value) => {
 					this.depth = value;
 					this.showCurrent();
-				}),
-			);
+					void this.app.workspace.requestSaveLayout();
+				});
+				this.syncControls.push(() => {
+					slider.setValue(this.depth);
+				});
+			});
+		new Setting(body)
+			.setName('Direction')
+			.setDesc('Local graph: the works the active note cites, the works citing it, or both.')
+			.setClass('literature-graph-local-only')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions(DIRECTIONS)
+					.setValue(this.direction)
+					.onChange((value) => {
+						this.direction = value as Direction;
+						this.showCurrent();
+						void this.app.workspace.requestSaveLayout();
+					});
+				this.syncControls.push(() => {
+					dropdown.setValue(this.direction);
+				});
+			});
 		new Setting(body)
 			.setName('Generations')
 			.setDesc('Works outside the vault cited by it (1), and by those (2).')
@@ -730,6 +779,7 @@ export class LiteratureGraphView extends ItemView {
 						reloadSoon();
 					}),
 			);
+		this.buildGroups(body);
 		new Setting(body).setName('Repel force').addSlider((slider) =>
 			slider
 				.setLimits(10, 300, 10)
@@ -767,6 +817,72 @@ export class LiteratureGraphView extends ItemView {
 		body.createDiv({
 			cls: 'setting-item-description',
 			text: 'These changes last while this view is open; defaults are in the plugin settings.',
+		});
+	}
+
+	/**
+	 * The color groups, editable in the panel as in Obsidian's graph view: a
+	 * query and a color per group, saved in the plugin settings (so every
+	 * graph view uses them).
+	 */
+	private buildGroups(body: HTMLElement): void {
+		new Setting(body)
+			.setName('Groups')
+			.setDesc('Color the notes that match a query: tag:#name, path:text, file:text, [property:value], or text.')
+			.setHeading();
+		const list = body.createDiv({ cls: 'literature-graph-groups' });
+		let groups: ColorGroup[] = [];
+		const save = () => void this.saveColorGroups(formatColorGroups(groups, this.settings().graphColorGroups));
+		const saveSoon = debounce(save, 500, true);
+		const render = () => {
+			list.empty();
+			groups.forEach((group, i) => {
+				new Setting(list)
+					.setClass('literature-graph-group')
+					.addText((text) =>
+						text
+							.setPlaceholder('Query, such as tag:#name')
+							.setValue(group.query)
+							.onChange((value) => {
+								group.query = value;
+								saveSoon();
+							}),
+					)
+					.addColorPicker((picker) =>
+						picker.setValue(cssToHex(group.color)).onChange((value) => {
+							group.color = value;
+							save();
+						}),
+					)
+					.addExtraButton((button) =>
+						button
+							.setIcon('x')
+							.setTooltip('Remove this group')
+							.onClick(() => {
+								groups.splice(i, 1);
+								save();
+								render();
+							}),
+					);
+			});
+			new Setting(list).addButton((button) =>
+				button.setButtonText('New group').onClick(() => {
+					groups.push({ query: '', color: GROUP_PALETTE[groups.length % GROUP_PALETTE.length] ?? '#d9a441' });
+					render();
+					// The new group's query field, ready to type in.
+					list.querySelectorAll<HTMLInputElement>('input[type="text"]').item(groups.length - 1)?.focus();
+				}),
+			);
+		};
+		groups = parseColorGroups(this.settings().graphColorGroups);
+		render();
+		// Groups changed elsewhere (settings tab, another graph view): show them,
+		// unless this panel is being edited.
+		this.syncControls.push(() => {
+			if (!list.contains(list.doc.activeElement)) {
+				groups = parseColorGroups(this.settings().graphColorGroups);
+				render();
+			}
 		});
 	}
 

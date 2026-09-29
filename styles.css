@@ -128,6 +128,26 @@
 	padding: var(--size-4-2) 0;
 }
 
+/* Color groups in the graph's panel: query, color, remove, on one line. */
+.literature-graph-group .setting-item-info {
+	display: none;
+}
+
+.literature-graph-group .setting-item-control {
+	flex: 1;
+	justify-content: flex-start;
+}
+
+.literature-graph-group .setting-item-control input[type="text"] {
+	flex: 1;
+	min-width: 0;
+}
+
+.literature-graph-controls .literature-graph-groups .setting-item {
+	border-top: none;
+	padding: var(--size-2-2) 0;
+}
+
 .literature-graph-view:not(.is-local) .literature-graph-local-only {
 	display: none;
 }

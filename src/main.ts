@@ -53,7 +53,15 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 		this.registerView(CITATIONS_VIEW, (leaf) => new CitationsView(leaf, this.index, () => this.settings, this.openAlex));
 		this.addRibbonIcon('quote', 'Open citations panel', () => void this.openCitationsPanel());
-		this.registerView(GRAPH_VIEW, (leaf) => new LiteratureGraphView(leaf, this.index, this.openAlex, () => this.settings));
+		this.registerView(
+			GRAPH_VIEW,
+			(leaf) =>
+				new LiteratureGraphView(leaf, this.index, this.openAlex, () => this.settings, async (groups) => {
+					this.settings.graphColorGroups = groups;
+					await this.saveSettings();
+					this.onSettingsChanged();
+				}),
+		);
 		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
 		this.addCommand({
 			id: 'open-literature-graph',

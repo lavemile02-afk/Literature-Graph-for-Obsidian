@@ -34,6 +34,21 @@ export function parseColorGroups(text: string): ColorGroup[] {
 		});
 }
 
+/**
+ * Writes groups back in their text form, keeping the comment lines of the
+ * previous text (at the top). Groups without a query are left out.
+ */
+export function formatColorGroups(groups: ColorGroup[], previous = ''): string {
+	const comments = previous
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith('//'));
+	const lines = groups
+		.filter((g) => g.query.trim() && g.color.trim())
+		.map((g) => `${g.query.trim()} = ${g.color.trim()}`);
+	return [...comments, ...lines].join('\n');
+}
+
 /** Text of a property value, whatever its type, in lower case. */
 function propertyText(value: unknown): string {
 	if (Array.isArray(value)) return value.map(propertyText).join(' ');
