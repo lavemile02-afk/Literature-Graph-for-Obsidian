@@ -894,13 +894,21 @@ export class LiteratureGraphView extends ItemView {
 	/**
 	 * The idle animation starts after a while without any input in the view's
 	 * window (not only in the view: typing in a note beside the graph counts),
-	 * and any input stops it.
+	 * and only a click in the graph stops it (moving the mouse lets it run).
 	 */
 	private watchActivity(): void {
 		const activity = () => {
 			this.lastActivity = Date.now();
-			if (this.idle.running && performance.now() > this.idle.graceUntil) this.stopIdle();
 		};
+		// A click anywhere in the view stops it; the click does nothing else.
+		this.registerDomEvent(
+			this.contentEl,
+			'pointerdown',
+			() => {
+				if (this.idle.running && performance.now() > this.idle.graceUntil) this.stopIdle();
+			},
+			{ capture: true },
+		);
 		const listen = (doc: Document) => {
 			for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel'] as const) {
 				this.registerDomEvent(doc, type, activity, { capture: true, passive: true });
@@ -1459,7 +1467,7 @@ export class LiteratureGraphView extends ItemView {
 		this.register(() => this.stopTimeline());
 		new Setting(body)
 			.setName('Idle animation')
-			.setDesc('Starts by itself after a while without input (see the plugin settings). Keep the mouse still to watch it.')
+			.setDesc('Starts by itself after a while without input (see the plugin settings). A click in the graph stops it.')
 			.addButton((button) =>
 				button.setButtonText('Play').onClick(() => {
 					setOpen(false);
@@ -1911,6 +1919,8 @@ export class LiteratureGraphView extends ItemView {
 
 		canvas.addEventListener('pointerdown', (e: PointerEvent) => {
 			if (e.button !== 0 && e.button !== 1) return;
+			// The click that stops the idle animation only stops it.
+			if (this.idle.level > 0) return;
 			const p = at(e);
 			const node = this.nodeAt(p);
 			if (node) this.startDrag(node, p);
@@ -1943,7 +1953,8 @@ export class LiteratureGraphView extends ItemView {
 				this.zoom = null;
 				this.world.position.set(p.x - this.panning.x, p.y - this.panning.y);
 				this.requestFrame();
-			} else {
+			} else if (this.idle.level === 0) {
+				// (No hover during the idle animation: works are not where they are drawn.)
 				const node = this.nodeAt(p);
 				canvas.style.cursor = node && this.openAction(node) ? 'pointer' : '';
 				if (node !== this.hovered) this.setHovered(node);
@@ -1972,6 +1983,8 @@ export class LiteratureGraphView extends ItemView {
 			'wheel',
 			(e: WheelEvent) => {
 				e.preventDefault();
+				// The idle animation moves the camera itself.
+				if (this.idle.level > 0) return;
 				this.takeCamera();
 				const rect = pixi.canvas.getBoundingClientRect();
 				const px = e.clientX - rect.left;

@@ -254,7 +254,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Idle animation',
-						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph wraps itself around a sphere that turns slowly; any input brings the flat graph back at once. Never when your system asks for reduced motion.',
+						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph wraps itself around a sphere that turns slowly; a click in the graph brings the flat graph back. Never when your system asks for reduced motion.',
 						control: { type: 'dropdown', key: 'graphIdleAnimation', options: { sphere: 'Rotating sphere', none: 'None' } },
 					},
 					{
