@@ -74,6 +74,10 @@ Queries are `tag:#name` (nested tags included), `path:text`, `file:text`, `[prop
 
 The view looks like Obsidian's graph view and follows your theme (it uses the same `--graph-*` colors). Drag the background to move, scroll to zoom, drag a node to move it, hover a node to highlight its neighbors, and click a node to open its note (Ctrl/Cmd-click: new tab), or the DOI of a work outside your vault. Hovering a work shows, at the bottom left, its title and what a click opens; even a tiny node can be clicked within a few pixels. The gear button opens the settings panel (filter, depth and direction, generations, minimum citations, color groups, forces); it turns into a cross to close the panel, and a click outside the panel closes it too. The graph fits itself to the view while it lays out, until you move or zoom; the **Fit** button (or a double click on the background) fits it again. Where labels would cover one another, only the most important are shown (the hovered work, then the works of your vault, then the most cited).
 
+**Layout styles.** **Default graph**: every work repels the others, as in Obsidian's graph view. **Atom graph**: each work of your vault is a nucleus, with a cloud of the works outside your vault that it cites (generation 1 inside, generation 2 further out, the most cited nearest the nucleus); a work cited by several works of your vault goes to the smallest of their clouds, at its edge; clouds never overlap, and citations between works of your vault keep their atoms side by side. Choose the style in the graph's panel (**Layout**), or its default in the settings.
+
+**The graph keeps its shape.** When the layout comes to rest, the place of each work is saved (in the plugin folder); at the next opening, the works move for a few seconds and settle back in their places, so the map of your literature stays the same. **Restart layout** starts the layout again from the current places.
+
 The layout runs in a background thread (a web worker), and the view draws only when something moves, so even a graph of a few thousand works stays smooth and costs nothing once still, or while its tab is hidden.
 
 ## Network use
