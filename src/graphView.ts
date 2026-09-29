@@ -4,6 +4,8 @@ import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
 import { ColorGroup, colorFor, formatColorGroups, parseColorGroups } from './colorGroups';
 import { hexColor, mixColor } from './colors';
+import { QuerySuggest, showNewGroupMenu } from './groupMenu';
+import { collectQueryData } from './groupQueries';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
@@ -905,20 +907,27 @@ export class LiteratureGraphView extends ItemView {
 		let groups: ColorGroup[] = [];
 		const save = () => void this.saveColorGroups(formatColorGroups(groups, this.settings().graphColorGroups));
 		const saveSoon = debounce(save, 500, true);
+		// What queries can name, from the notes of the graph (read when needed).
+		const queryData = () =>
+			collectQueryData(
+				this.app,
+				this.app.vault.getMarkdownFiles().filter((f) => this.index.isLiterature(f)),
+			);
 		const render = () => {
 			list.empty();
 			groups.forEach((group, i) => {
 				new Setting(list)
 					.setClass('literature-graph-group')
-					.addText((text) =>
+					.addText((text) => {
 						text
 							.setPlaceholder('Query, such as tag:#name')
 							.setValue(group.query)
 							.onChange((value) => {
 								group.query = value;
 								saveSoon();
-							}),
-					)
+							});
+						new QuerySuggest(this.app, text.inputEl, queryData);
+					})
 					.addColorPicker((picker) =>
 						picker.setValue(cssToHex(group.color)).onChange((value) => {
 							group.color = value;
@@ -936,13 +945,25 @@ export class LiteratureGraphView extends ItemView {
 							}),
 					);
 			});
+			// "New group": pick what the group is (a tag, a property's value, a
+			// folder) from a menu, without typing the query; or type it, with
+			// suggestions.
 			new Setting(list).addButton((button) =>
-				button.setButtonText('New group').onClick(() => {
-					groups.push({ query: '', color: GROUP_PALETTE[groups.length % GROUP_PALETTE.length] ?? '#d9a441' });
-					render();
-					// The new group's query field, ready to type in.
-					list.querySelectorAll<HTMLInputElement>('input[type="text"]').item(groups.length - 1)?.focus();
-				}),
+				button.setButtonText('New group').onClick((event: MouseEvent) =>
+					showNewGroupMenu(this.app, event, queryData, (query) => {
+						groups.push({ query, color: GROUP_PALETTE[groups.length % GROUP_PALETTE.length] ?? '#d9a441' });
+						render();
+						const complete = query !== '' && !query.endsWith(':');
+						if (complete) {
+							save();
+							return;
+						}
+						// The new group's query field, ready to type in.
+						const input = list.querySelectorAll<HTMLInputElement>('input[type="text"]').item(groups.length - 1);
+						input?.focus();
+						input?.setSelectionRange(query.length, query.length);
+					}),
+				),
 			);
 		};
 		groups = parseColorGroups(this.settings().graphColorGroups);
