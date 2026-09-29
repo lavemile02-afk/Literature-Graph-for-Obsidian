@@ -140,6 +140,8 @@ const ROTATION_STEP = 0.04;
 const SPHERE_FILL = 0.8;
 /** Alpha of the works at the back of the sphere. */
 const BACK_ALPHA = 0.25;
+/** How far the neighbors of a highlighted work take the color of their arrows. */
+const NEIGHBOR_TINT = 0.75;
 /** Milliseconds per year when the timeline plays. */
 const TIMELINE_YEAR_MS = 300;
 /** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
@@ -257,6 +259,9 @@ export class LiteratureGraphView extends ItemView {
 	private shownFocus: SimNode | null = null;
 	/** How much the highlight is shown, from 0 to 1. */
 	private focusLevel = 0;
+	/** Neighbors of the highlighted node: the works it cites, and the works citing it (colored like their arrows). */
+	private focusCited = new Set<SimNode>();
+	private focusCiting = new Set<SimNode>();
 	private dragged: SimNode | null = null;
 	private dragMoved = false;
 	private dragStart = { x: 0, y: 0 };
@@ -1062,6 +1067,21 @@ export class LiteratureGraphView extends ItemView {
 		}
 	}
 
+	/**
+	 * Forgets the saved places of the works (for this style) and lays the
+	 * graph out from scratch, as at its very first opening.
+	 */
+	private resetLayout(): void {
+		if (!this.local) this.positions.set(this.layoutStyle, {});
+		for (const node of this.nodes) {
+			node.x = undefined;
+			node.y = undefined;
+		}
+		this.nodes = [];
+		if (!this.local) this.cameraMode = 'fit';
+		this.showCurrent();
+	}
+
 	/** Whether the timeline hides a work (published after the year chosen). */
 	private outOfTime(node: SimNode): boolean {
 		if (this.yearLimit === null) return false;
@@ -1447,6 +1467,12 @@ export class LiteratureGraphView extends ItemView {
 				}),
 			);
 		new Setting(body).addButton((button) =>
+			button
+				.setButtonText('Reset layout')
+				.setTooltip('Forget the saved places of the works and lay the graph out from scratch')
+				.onClick(() => this.resetLayout()),
+		);
+		new Setting(body).addButton((button) =>
 			button.setButtonText('Restart layout').onClick(() => {
 				this.layout?.send({ type: 'reheat', alpha: 1 });
 				if (!this.local) this.cameraMode = 'fit';
@@ -1684,7 +1710,19 @@ export class LiteratureGraphView extends ItemView {
 							: theme.outside2;
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
-			sprite.tint = base.color;
+			// Around the highlighted work, its neighbors take the color of their
+			// arrows: cited works the accent, citing works orange (both: between).
+			const cited = focus && node !== focus && this.focusCited.has(node);
+			const citing = focus && node !== focus && this.focusCiting.has(node);
+			const arrowColor =
+				cited && citing
+					? mixColor(theme.focused.color, theme.incoming.color, 0.5)
+					: cited
+						? theme.focused.color
+						: citing
+							? theme.incoming.color
+							: null;
+			sprite.tint = arrowColor === null ? base.color : mixColor(base.color, arrowColor, NEIGHBOR_TINT * level);
 			sprite.alpha = base.alpha * (near ? 1 : lerp(1, 0.2)) * (this.matches(node) ? 1 : 0.2);
 			sprite.visible = !this.outOfTime(node);
 		}
@@ -1743,8 +1781,12 @@ export class LiteratureGraphView extends ItemView {
 	 */
 	private updateFocusEdges(): void {
 		const focus = this.shownFocus;
-		this.focusOutEdges.setLinks(focus ? this.links.filter((l) => l.source === focus) : []);
-		this.focusInEdges.setLinks(focus ? this.links.filter((l) => l.target === focus) : []);
+		const out = focus ? this.links.filter((l) => l.source === focus) : [];
+		const into = focus ? this.links.filter((l) => l.target === focus) : [];
+		this.focusOutEdges.setLinks(out);
+		this.focusInEdges.setLinks(into);
+		this.focusCited = new Set(out.map((l) => l.target));
+		this.focusCiting = new Set(into.map((l) => l.source));
 		this.edgesDirty = true;
 	}
 
