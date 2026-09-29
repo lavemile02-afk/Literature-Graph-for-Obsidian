@@ -94,3 +94,38 @@ test('reads entries that start with an anchor or a bare number, under linked hea
 		],
 	);
 });
+
+test('reads DOIs escaped by the conversion or percent-encoded', async () => {
+	const { parseEntry } = await import('../src/bibliography');
+	const escaped = parseEntry(
+		'Price, J. S. (1997). Soil moisture, water tension. _J. Hydrol._, 202, 21–32. https://doi.org/10.1016/s0022-1694\\(97\\)00037-1',
+		0,
+	);
+	assert.equal(escaped?.doi, '10.1016/s0022-1694(97)00037-1');
+	const encoded = parseEntry(
+		'Price, J. S. (1996). Hydrology and microclimate. https://doi.org/10.1002/(sici)1099-1085(199610)10:10%3c1263::aid-hyp458%3e3.0.co;2-1',
+		0,
+	);
+	assert.ok(encoded?.doi?.startsWith('10.1002/(sici)1099-1085(199610)10:10'));
+});
+
+test('matches an entry whose DOI was cut short, by author, year and title', async () => {
+	const { entryMatches, parseEntry } = await import('../src/bibliography');
+	const work = {
+		authors: ['price', 'whitehead'],
+		year: '2001',
+		title: 'Developing hydrologic thresholds for Sphagnum recolonization on an abandoned cutover bog',
+		doi: '10.1672/0277-5212(2001)021[0032:dhtfsr]2.0.co;2',
+	};
+	const cut = parseEntry(
+		'Price, J. S., & Whitehead, G. S. (2001). Developing hydrologic thresholds for Sphagnum recolonization on an abandoned cutover bog. Wetlands, 21, 32–40. https://doi.org/10.1672/0277-5212(2001)021[0032:DHTFSR]2.0.CO;2',
+		0,
+	);
+	assert.ok(cut && entryMatches(cut, work));
+	// A different DOI still rules the match out, whatever the title.
+	const other = parseEntry(
+		'Price, J. S., & Whitehead, G. S. (2001). Developing hydrologic thresholds for Sphagnum recolonization on an abandoned cutover bog. https://doi.org/10.1002/hyp.11622',
+		0,
+	);
+	assert.ok(other && !entryMatches(other, work));
+});

@@ -72,6 +72,17 @@ export function familyOf(author: string): string {
 	return /^\p{Lu}{3,}$/u.test(whole) ? whole : '';
 }
 
+/**
+ * The text of an entry with what hides the characters of a DOI undone:
+ * Markdown escapes left by the conversion ("10.1016/s0022-1694\(97\)…") and
+ * percent-encoding copied from a URL ("…10:10%3c1263::aid-hyp458%3e3.0.co").
+ */
+export function unescapeDoiText(text: string): string {
+	return text
+		.replace(/\\([()[\]_<>;])/g, '$1')
+		.replace(/%(2[89]|3[bcde]|5[bd]|2f)/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
 /** Reads one entry; null when the line does not look like a reference. */
 export function parseEntry(raw: string, line: number): BibEntry | null {
 	let text = raw.trim();
@@ -82,7 +93,7 @@ export function parseEntry(raw: string, line: number): BibEntry | null {
 	if (text.length < 20 || text.startsWith('![') || text.startsWith('|') || text.startsWith('<')) return null;
 	const head = text.slice(0, 200);
 	const year = (YEAR_IN_PARENS.exec(head) ?? YEAR.exec(head))?.[1] ?? null;
-	const doiMatch = DOI.exec(text);
+	const doiMatch = DOI.exec(unescapeDoiText(text));
 	const doi = doiMatch ? doiMatch[0].replace(/[.]+$/, '').toLowerCase() : null;
 	if (!year && !doi) return null;
 
@@ -143,9 +154,17 @@ const MIN_TITLE_OVERLAP = 0.6;
  * Whether an entry is this work of the vault: same DOI, or same first author
  * and year and, to rule out other works of the same author and year, most of
  * the title's words (or, without a title, the same list of authors).
+ *
+ * Two different DOIs rule the match out. But a DOI of a reference list is
+ * often cut short (at a line break, or at the "<" or "[" of old DOIs such as
+ * 10.1002/(sici)1099-1085(199610)10:10<1263::aid-hyp458>3.0.co;2-1): when one
+ * DOI is the beginning of the other, author, year and title decide.
  */
 export function entryMatches(entry: BibEntry, work: VaultWork): boolean {
-	if (entry.doi && work.doi) return entry.doi === work.doi;
+	if (entry.doi && work.doi) {
+		if (entry.doi === work.doi) return true;
+		if (!work.doi.startsWith(entry.doi) && !entry.doi.startsWith(work.doi)) return false;
+	}
 	if (!entry.year || entry.year !== work.year) return false;
 	if (entry.authors.length === 0 || work.authors.length === 0 || entry.authors[0] !== work.authors[0]) return false;
 	if (work.title) return titleOverlap(work.title, entry.text) >= MIN_TITLE_OVERLAP;
