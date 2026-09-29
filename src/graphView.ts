@@ -14,6 +14,7 @@ import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
 import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
+import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
@@ -125,6 +126,8 @@ const MAX_FILTER_LABELS = 300;
 const MAX_NEIGHBOR_LABELS = 40;
 /** Reading suggestions shown at first, and added by "Show more". */
 const SUGGESTIONS_PAGE = 100;
+/** Zoom at least to this scale when going to a work found by the search field. */
+const SEARCH_SCALE = 1.2;
 /** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
 const FOCUS_FADE_STEP = 0.3;
 /** Share of the way the camera and the wheel zoom move at each frame. */
@@ -245,8 +248,13 @@ export class LiteratureGraphView extends ItemView {
 	private panning: { x: number; y: number } | null = null;
 	/** Wheel zoom in progress: the zoom to reach, and the point that stays under the pointer. */
 	private zoom: { scale: number; px: number; py: number; wx: number; wy: number } | null = null;
-	/** Where the camera goes by itself: fit the whole graph, center the local note, or nowhere (moved by the user). */
-	private cameraMode: 'fit' | 'center' | null = 'fit';
+	/**
+	 * Where the camera goes by itself: fit the whole graph, center the local
+	 * note, follow the work found by the search field, or nowhere (moved by the user).
+	 */
+	private cameraMode: 'fit' | 'center' | 'work' | null = 'fit';
+	/** The work found with the search field, which the camera goes to. */
+	private searchTarget: SimNode | null = null;
 	private frameId: number | null = null;
 	private frameWindow: Window | null = null;
 	/** Whether frames stopped because the view was hidden; they resume when it shows again. */
@@ -372,6 +380,7 @@ export class LiteratureGraphView extends ItemView {
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
 		this.hintEl = container.createDiv({ cls: 'literature-graph-view-hint is-hidden' });
+		this.buildSearch(container);
 		this.buildSuggestions(container);
 		this.buildControls(container);
 
@@ -664,6 +673,7 @@ export class LiteratureGraphView extends ItemView {
 		}
 		// The hovered node was replaced by a new one.
 		this.hovered = this.hovered ? (byId.get(this.hovered.data.id) ?? null) : null;
+		this.searchTarget = this.searchTarget ? (byId.get(this.searchTarget.data.id) ?? null) : null;
 		this.shownFocus = this.shownFocus ? (byId.get(this.shownFocus.data.id) ?? null) : null;
 		this.dragged = null;
 		if (!this.shownFocus) this.focusLevel = 0;
@@ -754,6 +764,11 @@ export class LiteratureGraphView extends ItemView {
 			if (fit) fit.x += (right - left) / 2 / fit.scale;
 			return fit;
 		}
+		if (this.cameraMode === 'work') {
+			const node = this.searchTarget;
+			if (!node || node.x === undefined || node.y === undefined) return null;
+			return { x: node.x, y: node.y, scale: Math.max(this.world.scale.x, SEARCH_SCALE) };
+		}
 		if (this.cameraMode === 'center') {
 			const node = this.nodes.find((n) => n.data.id === this.center);
 			return node ? { x: node.x ?? 0, y: node.y ?? 0, scale: this.world.scale.x } : null;
@@ -812,6 +827,32 @@ export class LiteratureGraphView extends ItemView {
 			saved[node.data.id] = [Math.round(node.x * 10) / 10, Math.round(node.y * 10) / 10];
 		}
 		this.positions.set(this.layoutStyle, saved);
+	}
+
+	/**
+	 * The search field, at the top left of the view: typing shows the works
+	 * matching the text (authors, year, title); choosing one moves the camera
+	 * to it and highlights it, until the view is moved.
+	 */
+	private buildSearch(container: HTMLElement): void {
+		const box = container.createDiv({ cls: 'literature-graph-search' });
+		const input = box.createEl('input', { type: 'search', attr: { placeholder: 'Find a work', 'aria-label': 'Find a work in the graph' } });
+		new WorkSuggest(
+			this.app,
+			input,
+			() => this.nodes.map((n) => n.data),
+			(work) => this.goToWork(work.id),
+		);
+	}
+
+	/** Moves the camera to a work of the graph and highlights it. */
+	private goToWork(id: string): void {
+		const node = this.nodes.find((n) => n.data.id === id);
+		if (!node) return;
+		this.searchTarget = node;
+		this.cameraMode = 'work';
+		this.zoom = null;
+		this.setHovered(node);
 	}
 
 	/**

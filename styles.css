@@ -236,11 +236,12 @@
 /* Reading suggestions: a list at the left of the graph view. */
 .literature-graph-suggestions {
 	position: absolute;
-	top: var(--size-4-2);
+	/* Below the search field. */
+	top: calc(var(--size-4-2) + var(--input-height) + var(--size-4-2));
 	left: var(--size-4-2);
 	width: 300px;
 	max-width: calc(100% - var(--size-4-4));
-	max-height: calc(100% - var(--size-4-8) - 3em);
+	max-height: calc(100% - var(--size-4-8) - var(--input-height) - 3em);
 	overflow-y: auto;
 	background-color: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
@@ -360,4 +361,27 @@
 
 .literature-graph-duplicates-note:hover {
 	text-decoration: underline;
+}
+
+/* Search field of the graph view. */
+.literature-graph-search {
+	position: absolute;
+	top: var(--size-4-2);
+	left: var(--size-4-2);
+	width: 240px;
+	max-width: calc(100% - var(--size-4-4) - 60px);
+}
+
+.literature-graph-search input {
+	width: 100%;
+	background-color: var(--background-primary);
+	box-shadow: var(--shadow-s);
+}
+
+.literature-graph-search-title {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
