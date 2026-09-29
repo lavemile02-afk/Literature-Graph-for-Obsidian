@@ -1,7 +1,4 @@
-import { App, MarkdownView, Notice, PaneType, TFile, WorkspaceLeaf } from 'obsidian';
-import type { CitationTarget } from './citation';
-import { highlightInReadingView, isPassageHighlightShown } from './highlight';
-import { findPassage } from './passage';
+import { App, MarkdownView, PaneType, TFile, WorkspaceLeaf } from 'obsidian';
 
 /** Finds the note a citation link points to: by path first, then like a wikilink. */
 export function resolveCitedNote(app: App, note: string): TFile | null {
@@ -10,64 +7,26 @@ export function resolveCitedNote(app: App, note: string): TFile | null {
 	return app.metadataCache.getFirstLinkpathDest(note, '');
 }
 
-/**
- * Opens what a citation link points to: the note at the passage, the DOI, or
- * a notice. `newLeaf` is passed to `workspace.getLeaf` (false = current tab);
- * `fileForDoi` finds the note of a work cited only by its DOI.
- */
-export async function openCitation(
-	app: App,
-	target: CitationTarget,
-	newLeaf: PaneType | boolean = false,
-	fileForDoi?: (doi: string) => TFile | null,
-): Promise<void> {
-	const file =
-		(target.note ? resolveCitedNote(app, target.note) : null) ??
-		(target.doi && fileForDoi ? fileForDoi(target.doi) : null);
+/** Workspace event that Better Citations triggers once its API is ready. */
+export const BETTER_CITATIONS_READY = 'better-citations:api-ready';
 
-	if (!file) {
-		if (target.doi) {
-			window.open(`https://doi.org/${target.doi}`);
-		} else {
-			new Notice(`Cited work not found: ${target.note ?? '(no note or DOI in the link)'}`);
-		}
-		return;
-	}
-
-	const text = await app.vault.cachedRead(file);
-	const range = target.q ? findPassage(text, target.q, target.qe, target.occ) : null;
-	const line = range ? text.slice(0, range.from).split('\n').length - 1 : 0;
-	if (target.q && !range) {
-		new Notice('Passage not found; the note was opened at the beginning.');
-	} else if (range?.approximate) {
-		new Notice('Exact passage not found; the closest text is shown.');
-	}
-
-	const view = await openFileAtLine(app, file, line, newLeaf);
-	if (!view || !range) return;
-
-	if (view.getMode() === 'preview') {
-		await highlightWhenRendered(view, file, line, text.slice(range.from, range.to));
-		return;
-	}
-	const editor = view.editor;
-	const { from: start, to: end } = withAdjacentMarks(text, range);
-	const from = editor.offsetToPos(start);
-	const to = editor.offsetToPos(end);
-	editor.setSelection(from, to);
-	editor.scrollIntoView({ from, to }, true);
+/** What the Better Citations plugin offers to other plugins (see its README). */
+export interface BetterCitationsApi {
+	openCitation(url: string, newTab?: PaneType | boolean): Promise<void>;
+	setDoiTitleProvider(provider: ((doi: string) => Promise<string | null>) | null): void;
 }
 
-/** Emphasis marks right at the edges of a passage, so that a selection keeps them paired. */
-const MARKS = '*_~=';
-
-/** A passage range extended over the emphasis marks that touch its ends ("**term**" whole). */
-export function withAdjacentMarks(text: string, range: { from: number; to: number }): { from: number; to: number } {
-	let from = range.from;
-	let to = range.to;
-	while (from > 0 && MARKS.includes(text.charAt(from - 1))) from--;
-	while (to < text.length && MARKS.includes(text.charAt(to))) to++;
-	return { from, to };
+/**
+ * The API of Better Citations, when it is installed and enabled: it opens
+ * citation links at the cited passage. Without it, Literature Graph opens
+ * cited works at the beginning of their note.
+ */
+export function betterCitations(app: App): BetterCitationsApi | null {
+	const plugins = (app as unknown as { plugins?: { plugins?: Record<string, { api?: unknown } | undefined> } }).plugins;
+	const api = plugins?.plugins?.['better-citations']?.api as Partial<BetterCitationsApi> | undefined;
+	return api && typeof api.openCitation === 'function' && typeof api.setDoiTitleProvider === 'function'
+		? (api as BetterCitationsApi)
+		: null;
 }
 
 /**
@@ -94,37 +53,6 @@ export async function openFileAtLine(
 		view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
 	}
 	return view;
-}
-
-/** How long to wait for the reading view to render a long note. */
-const READING_VIEW_TIMEOUT_MS = 20000;
-
-/**
- * Scrolls the reading view to the passage and highlights it once it is
- * rendered. The reading view renders a note progressively, and for a very long
- * note it may show nothing for several seconds, then render the top of the
- * note and ignore the requested line; a re-render may also drop the highlight.
- * So keep scrolling and highlighting until the highlight has held for a
- * moment, as long as the note stays in that view.
- */
-async function highlightWhenRendered(
-	view: MarkdownView,
-	file: TFile,
-	line: number,
-	passage: string,
-): Promise<void> {
-	const deadline = Date.now() + READING_VIEW_TIMEOUT_MS;
-	let steady = 0;
-	while (Date.now() < deadline && view.file === file && view.getMode() === 'preview') {
-		await sleep(150);
-		if (isPassageHighlightShown(view)) {
-			if (++steady >= 3) return;
-			continue;
-		}
-		steady = 0;
-		if (highlightInReadingView(view, passage)) continue;
-		if (Math.abs(view.previewMode.getScroll() - line) > 2) view.setEphemeralState({ line });
-	}
 }
 
 /**

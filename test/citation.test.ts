@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCitationParams, parseCitationUrl } from '../src/citation';
-import { citationUrl, encodeParam, familyNames } from '../src/citationLink';
+import { familyNames } from '../src/citationText';
 
 test('parses an encoded citation link', () => {
 	const target = parseCitationUrl(
@@ -36,17 +36,6 @@ test('ignores other URLs', () => {
 test('rejoins a passage that Obsidian split on "&" (protocol handler)', () => {
 	const target = parseCitationParams({ action: 'cite', note: 'N', q: 'models (Hobbs ', ' Suding 2009)': 'true' });
 	assert.equal(target.q, 'models (Hobbs & Suding 2009)');
-});
-
-test('encodes every character that would end a Markdown link', () => {
-	assert.equal(encodeParam("a (b) c's *d*!"), 'a%20%28b%29%20c%27s%20%2Ad%2A%21');
-});
-
-test('writes canonical URLs with q last', () => {
-	assert.equal(
-		citationUrl({ q: 'the passage', note: 'Smith, 2020', occ: 2, qe: 'end' }),
-		'obsidian://cite?note=Smith%2C%202020&occ=2&qe=end&q=the%20passage',
-	);
 });
 
 test('reads family names from an authors property', () => {

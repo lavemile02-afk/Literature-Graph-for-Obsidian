@@ -1,9 +1,9 @@
 import { debounce, ItemView, MarkdownView, TFile, WorkspaceLeaf, setIcon } from 'obsidian';
-import { citationText } from './citationLink';
+import { citationText } from './citationText';
 import type { CitationIndex, CitedWork } from './citationIndex';
 import type { BibEntry } from './bibliography';
 import type { CitationLink } from './links';
-import { openCitation, openFileAtLine } from './navigation';
+import { betterCitations, openFileAtLine } from './navigation';
 import { OpenAlexClient, WorkSummary, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
@@ -328,7 +328,16 @@ export class CitationsView extends ItemView {
 		const passage = parent.createDiv({ cls: 'tree-item-self is-clickable literature-graph-passage' });
 		passage.setText(link.target.q ? `“${link.target.q}${link.target.qe ? ` … ${link.target.qe}` : ''}”` : '(whole work)');
 		passage.addEventListener('click', () => {
-			void openCitation(this.app, link.target, false, (doi) => this.index.fileForDoi(doi));
+			// Better Citations opens the passage itself; without it, the work opens
+			// at the beginning of its note (or its DOI).
+			const api = betterCitations(this.app);
+			if (api) {
+				void api.openCitation(link.url);
+				return;
+			}
+			const work = this.index.resolve(link.target, link.text);
+			if (work.kind === 'note') void openFileAtLine(this.app, work.file, 0);
+			else if (work.kind === 'doi') window.open(`https://doi.org/${work.doi}`);
 		});
 	}
 
@@ -399,7 +408,7 @@ export class CitationsView extends ItemView {
 				}
 			}
 		} catch (error) {
-			console.error('Literature Graph.md: OpenAlex request failed', error);
+			console.error('Literature Graph: OpenAlex request failed', error);
 			note = 'OpenAlex could not be reached; showing what is known locally.';
 		}
 
@@ -473,7 +482,7 @@ export class CitationsView extends ItemView {
 			known = work.references.length;
 			works = await this.openAlex.worksByIds(work.references);
 		} catch (error) {
-			console.error('Literature Graph.md: OpenAlex request failed', error);
+			console.error('Literature Graph: OpenAlex request failed', error);
 			if (this.file === file) status.setText('OpenAlex could not be reached; showing what is cached.');
 			return;
 		}

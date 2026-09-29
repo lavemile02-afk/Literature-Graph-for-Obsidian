@@ -91,39 +91,3 @@ export function citationLinksIn(noteText: string): CitationLink[] {
 	});
 	return found;
 }
-
-/**
- * The note text with every citation link written in its canonical encoded
- * form (readable links between angle brackets are converted), and how many
- * links changed.
- */
-export function withCanonicalCitationLinks(
-	noteText: string,
-	canonical: (link: CitationLink) => string,
-): { text: string; changed: number } {
-	let result = '';
-	let last = 0;
-	let changed = 0;
-	for (const link of citationLinksIn(noteText)) {
-		const url = canonical(link);
-		if (url === link.url && noteText.charAt(link.from + link.text.length + 3) !== '<') continue;
-		result += `${noteText.slice(last, link.from)}[${link.text}](${url})`;
-		last = link.to;
-		changed++;
-	}
-	return { text: result + noteText.slice(last), changed };
-}
-
-/**
- * The note text with every citation link replaced by its text, so that
- * "([Smith et al., 2020](obsidian://cite?...))" becomes "(Smith et al., 2020)".
- */
-export function withoutCitationLinks(noteText: string): string {
-	let result = '';
-	let last = 0;
-	for (const link of citationLinksIn(noteText)) {
-		result += noteText.slice(last, link.from) + link.text.replace(/\\([[\]])/g, '$1');
-		last = link.to;
-	}
-	return result + noteText.slice(last);
-}

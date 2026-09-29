@@ -1,6 +1,6 @@
 # Third-party notices
 
-Literature Graph.md bundles code from the following packages into `main.js`.
+Literature Graph bundles code from the following packages into `main.js`.
 
 ## @pixi/colord 2.9.6
 

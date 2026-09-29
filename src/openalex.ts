@@ -106,7 +106,7 @@ export class OpenAlexClient {
 				if (data.version === CACHE_VERSION) this.cache = data;
 			}
 		} catch (error) {
-			console.error('Literature Graph.md: could not read the OpenAlex cache', error);
+			console.error('Literature Graph: could not read the OpenAlex cache', error);
 		}
 	}
 
@@ -156,7 +156,7 @@ export class OpenAlexClient {
 			this.lastError = null;
 		} catch (error) {
 			this.lastError = error instanceof Error ? error : new Error(String(error));
-			if (!(error instanceof OpenAlexLimitError)) console.error('Literature Graph.md: OpenAlex request failed', error);
+			if (!(error instanceof OpenAlexLimitError)) console.error('Literature Graph: OpenAlex request failed', error);
 		}
 	}
 

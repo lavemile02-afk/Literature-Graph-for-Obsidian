@@ -139,7 +139,7 @@ export class CitationIndex extends Events {
 	private describe(file: TFile): string {
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 		const s = this.settings();
-		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, s.referenceProperty, 'aliases']
+		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, 'aliases']
 			.map((key) => JSON.stringify(fm[key] ?? null))
 			.join('|');
 	}

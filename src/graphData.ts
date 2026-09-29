@@ -1,5 +1,5 @@
 import { App, TFile } from 'obsidian';
-import { citationText } from './citationLink';
+import { citationText } from './citationText';
 import type { CitationIndex } from './citationIndex';
 import { BibEntry, entryKey, entryTitle, MIN_TITLE_OVERLAP, nameKey, titleOverlap } from './bibliography';
 import { OpenAlexClient, surnameOf, WorkSummary, workCitation } from './openalex';
@@ -173,7 +173,7 @@ export async function buildGraph(
 			}
 		}
 	} catch (error) {
-		console.error('Literature Graph.md: OpenAlex request failed; the graph uses local data only', error);
+		console.error('Literature Graph: OpenAlex request failed; the graph uses local data only', error);
 	}
 	progress.onStage(g.snapshot());
 	if (options.generations < 1) return g.snapshot();
@@ -212,7 +212,7 @@ export async function buildGraph(
 			progress.onStatus(`Looking up the DOIs of reference lists: ${done} of ${total}…`),
 		);
 	} catch (error) {
-		console.error('Literature Graph.md: OpenAlex request failed', error);
+		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	for (const file of files) {
 		for (const doi of citedDois.get(file.path) ?? []) {
@@ -276,7 +276,7 @@ export async function buildGraph(
 			progress.onStatus(`Loading works outside the vault (generation 1): ${done} of ${total}…`),
 		);
 	} catch (error) {
-		console.error('Literature Graph.md: OpenAlex request failed', error);
+		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	const byId1 = new Map(works1.map((w) => [w.id, w]));
 	for (const key of gen1.kept) {
@@ -331,7 +331,7 @@ export async function buildGraph(
 			progress.onStatus(`Loading works outside the vault (generation 2): ${done} of ${total}…`),
 		);
 	} catch (error) {
-		console.error('Literature Graph.md: OpenAlex request failed', error);
+		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	const byId2 = new Map(works2.map((w) => [w.id, w]));
 	for (const key of gen2.kept) {

@@ -15,7 +15,7 @@ const walk = (deps = {}) => {
 };
 walk(tree.dependencies);
 
-let out = '# Third-party notices\n\nLiterature Graph.md bundles code from the following packages into `main.js`.\n';
+let out = '# Third-party notices\n\nLiterature Graph bundles code from the following packages into `main.js`.\n';
 for (const [name, version] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
 	const dir = join('node_modules', name);
 	const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));

@@ -19,7 +19,7 @@ export class LayoutRunner {
 			worker.onerror = (event) => {
 				// The worker failed (it could not load, for example): go on without it.
 				event.preventDefault();
-				console.warn('Literature Graph.md: the layout worker failed; the layout runs in Obsidian instead.', event.message);
+				console.warn('Literature Graph: the layout worker failed; the layout runs in Obsidian instead.', event.message);
 				this.fallBack(win, onUpdate);
 			};
 			this.worker = worker;

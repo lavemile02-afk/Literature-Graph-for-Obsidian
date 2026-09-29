@@ -13,18 +13,12 @@ export interface LiteratureGraphSettings {
 	authorsProperty: string;
 	/** Property holding a work's year. */
 	yearProperty: string;
-	/** Property holding a work's full reference, in APA style. */
-	referenceProperty: string;
 	/** Property holding a work's title (used when the reference property is empty). */
 	titleProperty: string;
 	/** Always use the note name as the citation text. */
 	useNoteNameAsCitation: boolean;
 	/** Property holding a work's DOI, used to recognize works cited by DOI. */
 	doiProperty: string;
-	/** Rewrite citation links when the cited note is renamed. */
-	updateLinksOnRename: boolean;
-	/** Seconds the cited passage stays highlighted in the reading view (0: until the next one). */
-	highlightSeconds: number;
 	/** Look up bibliographic data on OpenAlex (network access). */
 	openAlexEnabled: boolean;
 	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
@@ -47,12 +41,9 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	citationTextProperty: 'Citation_texte',
 	authorsProperty: 'Auteurs',
 	yearProperty: 'Annee',
-	referenceProperty: 'Citation',
 	titleProperty: 'Titre',
 	useNoteNameAsCitation: false,
 	doiProperty: 'DOI',
-	updateLinksOnRename: true,
-	highlightSeconds: 5,
 	openAlexEnabled: true,
 	openAlexEmail: '',
 	openAlexKeySecret: '',
@@ -83,7 +74,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 		return [
 			{
 				name: 'Literature folder',
-				desc: 'Folder that holds your literature notes. Leave empty to use the whole vault.',
+				desc: 'Folder that holds your literature notes: the works of the graph, whose reference lists are read. Leave empty to use the whole vault.',
 				control: {
 					type: 'folder',
 					key: 'literatureFolder',
@@ -92,7 +83,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 			},
 			{
 				name: 'Citation language',
-				desc: 'Language of the citations the plugin writes, for example "Smith & Jones, 2020" or "Smith et Jones, 2020".',
+				desc: 'Language of the labels of works, for example "Smith & Jones, 2020" or "Smith et Jones, 2020".',
 				control: {
 					type: 'dropdown',
 					key: 'citationLanguage',
@@ -101,41 +92,36 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 			},
 			{
 				type: 'group',
-				heading: 'Citations',
+				heading: 'Works',
 				items: [
 					{
 						name: 'Citation text property',
-						desc: 'Property that holds the in-text citation of a work, such as "(Smith et al., 2020)". Copied citation links use it as their text.',
+						desc: 'Property that holds the in-text citation of a work, such as "(Smith et al., 2020)". Works are labelled with it in the graph and the citations panel.',
 						control: { type: 'text', key: 'citationTextProperty', placeholder: 'Citation_texte' },
 					},
 					{
 						name: 'Authors property',
-						desc: 'Property that holds the authors, as "Family, I., Family, I.". Used to build the citation text when the citation text property is empty.',
+						desc: 'Property that holds the authors, as "Family, I., Family, I.". Used to label a work when the citation text property is empty, and to recognize it in reference lists.',
 						control: { type: 'text', key: 'authorsProperty', placeholder: 'Auteurs' },
 					},
 					{
 						name: 'Year property',
-						desc: 'Property that holds the year of publication.',
+						desc: 'Property that holds the year of publication, to recognize a work in reference lists.',
 						control: { type: 'text', key: 'yearProperty', placeholder: 'Annee' },
 					},
 					{
-						name: 'Reference property',
-						desc: 'Property that holds the full reference of a work, in APA style. Used by "Insert reference list".',
-						control: { type: 'text', key: 'referenceProperty', placeholder: 'Citation' },
-					},
-					{
 						name: 'Title property',
-						desc: 'Property that holds the title. Used to build a short reference when the reference property is empty.',
+						desc: 'Property that holds the title, to recognize a work in reference lists (with the note\'s aliases, such as the original title of a translation).',
 						control: { type: 'text', key: 'titleProperty', placeholder: 'Titre' },
 					},
 					{
 						name: 'Always use the note name',
-						desc: 'Use the name of the cited note as the citation text, ignoring the properties above.',
+						desc: 'Label works with the name of their note, ignoring the properties above.',
 						control: { type: 'toggle', key: 'useNoteNameAsCitation' },
 					},
 					{
 						name: 'DOI property',
-						desc: 'Property that holds the DOI of a work. A link that cites a DOI opens the note with that DOI, if there is one.',
+						desc: 'Property that holds the DOI of a work, to find its references and citations on OpenAlex and to recognize it when cited by DOI.',
 						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
 					},
 				],
@@ -197,22 +183,6 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 									}),
 							);
 						},
-					},
-				],
-			},
-			{
-				type: 'group',
-				heading: 'Advanced',
-				items: [
-					{
-						name: 'Update links when a note is renamed',
-						desc: 'Rewrite the citation links that point to a note when it is renamed or moved. Obsidian does this for wikilinks, but not for citation links.',
-						control: { type: 'toggle', key: 'updateLinksOnRename' },
-					},
-					{
-						name: 'Highlight duration',
-						desc: 'Seconds the cited passage stays highlighted when a citation link opens it in the reading view. 0 keeps it until another passage is highlighted.',
-						control: { type: 'number', key: 'highlightSeconds', min: 0, max: 600 },
 					},
 				],
 			},

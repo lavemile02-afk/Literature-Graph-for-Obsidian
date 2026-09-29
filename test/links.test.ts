@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { citationUrl } from '../src/citationLink';
-import { citationLinksIn, markdownLinksInLine, withCanonicalCitationLinks, withoutCitationLinks } from '../src/links';
+import { citationLinksIn, markdownLinksInLine } from '../src/links';
 
 test('finds Markdown links, with balanced parentheses and angle brackets', () => {
 	const line = 'See ([A, 2016](obsidian://cite?note=A%20(1)&q=x)) and [B](<obsidian://cite?note=B b&q=y z>).';
@@ -30,32 +29,9 @@ test('finds citation links outside code blocks only', () => {
 	assert.equal(links[0]?.line, 0);
 });
 
-test('replaces citation links by their text for export', () => {
-	assert.equal(
-		withoutCitationLinks('As shown ([Smith et al., 2020](obsidian://cite?note=S&q=x)), and [web](https://x.org).'),
-		'As shown (Smith et al., 2020), and [web](https://x.org).',
-	);
-});
-
-test('converts readable citation links to the canonical encoded form', () => {
-	const text = [
-		'One ([A, 2016](<obsidian://cite?note=A b, 2016 (1)&q=models (Hobbs & Suding 2009)>)).',
-		'Two ([B, 2017](obsidian://cite?note=B&q=already%20encoded)).',
-	].join('\n');
-	const result = withCanonicalCitationLinks(text, (link) => citationUrl(link.target));
-	assert.equal(result.changed, 1);
-	assert.equal(
-		result.text.split('\n')[0],
-		'One ([A, 2016](obsidian://cite?note=A%20b%2C%202016%20%281%29&q=models%20%28Hobbs%20%26%20Suding%202009%29)).',
-	);
-	assert.equal(result.text.split('\n')[1], text.split('\n')[1]);
-});
-
 test('reads a readable citation link written without angle brackets', () => {
 	const line = '8. ([Bourgeois et al., 2016](obsidian://cite?note=Bourgeois et al., 2016 (1)&q=Once canopy cover at 40%)).';
 	const [link] = markdownLinksInLine(line);
 	assert.equal(link?.url, 'obsidian://cite?note=Bourgeois et al., 2016 (1)&q=Once canopy cover at 40%');
 	assert.equal(line.slice(link?.to), ').');
-	const fixed = withCanonicalCitationLinks(line, (l) => citationUrl(l.target)).text;
-	assert.equal(fixed, '8. ([Bourgeois et al., 2016](obsidian://cite?note=Bourgeois%20et%20al.%2C%202016%20%281%29&q=Once%20canopy%20cover%20at%2040%25)).');
 });
