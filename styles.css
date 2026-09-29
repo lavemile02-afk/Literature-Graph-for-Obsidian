@@ -232,3 +232,88 @@
 	color: var(--text-muted);
 	margin-bottom: var(--size-4-2);
 }
+
+/* Reading suggestions: a list at the left of the graph view. */
+.literature-graph-suggestions {
+	position: absolute;
+	top: var(--size-4-2);
+	left: var(--size-4-2);
+	width: 300px;
+	max-width: calc(100% - var(--size-4-4));
+	max-height: calc(100% - var(--size-4-8) - 3em);
+	overflow-y: auto;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+	padding: 0 var(--size-4-2) var(--size-4-2);
+	font-size: var(--font-ui-small);
+}
+
+.literature-graph-suggestions.is-hidden {
+	display: none;
+}
+
+.literature-graph-suggestions-header {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: var(--size-4-1) 0;
+	background-color: var(--background-primary);
+}
+
+.literature-graph-suggestions-title {
+	font-weight: var(--font-semibold);
+}
+
+.literature-graph-suggestions-desc,
+.literature-graph-suggestions-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-2);
+}
+
+.literature-graph-suggestion {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+	padding: var(--size-2-2) var(--size-2-3);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+}
+
+.literature-graph-suggestion:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.literature-graph-suggestion-rank {
+	min-width: 2em;
+	text-align: right;
+	color: var(--text-faint);
+}
+
+.literature-graph-suggestion-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.literature-graph-suggestion-title {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.literature-graph-suggestion-score {
+	color: var(--text-accent);
+	font-variant-numeric: tabular-nums;
+}
+
+.literature-graph-suggestions-more {
+	width: 100%;
+	margin-top: var(--size-4-2);
+}

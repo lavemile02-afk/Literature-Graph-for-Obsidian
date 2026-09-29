@@ -48,6 +48,8 @@ export interface LiteratureGraphSettings {
 	noteTemplate: string;
 	/** Folder (anywhere on the computer) where free PDFs are downloaded; empty: the Downloads folder. */
 	downloadFolder: string;
+	/** Where "Export reading suggestions" writes its file (a path in the vault); empty: in the plugin folder. */
+	suggestionsFile: string;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -74,6 +76,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphIncomingColor: '',
 	noteTemplate: '',
 	downloadFolder: '',
+	suggestionsFile: '',
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
@@ -226,6 +229,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Download folder',
 						desc: 'Folder of your computer (not only of the vault) where "Download PDF" saves the free PDFs of works. Empty: your Downloads folder.',
 						control: { type: 'text', key: 'downloadFolder', placeholder: 'C:\\Users\\me\\Documents\\Articles' },
+					},
+					{
+						name: 'Reading suggestions file',
+						desc: 'Where the command "Export reading suggestions" writes the 1000 most relevant works outside the vault, one per line (JSON Lines), for AI agents and other programs. A path in the vault, hidden folders included. Empty: reading-suggestions.jsonl in the plugin folder.',
+						control: { type: 'text', key: 'suggestionsFile', placeholder: 'reading-suggestions.jsonl' },
 					},
 				],
 			},

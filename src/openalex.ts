@@ -319,6 +319,14 @@ export class OpenAlexClient {
 		return found;
 	}
 
+	/**
+	 * Whether OpenAlex no longer has this work (merged or deleted), although
+	 * other works still list it among their references.
+	 */
+	isMissing(id: string): boolean {
+		return this.cache.missingIds?.[id] === true;
+	}
+
 	/** A cached work, without any request. */
 	cachedWork(id: string): WorkSummary | null {
 		return this.cache.works[id] ?? null;

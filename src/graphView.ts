@@ -1,4 +1,4 @@
-import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon } from 'obsidian';
+import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
 import { Application, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
@@ -13,6 +13,7 @@ import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
+import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
@@ -122,6 +123,8 @@ const LABEL_FADE_END = 1.2;
 const MAX_FILTER_LABELS = 300;
 /** At most this many labels of works outside the vault are shown around a hovered node. */
 const MAX_NEIGHBOR_LABELS = 40;
+/** Reading suggestions shown at first, and added by "Show more". */
+const SUGGESTIONS_PAGE = 100;
 /** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
 const FOCUS_FADE_STEP = 0.3;
 /** Share of the way the camera and the wheel zoom move at each frame. */
@@ -254,6 +257,12 @@ export class LiteratureGraphView extends ItemView {
 	private statusEl: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
 	private hintEl: HTMLElement | null = null;
+	/** The list of reading suggestions (works outside the vault, most relevant first), when open. */
+	private suggestionsEl: HTMLElement | null = null;
+	/** How many suggestions the list shows; "Show more" adds SUGGESTIONS_PAGE. */
+	private suggestionsShown = SUGGESTIONS_PAGE;
+	/** The graph shown now (the local part of it, in local mode). */
+	private shownGraph: LiteratureGraph | null = null;
 	private summary = '';
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
@@ -363,6 +372,7 @@ export class LiteratureGraphView extends ItemView {
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
 		this.hintEl = container.createDiv({ cls: 'literature-graph-view-hint is-hidden' });
+		this.buildSuggestions(container);
 		this.buildControls(container);
 
 		const pixi = new Application();
@@ -689,6 +699,8 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+		this.shownGraph = graph;
+		this.renderSuggestions();
 		this.invalidate();
 	}
 
@@ -730,13 +742,16 @@ export class LiteratureGraphView extends ItemView {
 		if (this.cameraMode === 'fit') {
 			const screen = this.pixi?.screen;
 			if (!screen) return null;
-			// The open control panel hides the right of the view: fit the graph beside it.
+			// The open control panel hides the right of the view, and the list of
+			// suggestions its left: fit the graph between them.
 			const panel = this.controlsEl;
-			const covered =
+			const right =
 				panel && !panel.hasClass('is-collapsed') && panel.offsetWidth < screen.width / 2 ? panel.offsetWidth + 16 : 0;
-			const width = screen.width - covered;
+			const list = this.suggestionsEl;
+			const left = list && !list.hasClass('is-hidden') && list.offsetWidth < screen.width / 2 ? list.offsetWidth + 16 : 0;
+			const width = screen.width - right - left;
 			const fit = fitCamera(this.nodes, width, screen.height, this.local ? LOCAL_START_SCALE : 1.5);
-			if (fit) fit.x += covered / 2 / fit.scale;
+			if (fit) fit.x += (right - left) / 2 / fit.scale;
 			return fit;
 		}
 		if (this.cameraMode === 'center') {
@@ -799,11 +814,87 @@ export class LiteratureGraphView extends ItemView {
 		this.positions.set(this.layoutStyle, saved);
 	}
 
+	/**
+	 * The list of reading suggestions, at the left of the view: the works
+	 * outside the vault of the graph shown, most relevant first (see
+	 * `relevance.ts`). Hovering a row highlights the work in the graph, as
+	 * hovering its node does; clicking it opens its ghost note.
+	 */
+	private buildSuggestions(container: HTMLElement): void {
+		const list = container.createDiv({ cls: 'literature-graph-suggestions is-hidden' });
+		this.suggestionsEl = list;
+		list.addEventListener('mouseleave', () => this.setHovered(null));
+	}
+
+	/** Opens or closes the list of reading suggestions. */
+	toggleSuggestions(open?: boolean): void {
+		const list = this.suggestionsEl;
+		if (!list) return;
+		const show = open ?? list.hasClass('is-hidden');
+		list.toggleClass('is-hidden', !show);
+		this.suggestionsShown = SUGGESTIONS_PAGE;
+		this.renderSuggestions();
+		if (this.cameraMode === 'fit') this.requestFrame();
+	}
+
+	private renderSuggestions(): void {
+		const list = this.suggestionsEl;
+		if (!list || list.hasClass('is-hidden')) return;
+		const scroll = list.scrollTop;
+		list.empty();
+		const header = list.createDiv({ cls: 'literature-graph-suggestions-header' });
+		header.createDiv({ cls: 'literature-graph-suggestions-title', text: 'Reading suggestions' });
+		const close = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Close' } });
+		setIcon(close, 'x');
+		close.addEventListener('click', () => this.toggleSuggestions(false));
+		const graph = this.shownGraph;
+		const ranked = graph ? rankSuggestions(graph, cachedInfo(this.openAlex)) : [];
+		if (ranked.length === 0) {
+			list.createDiv({
+				cls: 'literature-graph-suggestions-empty',
+				text: 'No works outside your vault in this graph. Show generation 1 or 2 in the graph settings.',
+			});
+			return;
+		}
+		list.createDiv({
+			cls: 'literature-graph-suggestions-desc',
+			text: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
+		});
+		const byId = new Map(this.nodes.map((n) => [n.data.id, n]));
+		ranked.slice(0, this.suggestionsShown).forEach((suggestion, i) => {
+			const node = byId.get(suggestion.node.id);
+			if (!node) return;
+			const row = list.createDiv({ cls: 'literature-graph-suggestion' });
+			row.createSpan({ cls: 'literature-graph-suggestion-rank', text: `${i + 1}` });
+			const text = row.createDiv({ cls: 'literature-graph-suggestion-text' });
+			text.createDiv({ cls: 'literature-graph-suggestion-label', text: suggestion.node.label });
+			if (suggestion.node.title) text.createDiv({ cls: 'literature-graph-suggestion-title', text: suggestion.node.title });
+			row.createSpan({ cls: 'literature-graph-suggestion-score', text: suggestion.score.toFixed(1) });
+			setTooltip(row, [`Score ${suggestion.score}`, ...explainSuggestion(suggestion)].join('\n'), { placement: 'right' });
+			row.addEventListener('mouseenter', () => this.setHovered(node));
+			row.addEventListener('click', (e) => this.openNode(node, e));
+		});
+		if (ranked.length > this.suggestionsShown) {
+			const more = list.createEl('button', {
+				cls: 'literature-graph-suggestions-more',
+				text: `Show more (${ranked.length - this.suggestionsShown} left)`,
+			});
+			more.addEventListener('click', () => {
+				this.suggestionsShown += SUGGESTIONS_PAGE;
+				this.renderSuggestions();
+			});
+		}
+		list.scrollTop = scroll;
+	}
+
 	/** The panel of the view, like the controls of Obsidian's graph view. */
 	private buildControls(container: HTMLElement): void {
 		const panel = container.createDiv({ cls: 'literature-graph-controls is-collapsed' });
 		this.controlsEl = panel;
 		const header = panel.createDiv({ cls: 'literature-graph-controls-header' });
+		const suggestions = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Reading suggestions' } });
+		setIcon(suggestions, 'list-ordered');
+		suggestions.addEventListener('click', () => this.toggleSuggestions());
 		const fit = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Fit the graph to the view' } });
 		setIcon(fit, 'maximize');
 		fit.addEventListener('click', () => this.fitToView());

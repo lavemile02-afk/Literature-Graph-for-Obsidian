@@ -301,6 +301,8 @@ export async function buildGraph(
 			for (const from of citers1.get(key) ?? []) g.addEdge(from, key, 'bibliography');
 			continue;
 		}
+		// A work OpenAlex no longer has (merged or deleted): nothing to show or open.
+		if (openAlex.isMissing(key)) continue;
 		const work = byId1.get(key) ?? openAlex.cachedWork(key);
 		const doi = key.startsWith('doi:') ? key.slice(4) : (work?.doi ?? null);
 		g.nodes.set(key, {
@@ -342,6 +344,7 @@ export async function buildGraph(
 	}
 	const byId2 = new Map(works2.map((w) => [w.id, w]));
 	for (const key of gen2.kept) {
+		if (openAlex.isMissing(key)) continue;
 		const work = byId2.get(key);
 		g.nodes.set(key, {
 			id: key,

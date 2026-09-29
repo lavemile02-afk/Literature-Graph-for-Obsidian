@@ -5,6 +5,7 @@ import { OpenAlexClient } from './openalex';
 import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
 import { PositionStore } from './positions';
+import { writeSuggestionsFile } from './suggestionsFile';
 import { WORK_VIEW, WorkView } from './workView';
 import { DEFAULT_SETTINGS, LiteratureGraphSettings, LiteratureGraphSettingTab } from './settings';
 
@@ -13,6 +14,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 	index!: CitationIndex;
 	openAlex!: OpenAlexClient;
 	positions!: PositionStore;
+	/** Resolves when the citation index is first built. */
+	private indexReady: Promise<void> | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -70,6 +73,40 @@ export default class LiteratureGraphPlugin extends Plugin {
 			name: 'Open citations panel',
 			callback: () => void this.openCitationsPanel(),
 		});
+		this.addCommand({
+			id: 'open-reading-suggestions',
+			name: 'Open reading suggestions',
+			callback: () => void this.openReadingSuggestions(),
+		});
+		this.addCommand({
+			id: 'export-reading-suggestions',
+			name: 'Export reading suggestions',
+			callback: () => void this.exportReadingSuggestions(),
+		});
+	}
+
+	/** Opens the literature graph with its list of reading suggestions. */
+	async openReadingSuggestions() {
+		await this.openGraph();
+		const view = this.app.workspace.getActiveViewOfType(LiteratureGraphView);
+		view?.toggleSuggestions(true);
+	}
+
+	/** Writes the reading suggestions to their file, for AI agents and other programs. */
+	async exportReadingSuggestions() {
+		const path = this.settings.suggestionsFile.trim() || `${this.manifest.dir ?? ''}/reading-suggestions.jsonl`;
+		const notice = new Notice('Reading suggestions: building the list…', 0);
+		try {
+			await this.indexReady;
+			const count = await writeSuggestionsFile(this.app, this.index, this.openAlex, this.settings, path, (message) =>
+				notice.setMessage(`Reading suggestions: ${message}`),
+			);
+			notice.hide();
+			new Notice(`${count} reading suggestions written to ${path}.`);
+		} catch (error) {
+			notice.hide();
+			new Notice(`The reading suggestions could not be written: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	/**
@@ -116,7 +153,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	/** Builds the citation index, then keeps it up to date. */
 	private async startIndex() {
-		await this.index.build();
+		this.indexReady = this.index.build();
+		await this.indexReady;
 		this.registerEvent(this.app.metadataCache.on('changed', (file) => void this.index.indexFile(file)));
 		this.registerEvent(
 			this.app.vault.on('delete', (file) => {
