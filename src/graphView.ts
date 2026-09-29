@@ -1,4 +1,4 @@
-import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
+import { debounce, ItemView, Keymap, MarkdownView, Setting, SliderComponent, TFile, ViewStateResult, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
 import { Application, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
@@ -140,6 +140,8 @@ const ROTATION_STEP = 0.04;
 const SPHERE_FILL = 0.8;
 /** Alpha of the works at the back of the sphere. */
 const BACK_ALPHA = 0.25;
+/** Milliseconds per year when the timeline plays. */
+const TIMELINE_YEAR_MS = 300;
 /** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
 const FOCUS_FADE_STEP = 0.3;
 /** Share of the way the camera and the wheel zoom move at each frame. */
@@ -292,6 +294,16 @@ export class LiteratureGraphView extends ItemView {
 	};
 	/** When the user last touched Obsidian (mouse or keyboard). */
 	private lastActivity = Date.now();
+	/**
+	 * Timeline: only the works published up to this year are shown (null: all).
+	 * Works whose year is unknown are always shown.
+	 */
+	private yearLimit: number | null = null;
+	/** Year of publication of each node, by index. */
+	private years: (number | null)[] = [];
+	private yearSlider: SliderComponent | null = null;
+	private timelineDesc: HTMLElement | null = null;
+	private timelineTimer: number | null = null;
 	private frameId: number | null = null;
 	private frameWindow: Window | null = null;
 	/** Whether frames stopped because the view was hidden; they resume when it shows again. */
@@ -753,6 +765,7 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+		this.readYears();
 		this.shownGraph = graph;
 		this.renderSuggestions();
 		this.invalidate();
@@ -1049,6 +1062,73 @@ export class LiteratureGraphView extends ItemView {
 		}
 	}
 
+	/** Whether the timeline hides a work (published after the year chosen). */
+	private outOfTime(node: SimNode): boolean {
+		if (this.yearLimit === null) return false;
+		const year = this.years[node.index];
+		return year !== null && year !== undefined && year > this.yearLimit;
+	}
+
+	/** The year of each work shown (property of a note, OpenAlex, or reference list), and the timeline's range. */
+	private readYears(): void {
+		this.years = this.nodes.map((n) => {
+			if (n.data.file) {
+				const year = Number.parseInt(this.index.vaultWork(n.data.file)?.year ?? '', 10);
+				return Number.isFinite(year) ? year : null;
+			}
+			const work = n.data.openAlexId ? this.openAlex.cachedWork(n.data.openAlexId) : null;
+			if (work?.year) return work.year;
+			const entry = Number.parseInt(n.data.entry?.year ?? '', 10);
+			return Number.isFinite(entry) ? entry : null;
+		});
+		const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
+		const slider = this.yearSlider;
+		if (!slider || known.length === 0) return;
+		const min = Math.min(...known);
+		const max = Math.max(...known);
+		slider.setLimits(min, max, 1);
+		slider.setValue(this.yearLimit ?? max);
+		this.describeTimeline();
+	}
+
+	/** Shows the works published up to a year (null: all of them). */
+	private setYearLimit(year: number | null): void {
+		this.yearLimit = year;
+		this.describeTimeline();
+		this.invalidate();
+	}
+
+	private describeTimeline(): void {
+		const shown = this.yearLimit === null ? this.nodes.length : this.nodes.filter((n) => !this.outOfTime(n)).length;
+		this.timelineDesc?.setText(this.yearLimit === null ? 'All years.' : `Published up to ${this.yearLimit}: ${shown} works.`);
+	}
+
+	/** Plays the timeline: the literature grows year by year, up to today. */
+	private playTimeline(): void {
+		this.stopTimeline();
+		const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
+		if (known.length === 0) return;
+		const max = Math.max(...known);
+		let year = Math.min(...known);
+		this.setYearLimit(year);
+		this.timelineTimer = window.setInterval(() => {
+			year++;
+			if (year >= max) {
+				this.stopTimeline();
+				this.setYearLimit(null);
+				this.yearSlider?.setValue(max);
+				return;
+			}
+			this.yearSlider?.setValue(year);
+			this.setYearLimit(year);
+		}, TIMELINE_YEAR_MS);
+	}
+
+	private stopTimeline(): void {
+		if (this.timelineTimer !== null) window.clearInterval(this.timelineTimer);
+		this.timelineTimer = null;
+	}
+
 	/**
 	 * The search field, at the top left of the view: typing shows the works
 	 * matching the text (authors, year, title); choosing one moves the camera
@@ -1337,6 +1417,26 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
+		const timeline = new Setting(body).setName('Timeline');
+		this.timelineDesc = timeline.descEl;
+		timeline
+			.addSlider((slider) => {
+				this.yearSlider = slider;
+				slider.setLimits(1900, 2030, 1).setValue(2030);
+				slider.onChange((value) => {
+					this.stopTimeline();
+					const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
+					this.setYearLimit(known.length > 0 && value >= Math.max(...known) ? null : value);
+				});
+			})
+			.addExtraButton((button) =>
+				button
+					.setIcon('play')
+					.setTooltip('Play: the literature year by year')
+					.onClick(() => this.playTimeline()),
+			);
+		this.describeTimeline();
+		this.register(() => this.stopTimeline());
 		new Setting(body)
 			.setName('Idle animation')
 			.setDesc('Starts by itself after a while without input (see the plugin settings). Keep the mouse still to watch it.')
@@ -1552,7 +1652,12 @@ export class LiteratureGraphView extends ItemView {
 			// hovered work's arrows thicker.
 			const arrow = scale > ARROW_MIN_SCALE ? ARROW_SIZE / Math.max(scale, 1) : 0;
 			// In the idle animation, the edges of works not there yet are not drawn.
-			const hidden = this.idle.level > 0 ? this.idleHiddenEdge : undefined;
+			const hidden =
+				this.yearLimit !== null
+					? (link: SimLink) => this.outOfTime(link.source) || this.outOfTime(link.target) || (this.idle.level > 0 && this.idleHiddenEdge(link))
+					: this.idle.level > 0
+						? this.idleHiddenEdge
+						: undefined;
 			this.vaultEdges.update(EDGE_WIDTH / scale, arrow, hidden);
 			this.outsideEdges.update(EDGE_WIDTH / scale, arrow, hidden);
 			this.focusOutEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
@@ -1581,6 +1686,7 @@ export class LiteratureGraphView extends ItemView {
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
 			sprite.tint = base.color;
 			sprite.alpha = base.alpha * (near ? 1 : lerp(1, 0.2)) * (this.matches(node) ? 1 : 0.2);
+			sprite.visible = !this.outOfTime(node);
 		}
 
 		// Labels: the vault's works fade in with the zoom; around a hovered node,
@@ -1592,6 +1698,10 @@ export class LiteratureGraphView extends ItemView {
 		for (const node of this.nodes) {
 			const label = node.label;
 			if (!label) continue;
+			if (this.outOfTime(node)) {
+				label.visible = false;
+				continue;
+			}
 			const normal = this.filter
 				? this.matches(node)
 					? 1
@@ -1664,7 +1774,7 @@ export class LiteratureGraphView extends ItemView {
 		let best: SimNode | null = null;
 		let bestGap = Infinity;
 		for (const node of this.nodes) {
-			if (node.x === undefined || node.y === undefined) continue;
+			if (node.x === undefined || node.y === undefined || this.outOfTime(node)) continue;
 			const reach = Math.max(node.radius + HIT_SLACK / scale, MIN_HIT_RADIUS / scale);
 			const d = Math.hypot(node.x - p.x, node.y - p.y);
 			if (d > reach) continue;
