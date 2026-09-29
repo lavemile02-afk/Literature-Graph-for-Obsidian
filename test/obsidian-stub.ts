@@ -21,3 +21,7 @@ export const requestUrl = () => Promise.reject(new Error('No network in tests'))
 export const debounce = <T extends unknown[]>(fn: (...args: T) => unknown) => fn;
 export const getAllTags = () => [];
 export const setIcon = () => undefined;
+export function parseFrontMatterAliases(frontmatter: { aliases?: unknown } | null): string[] | null {
+	const a = frontmatter?.aliases;
+	return Array.isArray(a) ? a.map(String) : typeof a === 'string' ? [a] : null;
+}

@@ -28,19 +28,25 @@ export interface BibEntry {
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const SECTION_TITLE =
-	/^(?:\d+(?:\.\d+)*\.?\s+)?(references(?: cited)?|literature cited|cited literature|works cited|bibliography|bibliographie|references and notes|further readings?|suggested readings?|sources|références(?: bibliographiques| citées)?|liste des références|lectures suggérées|literatur(?:verzeichnis)?)\s*:?$/i;
+	/^(?:\d+(?:\.\d+)*\.?\s+)?(references(?: cited)?|literature cited|cited literature|works cited|bibliography|bibliographie|references and notes|further readings?|suggested readings?|sources|références(?: bibliographiques| citées| directes)?|liste des références|lectures suggérées|lectures complémentaires|literatur(?:verzeichnis)?)\s*:?$/i;
 const BOLD_TITLE = /^\*\*([^*]+)\*\*\s*:?\s*$/;
-// List markers and numbering: "- ", "12. ", "12) ", "[12]", and "12 " before a capital ("1 IUCN (1980)").
-const LIST_MARKER = /^(?:[-*+]\s+|\d{1,4}[.)]\s+|\[\d{1,4}\]\s*|\d{1,3}\s+(?=\p{Lu}))/u;
+// List markers and numbering: "- ", "12. ", "12) ", "[12]", "**30** ", and "12 " before a capital ("1 IUCN (1980)").
+const LIST_MARKER = /^(?:[-*+]\s+|\d{1,4}[.)]\s+|\[\d{1,4}\]\s*|\*\*\d{1,4}\*\*\s+|\d{1,3}\s+(?=\p{Lu}))/u;
+// Editor marks after a name: "(ed)", "(eds.)", "(dir.)", "(Hrsg.)".
+const EDITOR_MARK = /\((?:eds?|dir|hrsg)\.?\)/gi;
 // A DOI may contain balanced parentheses: 10.1016/s0022-1694(97)00037-1.
 const DOI = /\b10\.\d{4,9}\/(?:[^\s"'<>[\],;()]+|\([^\s()<>]*\))+/i;
 const YEAR_IN_PARENS = /\((1[5-9]\d{2}|20\d{2})[a-z]?[),]/;
 const YEAR = /\b(1[5-9]\d{2}|20\d{2})[a-z]?\b/;
 
-/** Heading text without HTML tags, emphasis marks or anchors. */
+/**
+ * Heading text without HTML tags, emphasis marks or anchors. HTML tags are
+ * written in lower case; a word in capitals between angle brackets is text
+ * ("<BIBLIOGRAPHIE>").
+ */
 function plainHeading(text: string): string {
 	return text
-		.replace(/<[^<>]*>/g, '')
+		.replace(/<(\/?)([^<>]*)>/g, (tag: string, _slash: string, inner: string) => (/^\p{Lu}+$/u.test(inner) ? inner : ''))
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
 		.replace(/[*_`]/g, '')
 		.replace(/\{#[^}]*\}\s*$/, '')
@@ -106,7 +112,7 @@ export function parseEntry(raw: string, line: number): BibEntry | null {
 
 	// Authors: the part before the year, split on commas, "&", "and", "et".
 	const yearAt = year ? plain.indexOf(year) : -1;
-	const authorPart = yearAt > 0 ? plain.slice(0, yearAt) : '';
+	const authorPart = yearAt > 0 ? plain.slice(0, yearAt).replace(EDITOR_MARK, ' ') : '';
 	const etAl = /\bet al\b/i.test(authorPart);
 	const authors = firstAuthor
 		? authorPart
@@ -127,6 +133,11 @@ export interface VaultWork {
 	year: string;
 	title: string;
 	doi: string | null;
+	/**
+	 * Other titles of the work, from the note's aliases: the original title of
+	 * a translation, for example, which the reference lists of other works cite.
+	 */
+	otherTitles?: string[];
 }
 
 /** Words of a title that are worth comparing (four letters or more). */
@@ -139,12 +150,19 @@ function titleWords(text: string): string[] {
 		.filter((w) => w.length >= 4);
 }
 
-/** Share of a title's words (four letters or more) found in a text. */
+/**
+ * Share of a title's words (four letters or more) found in a text. A word
+ * also counts when the conversion glued a short word (one to three letters)
+ * in front of it, as in "The biology ofpeatlands"; never when it is only a
+ * part of a longer word ("peat" in "peatlands"), which would match other works.
+ */
 export function titleOverlap(title: string, text: string): number {
 	const words = titleWords(title);
 	if (words.length === 0) return 0;
-	const inText = new Set(titleWords(text));
-	return words.filter((w) => inText.has(w)).length / words.length;
+	const tokens = titleWords(text);
+	const inText = new Set(tokens);
+	const glued = (w: string) => tokens.some((t) => t.length > w.length && t.length - w.length <= 3 && t.endsWith(w));
+	return words.filter((w) => inText.has(w) || glued(w)).length / words.length;
 }
 
 /** Share of the title's words that the entry must contain to match by author and year. */
@@ -167,17 +185,59 @@ export function entryMatches(entry: BibEntry, work: VaultWork): boolean {
 	}
 	if (!entry.year || entry.year !== work.year) return false;
 	if (entry.authors.length === 0 || work.authors.length === 0 || entry.authors[0] !== work.authors[0]) return false;
-	if (work.title) return titleOverlap(work.title, entry.text) >= MIN_TITLE_OVERLAP;
+	const titles = [work.title, ...(work.otherTitles ?? [])].filter((t) => t.trim() !== '');
+	if (titles.length > 0) return titles.some((t) => titleOverlap(t, entry.text) >= MIN_TITLE_OVERLAP);
 	if (entry.etAl) return work.authors.length >= 3;
 	return entry.authors.length === work.authors.length && entry.authors.every((a, i) => a === work.authors[i]);
 }
 
-/** The entries of every reference section of a note, outside code blocks. */
+/**
+ * The entries of every reference section of a note, outside code blocks.
+ * When a note has no reference heading (lost in the conversion), the runs of
+ * lines that look like references are read instead.
+ */
 export function bibliographyEntries(noteText: string): BibEntry[] {
+	const lines = noteText.split('\n');
+	const entries = sectionEntries(lines);
+	return entries.length > 0 ? entries : unheadedEntries(lines);
+}
+
+/** How many of the few lines after a line are reference entries. */
+function entriesAfter(lines: string[], index: number): number {
+	let seen = 0;
+	let found = 0;
+	for (let i = index + 1; i < lines.length && seen < LOOKAHEAD; i++) {
+		const line = (lines[i] ?? '').trim();
+		if (!line || HEADING.test(line)) continue;
+		seen++;
+		if (looksLikeReference(line, i)) found++;
+	}
+	return found;
+}
+
+/**
+ * Whether a line is surely a reference, not a sentence that has a year: it
+ * starts like one (a family name, then a comma or initials), or its first
+ * author is a short name ("Environment Canada. 1993.").
+ */
+function looksLikeReference(line: string, index: number): BibEntry | null {
+	const entry = parseEntry(line, index);
+	if (!entry?.firstAuthor) return null;
+	const text = line.trim().replace(LIST_MARKER, '').trim();
+	return REFERENCE_START.test(text) || entry.firstAuthor.split(/\s+/).length <= 2 ? entry : null;
+}
+
+/** Lines looked at after a heading inside a reference section, and how many must be entries. */
+const LOOKAHEAD = 4;
+const MIN_ENTRIES_AFTER = 2;
+
+function sectionEntries(lines: string[]): BibEntry[] {
 	const entries: BibEntry[] = [];
 	let sectionLevel: number | null = null;
 	let inCode = false;
-	noteText.split('\n').forEach((raw, index) => {
+	/** Line of the last entry, or of the last line joined to it. */
+	let lastLine = -Infinity;
+	lines.forEach((raw, index) => {
 		const line = raw.trimEnd();
 		if (/^\s*(```|~~~)/.test(line)) inCode = !inCode;
 		if (inCode) return;
@@ -185,7 +245,12 @@ export function bibliographyEntries(noteText: string): BibEntry[] {
 		if (heading) {
 			const level = heading[1]?.length ?? 1;
 			if (isReferenceHeading(heading[2] ?? '')) sectionLevel = level;
-			else if (sectionLevel !== null && level <= sectionLevel) sectionLevel = null;
+			else if (sectionLevel !== null && level <= sectionLevel) {
+				// A heading of the same level inside the section ("General",
+				// "Laws", or a page header of the converted PDF) keeps it open
+				// when references follow; another section closes it.
+				if (entriesAfter(lines, index) < MIN_ENTRIES_AFTER) sectionLevel = null;
+			}
 			return;
 		}
 		const bold = BOLD_TITLE.exec(line.trim());
@@ -195,10 +260,73 @@ export function bibliographyEntries(noteText: string): BibEntry[] {
 		}
 		if (sectionLevel === null) return;
 		const entry = parseEntry(line, index);
-		if (entry) entries.push(entry);
+		if (entry) {
+			entries.push(entry);
+			lastLine = index;
+			return;
+		}
+		// The conversion sometimes breaks one entry into two list items
+		// ("- Gorham, E. 1991. Northern peatlands: role in the carbon", a blank
+		// line, "- cycle and probable responses…"). A line that is not an entry
+		// by itself, right after one, is the rest of it.
+		const previous = entries[entries.length - 1];
+		const rest = line.trim().replace(LIST_MARKER, '').trim();
+		if (!previous || index - lastLine > MAX_CONTINUATION_GAP || !rest || /^[![|<]/.test(rest)) return;
+		const joined = `${previous.text} ${rest}`;
+		if (joined.length > MAX_ENTRY_LENGTH) return;
+		const merged = parseEntry(joined, previous.line);
+		if (!merged) return;
+		entries[entries.length - 1] = merged;
+		lastLine = index;
 	});
 	return entries;
 }
+
+/**
+ * A line that starts like a reference: a family name followed by a comma or
+ * initials ("Gorham, E. 1991.", "**Bragg, O. M. 1995.**", "Waddington JM,").
+ */
+const REFERENCE_START = /^(?:\*\*)?\p{Lu}[\p{L}'’-]+(?:\s\p{Lu}[\p{L}'’-]+)?(?:,\s*\p{Lu}|\s\p{Lu}{1,3}[,.\s])/u;
+/** Lines of a note without a reference heading are read as references in runs of at least this many. */
+const MIN_UNHEADED_RUN = 5;
+
+/**
+ * References of a note whose reference heading was lost: runs of at least
+ * MIN_UNHEADED_RUN lines that start like a reference and read as entries,
+ * with blank lines (and at most one other line, such as a page header)
+ * between them.
+ */
+function unheadedEntries(lines: string[]): BibEntry[] {
+	const found: BibEntry[] = [];
+	let run: BibEntry[] = [];
+	let others = 0;
+	const close = () => {
+		if (run.length >= MIN_UNHEADED_RUN) found.push(...run);
+		run = [];
+		others = 0;
+	};
+	let inCode = false;
+	lines.forEach((raw, index) => {
+		const line = raw.trim();
+		if (/^(```|~~~)/.test(line)) inCode = !inCode;
+		if (inCode || !line) return;
+		const text = line.replace(LIST_MARKER, '').trim();
+		const entry = REFERENCE_START.test(text) ? parseEntry(line, index) : null;
+		if (entry?.firstAuthor) {
+			// (Here only lines that start like a reference count: without a
+			// heading, a short name followed by a year is too often a sentence.)
+			run.push(entry);
+			others = 0;
+		} else if (++others > 1) close();
+	});
+	close();
+	return found;
+}
+
+/** A continuation of an entry is at most this many lines after it (one blank line between). */
+const MAX_CONTINUATION_GAP = 2;
+/** Longer "entries" are not joined further: a paragraph, not a reference. */
+const MAX_ENTRY_LENGTH = 1500;
 
 /** A family name reduced for comparison: no accents, case, spaces or punctuation. */
 export function nameKey(name: string): string {

@@ -1,4 +1,4 @@
-import { App, Events, TAbstractFile, TFile, TFolder } from 'obsidian';
+import { App, Events, parseFrontMatterAliases, TAbstractFile, TFile, TFolder } from 'obsidian';
 import { BibEntry, VaultWork, bibliographyEntries, entryMatches, isReferenceHeading, nameKey } from './bibliography';
 import { CITE_URL_PREFIX, CitationTarget } from './citation';
 import { CitationLink, citationLinksIn } from './links';
@@ -91,6 +91,7 @@ export class CitationIndex extends Events {
 			year: read(s.yearProperty),
 			title: read(s.titleProperty),
 			doi: this.doiByPath.get(file.path) ?? null,
+			otherTitles: parseFrontMatterAliases(fm) ?? [],
 		};
 	}
 
@@ -138,7 +139,7 @@ export class CitationIndex extends Events {
 	private describe(file: TFile): string {
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 		const s = this.settings();
-		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, s.referenceProperty]
+		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, s.referenceProperty, 'aliases']
 			.map((key) => JSON.stringify(fm[key] ?? null))
 			.join('|');
 	}

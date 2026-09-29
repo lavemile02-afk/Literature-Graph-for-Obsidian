@@ -129,3 +129,83 @@ test('matches an entry whose DOI was cut short, by author, year and title', asyn
 	);
 	assert.ok(other && !entryMatches(other, work));
 });
+
+test('matches the original title of a translation, given as another title', async () => {
+	const { entryMatches, parseEntry } = await import('../src/bibliography');
+	const entry = parseEntry(
+		'Quinty, F., & Rochefort, L. (2003). Peatland restoration guide (2nd ed.). Canadian Sphagnum Peat Moss Association.',
+		0,
+	);
+	const work = { authors: ['quinty', 'rochefort'], year: '2003', title: 'Guide de restauration des tourbières', doi: null };
+	assert.ok(entry && !entryMatches(entry, work));
+	assert.ok(entry && entryMatches(entry, { ...work, otherTitles: ['Peatland restoration guide'] }));
+});
+
+test('counts a title word glued to a short word, not a word inside a longer one', async () => {
+	const { titleOverlap } = await import('../src/bibliography');
+	assert.equal(titleOverlap('The Biology of Peatlands', 'Rydin, H. et J. Jeglum. 2006. The biology ofpeatlands.'), 1);
+	assert.equal(titleOverlap('Peat oxidation', 'Waddington, J.M. 2002. Cutover peatlands: a persistent source.'), 0);
+});
+
+test('joins an entry broken over two list items', async () => {
+	const { bibliographyEntries } = await import('../src/bibliography');
+	const note = [
+		'## References',
+		'- Gorham, E. 1991. Northern peatlands: role in the carbon',
+		'',
+		'- cycle and probable responses to climatic warming. Ecological Applications **1**:182–195.',
+		'- Harte, J. 1995. Global warming and soil microclimate. Ecological Applications **5**:132–150.',
+	].join('\n');
+	const entries = bibliographyEntries(note);
+	assert.equal(entries.length, 2);
+	assert.match(entries[0]?.text ?? '', /carbon cycle and probable responses/);
+	assert.equal(entries[0]?.line, 1);
+});
+
+test('keeps a reference section open over its sub-headings, and reads <CAPITALS> headings', async () => {
+	const { bibliographyEntries, isReferenceHeading } = await import('../src/bibliography');
+	assert.ok(isReferenceHeading('**<BIBLIOGRAPHIE>**'));
+	assert.ok(isReferenceHeading('<sup>106</sup> Références directes'));
+	const note = [
+		'### **7 Références**',
+		'### *Général*',
+		'Chapman, D. 2002. Peatlands and Environmental Change. John Wiley and Sons, Chichester.',
+		'Gorham, E. 1991. Northern peatlands: role in the carbon cycle. Ecological Applications.',
+		'### *Restauration*',
+		'Price, J. S. 1996. Hydrology and microclimate of a partly restored cutover bog, Québec.',
+		'Price, J. S. 1997. Soil moisture, water tension, and water table relationships.',
+		'### Annexe',
+		'This appendix describes the sites visited in 2002 and their vegetation.',
+		'Its tables list the species found in 1999 in each plot.',
+	].join('\n');
+	assert.deepEqual(
+		bibliographyEntries(note).map((e) => e.firstAuthor),
+		['Chapman', 'Gorham', 'Price', 'Price'],
+	);
+});
+
+test('reads bold numbers and leaves editor marks out of the authors', async () => {
+	const { parseEntry } = await import('../src/bibliography');
+	const numbered = parseEntry('**34** Bell, J.N.B. and Tallis, J.H. (1973) *J. Ecol.* 62, 75–95', 0);
+	assert.deepEqual([numbered?.firstAuthor, numbered?.year, numbered?.authors], ['Bell', '1973', ['bell', 'tallis']]);
+	const edited = parseEntry('Stearns SC (ed) (1999) Evolution in health and disease. Oxford University Press, Oxford', 0);
+	assert.deepEqual(edited?.authors, ['stearns']);
+});
+
+test('reads a reference list whose heading was lost, but not scattered citations', async () => {
+	const { bibliographyEntries } = await import('../src/bibliography');
+	const refs = [
+		'**Bragg, O. M. 1995.** Towards an ecohydrological basis for raised mire restoration.',
+		'**Campbell, D. R., Lavoie, C. and Rochefort, L. 2002.** Wind erosion and surface stability.',
+		'**Environment Canada. 1993.** Canadian climate normals, 1961–1990.',
+		'**Gilmer, A. J., Ward, S. M. and Farrell, E. P. 1998.** Restoration peatland carbon sequestration.',
+		'**Gorham, E. 1991.** Northern peatlands: role in the carbon cycle.',
+		'**Price, J. S. 1997.** Soil moisture, water tension, and water table relationships.',
+	];
+	const note = ['# Results', 'Price (1996) found that the water table fell.', '', '# ACKNOWLEDGEMENTS', 'Thanks to A. B.', '', ...refs.flatMap((r) => [r, ''])].join('\n');
+	const entries = bibliographyEntries(note);
+	assert.equal(entries.length, 5); // "Environment Canada. 1993." does not start like a person's name
+	assert.ok(entries.every((e) => e.line >= 6));
+	// Fewer than five reference-like lines in a row are not a reference list.
+	assert.equal(bibliographyEntries(['# Text', ...refs.slice(0, 3)].join('\n')).length, 0);
+});
