@@ -14,6 +14,7 @@ import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
 import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
+import { appearanceOrder, fitSphere, projectOnSphere, Sphere } from './sphere';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -128,6 +129,17 @@ const MAX_NEIGHBOR_LABELS = 40;
 const SUGGESTIONS_PAGE = 100;
 /** Zoom at least to this scale when going to a work found by the search field. */
 const SEARCH_SCALE = 1.2;
+/** Idle animation: seconds to fold the graph onto the sphere, and to unfold it. */
+const IDLE_FOLD_SECONDS = 1.5;
+const IDLE_UNFOLD_SECONDS = 0.4;
+/** Seconds for every work to appear, one by one, on the sphere. */
+const APPEAR_SECONDS = 25;
+/** Radians per second of rotation for each step of the speed setting. */
+const ROTATION_STEP = 0.04;
+/** Share of the view the sphere fills. */
+const SPHERE_FILL = 0.8;
+/** Alpha of the works at the back of the sphere. */
+const BACK_ALPHA = 0.25;
 /** Share of the way the hover highlight moves at each frame (a fade of about 150 ms). */
 const FOCUS_FADE_STEP = 0.3;
 /** Share of the way the camera and the wheel zoom move at each frame. */
@@ -185,16 +197,17 @@ class EdgeMesh {
 		this.mesh.visible = links.length > 0;
 	}
 
-	/** Moves the edges to their nodes' current positions. */
-	update(width: number, arrow: number): void {
+	/** Moves the edges to their nodes' current positions; `hidden` edges are drawn as nothing. */
+	update(width: number, arrow: number, hidden?: (link: SimLink) => boolean): void {
 		if (this.links.length === 0) return;
 		const out = this.positions;
 		const ends = { x1: 0, y1: 0, x2: 0, y2: 0, targetRadius: 0 };
 		this.links.forEach((link, i) => {
 			ends.x1 = link.source.x ?? 0;
 			ends.y1 = link.source.y ?? 0;
-			ends.x2 = link.target.x ?? 0;
-			ends.y2 = link.target.y ?? 0;
+			const hide = hidden?.(link) === true;
+			ends.x2 = hide ? ends.x1 : (link.target.x ?? 0);
+			ends.y2 = hide ? ends.y1 : (link.target.y ?? 0);
 			ends.targetRadius = link.target.radius;
 			writeEdge(out, i, ends, width, arrow);
 		});
@@ -255,6 +268,30 @@ export class LiteratureGraphView extends ItemView {
 	private cameraMode: 'fit' | 'center' | 'work' | null = 'fit';
 	/** The work found with the search field, which the camera goes to. */
 	private searchTarget: SimNode | null = null;
+	/**
+	 * The idle animation (see `sphere.ts`): `level` goes from 0 (flat graph)
+	 * to 1 (sphere) and back; `rank` and `anchor` (by node index) say when
+	 * each work appears, and out of which work it grows.
+	 */
+	private idle = {
+		running: false,
+		level: 0,
+		startedAt: 0,
+		lastFrame: 0,
+		sphere: null as Sphere | null,
+		rank: [] as number[],
+		anchor: [] as (SimNode | null)[],
+		appear: [] as number[],
+		/** Depth of each work on the sphere (1: in front), and its size from the perspective. */
+		front: [] as number[],
+		depthScale: [] as number[],
+		/** The camera before the animation, to go back to. */
+		returnTo: null as Camera | null,
+		/** Started from the panel's button: input is ignored until then, so that the click does not stop it. */
+		graceUntil: 0,
+	};
+	/** When the user last touched Obsidian (mouse or keyboard). */
+	private lastActivity = Date.now();
 	private frameId: number | null = null;
 	private frameWindow: Window | null = null;
 	/** Whether frames stopped because the view was hidden; they resume when it shows again. */
@@ -437,6 +474,7 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
+		this.watchActivity();
 		await this.positions.load();
 		await this.loadData();
 	}
@@ -836,6 +874,182 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
+	 * The idle animation starts after a while without any input in the view's
+	 * window (not only in the view: typing in a note beside the graph counts),
+	 * and any input stops it.
+	 */
+	private watchActivity(): void {
+		const activity = () => {
+			this.lastActivity = Date.now();
+			if (this.idle.running && performance.now() > this.idle.graceUntil) this.stopIdle();
+		};
+		const listen = (doc: Document) => {
+			for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel'] as const) {
+				this.registerDomEvent(doc, type, activity, { capture: true, passive: true });
+			}
+		};
+		listen(this.contentEl.doc);
+		this.registerInterval(
+			window.setInterval(() => {
+				const s = this.settings();
+				const delay = Math.max(3, Number(s.graphIdleDelay) || 10) * 1000;
+				if (!this.idle.running && s.graphIdleAnimation === 'sphere' && Date.now() - this.lastActivity >= delay) this.startIdle();
+			}, 1000),
+		);
+	}
+
+	/** Starts the idle animation, if the view can show it now (`grace`: milliseconds during which input does not stop it). */
+	startIdle(grace = 0): void {
+		const pixi = this.pixi;
+		if (!pixi || this.paused || !this.contentEl.isShown() || this.dragged || this.nodes.length === 0) return;
+		if (this.contentEl.win.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		const placed = this.nodes.filter((n) => n.x !== undefined && n.y !== undefined);
+		const sphere = fitSphere(placed.map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })));
+		const year = (n: SimNode): number | null => {
+			const work = n.data.openAlexId ? this.openAlex.cachedWork(n.data.openAlexId) : null;
+			return work?.year ?? (n.data.entry?.year ? Number.parseInt(n.data.entry.year, 10) || null : null);
+		};
+		const rank = appearanceOrder(this.nodes.map((n) => ({ generation: n.data.generation, year: year(n), citedBy: n.data.citedBy })));
+		// Each work grows out of its neighbor that appears first, if it appears before it.
+		const anchor = this.nodes.map((n) => {
+			let best: SimNode | null = null;
+			for (const m of n.neighbors) {
+				if ((rank[m.index] ?? 0) < (rank[n.index] ?? 0) && (!best || (rank[m.index] ?? 0) < (rank[best.index] ?? 0))) best = m;
+			}
+			return best;
+		});
+		this.idle = {
+			...this.idle,
+			running: true,
+			startedAt: performance.now(),
+			lastFrame: performance.now(),
+			sphere,
+			rank,
+			anchor,
+			appear: this.nodes.map(() => 1),
+			front: this.nodes.map(() => 1),
+			depthScale: this.nodes.map(() => 1),
+			returnTo: this.idle.level > 0 ? this.idle.returnTo : this.getCamera(),
+			graceUntil: performance.now() + grace,
+		};
+		this.setHovered(null);
+		this.requestFrame();
+	}
+
+	/** Stops the idle animation: the flat graph comes back, and the camera where it was. */
+	private stopIdle(): void {
+		this.idle.running = false;
+		this.idle.lastFrame = performance.now();
+		this.requestFrame();
+	}
+
+	/**
+	 * One step of the idle animation: folds or unfolds the graph, turns the
+	 * sphere, makes the works appear, and moves the camera. Returns whether it
+	 * needs more frames.
+	 */
+	private stepIdle(now: number): boolean {
+		const idle = this.idle;
+		if (!idle.running && idle.level === 0) return false;
+		const dt = Math.min(0.1, (now - idle.lastFrame) / 1000);
+		idle.lastFrame = now;
+		idle.level = idle.running
+			? Math.min(1, idle.level + dt / IDLE_FOLD_SECONDS)
+			: Math.max(0, idle.level - dt / IDLE_UNFOLD_SECONDS);
+		const screen = this.pixi?.screen;
+		const sphere = idle.sphere;
+		if (idle.running && screen && sphere) {
+			// The whole sphere in view.
+			const goal = { x: sphere.cx, y: sphere.cy, scale: clampScale((Math.min(screen.width, screen.height) * SPHERE_FILL) / (2 * sphere.radius)) };
+			this.setCamera(approach(this.getCamera(), goal, CAMERA_STEP / 2));
+		} else if (!idle.running && idle.returnTo) {
+			this.setCamera(idle.level === 0 ? idle.returnTo : approach(this.getCamera(), idle.returnTo, CAMERA_STEP * 2));
+		}
+		if (idle.level === 0) {
+			idle.returnTo = null;
+			for (const node of this.nodes) node.sprite.scale.set(node.radius / CIRCLE_TEXTURE_RADIUS);
+		}
+		this.edgesDirty = true;
+		return idle.running || idle.level > 0;
+	}
+
+	/**
+	 * Moves the nodes to where the sphere shows them (for drawing only), and
+	 * returns their layout positions, to put back after drawing.
+	 */
+	private projectIdle(now: number): Float64Array {
+		const idle = this.idle;
+		const saved = new Float64Array(this.nodes.length * 2);
+		const sphere = idle.sphere;
+		if (!sphere) return saved;
+		const s = this.settings();
+		const angle = ((now - idle.startedAt) / 1000) * ROTATION_STEP * Math.max(1, Number(s.graphRotationSpeed) || 5);
+		// How many works have appeared (all of them when stopping, or without the setting).
+		const grown =
+			idle.running && s.graphAppearOneByOne
+				? (Math.max(0, (now - idle.startedAt) / 1000 - IDLE_FOLD_SECONDS) / APPEAR_SECONDS) * this.nodes.length
+				: Infinity;
+		const level = idle.level;
+		const ease = (t: number) => 1 - (1 - t) * (1 - t);
+		const byRank = [...this.nodes].sort((a, b) => (idle.rank[a.index] ?? 0) - (idle.rank[b.index] ?? 0));
+		const shown = new Map<SimNode, { x: number; y: number; scale: number; front: number }>();
+		for (const node of byRank) {
+			const x = node.x ?? 0;
+			const y = node.y ?? 0;
+			saved[node.index * 2] = x;
+			saved[node.index * 2 + 1] = y;
+			const own = projectOnSphere(x, y, sphere, angle);
+			const appear = Math.min(1, Math.max(0, grown - (idle.rank[node.index] ?? 0)));
+			idle.appear[node.index] = appear;
+			// Not fully there yet: on its way out of the work it grows from.
+			const from = appear < 1 ? shown.get(idle.anchor[node.index] ?? node) : undefined;
+			const p = from
+				? { ...own, x: from.x + (own.x - from.x) * ease(appear), y: from.y + (own.y - from.y) * ease(appear) }
+				: own;
+			shown.set(node, p);
+			idle.front[node.index] = own.front;
+			idle.depthScale[node.index] = own.scale;
+			node.x = x + (p.x - x) * level;
+			node.y = y + (p.y - y) * level;
+		}
+		return saved;
+	}
+
+	/**
+	 * Whether an edge is hidden in the idle animation: when one of its works has
+	 * not appeared yet, unless that work is growing out of the other one.
+	 */
+	private readonly idleHiddenEdge = (link: SimLink): boolean => {
+		const a = this.idle.appear[link.source.index] ?? 1;
+		const b = this.idle.appear[link.target.index] ?? 1;
+		if (a >= 1 && b >= 1) return false;
+		const growing = (a < 1 && this.idle.anchor[link.source.index] === link.target) || (b < 1 && this.idle.anchor[link.target.index] === link.source);
+		return !(growing && Math.min(a, b) > 0);
+	};
+
+	/** After drawing the sphere: sizes and alphas by depth and appearance, then the layout positions back. */
+	private finishIdle(saved: Float64Array): void {
+		const idle = this.idle;
+		const level = idle.level;
+		for (const node of this.nodes) {
+			const x = saved[node.index * 2] ?? 0;
+			const y = saved[node.index * 2 + 1] ?? 0;
+			const front = idle.front[node.index] ?? 1;
+			const depthScale = idle.depthScale[node.index] ?? 1;
+			const appear = idle.appear[node.index] ?? 1;
+			const factor = 1 + ((BACK_ALPHA + (1 - BACK_ALPHA) * front) * appear - 1) * level;
+			node.sprite.alpha *= factor;
+			node.sprite.scale.set((node.radius / CIRCLE_TEXTURE_RADIUS) * (1 + (depthScale * Math.max(0.05, appear) - 1) * level));
+			if (node.label?.visible) {
+				node.label.alpha *= factor;
+				if (appear < 1) node.label.visible = false;
+			}
+			node.x = x;
+			node.y = y;
+		}
+	}
+
+	/**
 	 * The search field, at the top left of the view: typing shows the works
 	 * matching the text (authors, year, title); choosing one moves the camera
 	 * to it and highlights it, until the view is moved.
@@ -1123,6 +1337,15 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
+		new Setting(body)
+			.setName('Idle animation')
+			.setDesc('Starts by itself after a while without input (see the plugin settings). Keep the mouse still to watch it.')
+			.addButton((button) =>
+				button.setButtonText('Play').onClick(() => {
+					setOpen(false);
+					this.startIdle(1500);
+				}),
+			);
 		new Setting(body).addButton((button) =>
 			button.setButtonText('Restart layout').onClick(() => {
 				this.layout?.send({ type: 'reheat', alpha: 1 });
@@ -1305,9 +1528,14 @@ export class LiteratureGraphView extends ItemView {
 				if (next.x !== goal.x || next.y !== goal.y || next.scale !== goal.scale) again = true;
 			}
 		}
+		// The idle animation, after the camera: it moves the camera itself.
+		const now = performance.now();
+		if (this.stepIdle(now)) again = true;
 		if (this.world.scale.x !== this.lastEdgeScale) this.edgesDirty = true;
 
+		const saved = this.idle.level > 0 ? this.projectIdle(now) : null;
 		this.draw(theme);
+		if (saved) this.finishIdle(saved);
 		pixi.render();
 		if (again) this.requestFrame();
 	}
@@ -1323,8 +1551,10 @@ export class LiteratureGraphView extends ItemView {
 			// Widths in pixels on screen, whatever the zoom: thin lines, and the
 			// hovered work's arrows thicker.
 			const arrow = scale > ARROW_MIN_SCALE ? ARROW_SIZE / Math.max(scale, 1) : 0;
-			this.vaultEdges.update(EDGE_WIDTH / scale, arrow);
-			this.outsideEdges.update(EDGE_WIDTH / scale, arrow);
+			// In the idle animation, the edges of works not there yet are not drawn.
+			const hidden = this.idle.level > 0 ? this.idleHiddenEdge : undefined;
+			this.vaultEdges.update(EDGE_WIDTH / scale, arrow, hidden);
+			this.outsideEdges.update(EDGE_WIDTH / scale, arrow, hidden);
 			this.focusOutEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
 			this.focusInEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
 		}

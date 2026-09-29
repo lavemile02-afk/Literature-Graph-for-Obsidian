@@ -44,6 +44,14 @@ export interface LiteratureGraphSettings {
 	graphOutsideColor: string;
 	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
 	graphIncomingColor: string;
+	/** Animation after a while without input: "none" or "sphere". */
+	graphIdleAnimation: string;
+	/** Seconds without any input before the idle animation starts. */
+	graphIdleDelay: number;
+	/** Speed of the sphere's rotation, from 1 to 20. */
+	graphRotationSpeed: number;
+	/** In the idle animation, the works appear one by one. */
+	graphAppearOneByOne: boolean;
 	/** Also show the notes outside the literature folder linked by citation links. */
 	graphAllNotes: boolean;
 	/** Citations of the graph found in citation links, reference lists, OpenAlex. */
@@ -80,6 +88,10 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphLayout: 'default',
 	graphOutsideColor: '',
 	graphIncomingColor: '',
+	graphIdleAnimation: 'sphere',
+	graphIdleDelay: 10,
+	graphRotationSpeed: 5,
+	graphAppearOneByOne: true,
 	graphAllNotes: false,
 	graphEdgeLinks: true,
 	graphEdgeBibliographies: true,
@@ -239,6 +251,26 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Color of citing works',
 						desc: 'When you hover a work, the arrows of the works it cites take the accent color, and those of the works citing it take this color. Any CSS color. Empty: the theme\'s orange.',
 						control: { type: 'text', key: 'graphIncomingColor', placeholder: 'Theme orange' },
+					},
+					{
+						name: 'Idle animation',
+						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph wraps itself around a sphere that turns slowly; any input brings the flat graph back at once. Never when your system asks for reduced motion.',
+						control: { type: 'dropdown', key: 'graphIdleAnimation', options: { sphere: 'Rotating sphere', none: 'None' } },
+					},
+					{
+						name: 'Idle delay',
+						desc: 'Seconds without any input before the idle animation starts.',
+						control: { type: 'number', key: 'graphIdleDelay', min: 3 },
+					},
+					{
+						name: 'Rotation speed',
+						desc: 'How fast the sphere turns.',
+						control: { type: 'slider', key: 'graphRotationSpeed', min: 1, max: 20, step: 1 },
+					},
+					{
+						name: 'Works appear one by one',
+						desc: 'In the idle animation, the graph starts empty and the works appear one by one, growing out of the work that cites them: the works of the vault first, then the others, oldest first.',
+						control: { type: 'toggle', key: 'graphAppearOneByOne' },
 					},
 				],
 			},
