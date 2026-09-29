@@ -70,9 +70,13 @@
 
 .literature-graph-view-hint {
 	position: absolute;
-	left: var(--size-4-3);
-	right: var(--size-4-3);
+	left: var(--size-4-2);
 	bottom: calc(var(--size-4-2) + 1.6em);
+	max-width: calc(100% - var(--size-4-4));
+	padding: var(--size-2-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	/* Readable over the graph's lines, in the theme's colors. */
+	background-color: color-mix(in srgb, var(--background-primary) 85%, transparent);
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
 	pointer-events: none;
@@ -87,6 +91,12 @@
 
 .literature-graph-view-hint-action {
 	color: var(--text-muted);
+}
+
+/* "→ cites 5 · ← cited by 3", each in the color of its arrows (set by the view). */
+.literature-graph-view-hint-arrow {
+	color: var(--literature-graph-arrow, var(--text-muted));
+	font-weight: var(--font-semibold);
 }
 
 .literature-graph-controls {

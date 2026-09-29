@@ -126,7 +126,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 	/** Called when a setting changes in the settings tab. */
 	onSettingsChanged() {
 		for (const leaf of this.app.workspace.getLeavesOfType(GRAPH_VIEW)) {
-			if (leaf.view instanceof LiteratureGraphView) leaf.view.applyColorGroups();
+			if (leaf.view instanceof LiteratureGraphView) leaf.view.applySettings();
 		}
 	}
 

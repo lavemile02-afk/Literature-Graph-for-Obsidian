@@ -3,6 +3,7 @@ import { Application, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Tex
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
 import { ColorGroup, colorFor, formatColorGroups, parseColorGroups } from './colorGroups';
+import { hexColor, mixColor } from './colors';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
@@ -52,8 +53,12 @@ interface ThemeColor {
 
 interface Theme {
 	node: ThemeColor;
-	unresolved: ThemeColor;
+	/** Works outside the vault (generation 1), and those of generation 2. */
+	outside: ThemeColor;
+	outside2: ThemeColor;
 	focused: ThemeColor;
+	/** Arrows of the works citing the hovered work. */
+	incoming: ThemeColor;
 	line: ThemeColor;
 	text: ThemeColor;
 	fontFamily: string;
@@ -103,6 +108,10 @@ const FOCUS_FADE_STEP = 0.3;
 /** Share of the way the camera and the wheel zoom move at each frame. */
 const CAMERA_STEP = 0.14;
 const ZOOM_STEP = 0.3;
+/** How far the color of works outside the vault goes toward the background (0: the notes' color, 1: the background). */
+const OUTSIDE_BLEND = 0.5;
+/** And those of generation 2, further from generation 1's color. */
+const GENERATION_2_BLEND = 0.3;
 /** Alpha of the edges that do not touch the hovered node. */
 const DIMMED_EDGE_ALPHA = 0.08;
 /** Arrowhead size, in pixels on screen; arrowheads are hidden when zoomed out past this scale. */
@@ -182,7 +191,9 @@ export class LiteratureGraphView extends ItemView {
 	private readonly world = new Container();
 	private readonly vaultEdges = new EdgeMesh();
 	private readonly outsideEdges = new EdgeMesh();
-	private readonly focusEdges = new EdgeMesh();
+	/** Arrows of the hovered work: to the works it cites, and from the works citing it. */
+	private readonly focusOutEdges = new EdgeMesh();
+	private readonly focusInEdges = new EdgeMesh();
 	private readonly nodesLayer = new Container();
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
@@ -338,7 +349,8 @@ export class LiteratureGraphView extends ItemView {
 		this.world.addChild(
 			this.outsideEdges.mesh,
 			this.vaultEdges.mesh,
-			this.focusEdges.mesh,
+			this.focusInEdges.mesh,
+			this.focusOutEdges.mesh,
 			this.nodesLayer,
 			this.labelsLayer,
 		);
@@ -390,13 +402,27 @@ export class LiteratureGraphView extends ItemView {
 		this.pixi = null;
 	}
 
+	/**
+	 * Reads the colors of the theme (Obsidian's graph variables), and those of
+	 * the settings. Works outside the vault are the notes' color blended with
+	 * the background (darker on a dark theme, paler on a light one), so the
+	 * works you have stand out; the settings may give other colors.
+	 */
 	private readTheme(): void {
-		const style = getComputedStyle(activeDocument.body);
+		const style = getComputedStyle(this.contentEl.doc.body);
 		const v = (name: string) => style.getPropertyValue(name);
+		const s = this.settings();
+		const node = parseCssColor(v('--graph-node'), '#999999');
+		const background = parseCssColor(v('--background-primary'), '#202020');
+		const outside = s.graphOutsideColor.trim()
+			? parseCssColor(s.graphOutsideColor, '#666666')
+			: { color: mixColor(node.color, background.color, OUTSIDE_BLEND), alpha: node.alpha };
 		this.theme = {
-			node: parseCssColor(v('--graph-node'), '#999999'),
-			unresolved: parseCssColor(v('--graph-node-unresolved'), '#666666'),
+			node,
+			outside,
+			outside2: { color: mixColor(outside.color, background.color, GENERATION_2_BLEND), alpha: outside.alpha },
 			focused: parseCssColor(v('--graph-node-focused'), '#7f6df2'),
+			incoming: parseCssColor(s.graphIncomingColor.trim() || v('--color-orange'), '#e0913a'),
 			line: parseCssColor(v('--graph-line'), '#555555'),
 			text: parseCssColor(v('--graph-text'), '#dddddd'),
 			fontFamily: v('--font-interface') || 'sans-serif',
@@ -612,6 +638,12 @@ export class LiteratureGraphView extends ItemView {
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
 		this.invalidate();
+	}
+
+	/** The settings changed: colors of the theme and of the settings, and color groups. */
+	applySettings(): void {
+		this.readTheme();
+		this.applyColorGroups();
 	}
 
 	/** Gives each note of the vault the color of its color group (settings). */
@@ -1028,12 +1060,14 @@ export class LiteratureGraphView extends ItemView {
 			const arrow = scale > ARROW_MIN_SCALE ? ARROW_SIZE / Math.max(scale, 1) : 0;
 			this.vaultEdges.update(width, arrow);
 			this.outsideEdges.update(width, arrow);
-			this.focusEdges.update(width * 1.5, arrow);
+			this.focusOutEdges.update(width * 1.5, arrow);
+			this.focusInEdges.update(width * 1.5, arrow);
 		}
 		const lerp = (a: number, b: number) => a + (b - a) * level;
 		this.vaultEdges.style(theme.line, lerp(theme.line.alpha, DIMMED_EDGE_ALPHA));
 		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45, DIMMED_EDGE_ALPHA));
-		this.focusEdges.style(theme.focused, theme.focused.alpha * level);
+		this.focusOutEdges.style(theme.focused, theme.focused.alpha * level);
+		this.focusInEdges.style(theme.incoming, theme.incoming.alpha * level);
 
 		for (const node of this.nodes) {
 			const near = !focus || node === focus || focus.neighbors.has(node);
@@ -1042,12 +1076,13 @@ export class LiteratureGraphView extends ItemView {
 					? theme.focused
 					: node.data.generation === 0
 						? (node.groupColor ?? theme.node)
-						: theme.unresolved;
-			const genAlpha = node.data.generation === 2 ? 0.55 : 1;
+						: node.data.generation === 1
+							? theme.outside
+							: theme.outside2;
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
 			sprite.tint = base.color;
-			sprite.alpha = base.alpha * genAlpha * (near ? 1 : lerp(1, 0.2)) * (this.matches(node) ? 1 : 0.2);
+			sprite.alpha = base.alpha * (near ? 1 : lerp(1, 0.2)) * (this.matches(node) ? 1 : 0.2);
 		}
 
 		// Labels: the vault's works fade in with the zoom; around a hovered node,
@@ -1094,10 +1129,14 @@ export class LiteratureGraphView extends ItemView {
 		candidates.forEach((c, i) => (c.label.visible = shown[i] ?? false));
 	}
 
-	/** The edges of the highlighted node, drawn over the others in the focus color. */
+	/**
+	 * The edges of the highlighted node, drawn over the others: to the works it
+	 * cites in the accent color, from the works citing it in the incoming color.
+	 */
 	private updateFocusEdges(): void {
 		const focus = this.shownFocus;
-		this.focusEdges.setLinks(focus ? this.links.filter((l) => l.source === focus || l.target === focus) : []);
+		this.focusOutEdges.setLinks(focus ? this.links.filter((l) => l.source === focus) : []);
+		this.focusInEdges.setLinks(focus ? this.links.filter((l) => l.target === focus) : []);
 		this.edgesDirty = true;
 	}
 
@@ -1163,6 +1202,20 @@ export class LiteratureGraphView extends ItemView {
 		if (!node) return;
 		const title = node.data.title && node.data.title !== node.data.label ? ` — ${node.data.title}` : '';
 		hint.createSpan({ cls: 'literature-graph-view-hint-title', text: `${node.data.label}${title}` });
+		// Legend of the arrows, in their colors: the works it cites, the works citing it.
+		const cites = this.links.filter((l) => l.source === node).length;
+		const citedBy = this.links.filter((l) => l.target === node).length;
+		const theme = this.theme;
+		if (theme && (cites > 0 || citedBy > 0)) {
+			hint.appendText(' · ');
+			hint.createSpan({ cls: 'literature-graph-view-hint-arrow', text: `→ cites ${cites}` }).setCssProps({
+				'--literature-graph-arrow': hexColor(theme.focused.color),
+			});
+			hint.appendText(' · ');
+			hint.createSpan({ cls: 'literature-graph-view-hint-arrow', text: `← cited by ${citedBy}` }).setCssProps({
+				'--literature-graph-arrow': hexColor(theme.incoming.color),
+			});
+		}
 		const action = this.openAction(node);
 		if (action) hint.createSpan({ cls: 'literature-graph-view-hint-action', text: ` · ${action}` });
 	}

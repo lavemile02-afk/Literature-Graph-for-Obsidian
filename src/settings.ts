@@ -33,6 +33,10 @@ export interface LiteratureGraphSettings {
 	graphMaxNodes: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
+	/** Color of the works outside the vault (any CSS color); empty: from the theme. */
+	graphOutsideColor: string;
+	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
+	graphIncomingColor: string;
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
@@ -51,6 +55,8 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
 	graphColorGroups: '',
+	graphOutsideColor: '',
+	graphIncomingColor: '',
 };
 
 export class LiteratureGraphSettingTab extends PluginSettingTab {
@@ -153,6 +159,16 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 							key: 'graphColorGroups',
 							placeholder: 'tag:#review = #d9a441\n[Type:Book] = rgb(120, 170, 220)',
 						},
+					},
+					{
+						name: 'Color of works outside the vault',
+						desc: 'Any CSS color. Empty: the color of the notes blended with the background, so the works you have stand out; works of generation 2 are blended further.',
+						control: { type: 'text', key: 'graphOutsideColor', placeholder: 'Theme color' },
+					},
+					{
+						name: 'Color of citing works',
+						desc: 'When you hover a work, the arrows of the works it cites take the accent color, and those of the works citing it take this color. Any CSS color. Empty: the theme\'s orange.',
+						control: { type: 'text', key: 'graphIncomingColor', placeholder: 'Theme orange' },
 					},
 				],
 			},
