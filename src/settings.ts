@@ -30,8 +30,12 @@ export interface LiteratureGraphSettings {
 	graphGenerations: number;
 	/** A work outside the vault is shown if at least this many works of the graph cite it. */
 	graphMinCitations: number;
-	/** Most nodes in the literature graph. */
+	/** Most nodes in the literature graph; 0: no limit. */
 	graphMaxNodes: number;
+	/** Forces of the graph's layout, by default (the graph's panel changes them for as long as it is open). */
+	graphRepel: number;
+	graphLinkDistance: number;
+	graphCenter: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
 	/** Style of layout of the graph: "default" or "atom". */
@@ -57,6 +61,9 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphGenerations: 0,
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
+	graphRepel: 90,
+	graphLinkDistance: 60,
+	graphCenter: 0.02,
 	graphColorGroups: '',
 	graphLayout: 'default',
 	graphOutsideColor: '',
@@ -142,7 +149,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 				items: [
 					{
 						name: 'Layout',
-						desc: 'Default graph: every work repels the others, as in Obsidian\'s graph view. Atom graph: each work of the vault is a nucleus with a cloud of the works only it cites, and clouds do not overlap. Can be changed in the graph for the time it stays open.',
+						desc: 'Default graph: every work repels the others, as in Obsidian\'s graph view. Atom graph: each work of the vault is a nucleus, alone at the center of a circle of the works it cites; atoms do not overlap. Can be changed in the graph for the time it stays open.',
 						control: { type: 'dropdown', key: 'graphLayout', options: { ...LAYOUT_STYLES } },
 					},
 					{
@@ -157,8 +164,23 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Node limit',
-						desc: 'At most this many works in the graph; the most cited works outside the vault are kept. Large graphs take longer to load and to lay out.',
-						control: { type: 'number', key: 'graphMaxNodes', min: 100 },
+						desc: 'At most this many works in the graph; the most cited works outside the vault are kept. 0: no limit. Large graphs take longer to load (each work outside the vault is fetched once from OpenAlex, then kept) and to lay out; tens of thousands of works need a fast computer.',
+						control: { type: 'number', key: 'graphMaxNodes', min: 0 },
+					},
+					{
+						name: 'Repel force',
+						desc: 'How strongly works push each other away (atoms, in the atom graph). Can be changed in the graph for the time it stays open.',
+						control: { type: 'slider', key: 'graphRepel', min: 10, max: 300, step: 10 },
+					},
+					{
+						name: 'Link distance',
+						desc: 'Length of the citations (in the atom graph: the room between atoms). Can be changed in the graph for the time it stays open.',
+						control: { type: 'slider', key: 'graphLinkDistance', min: 20, max: 200, step: 10 },
+					},
+					{
+						name: 'Center force',
+						desc: 'How strongly every work is pulled toward the middle: higher for a tighter, rounder graph, lower to spread it. Can be changed in the graph for the time it stays open.',
+						control: { type: 'slider', key: 'graphCenter', min: 0, max: 0.2, step: 0.005 },
 					},
 					{
 						name: 'Color groups',

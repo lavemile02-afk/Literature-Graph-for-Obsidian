@@ -59,8 +59,23 @@ test('puts shared works at the edge of their cloud, even when they are larger', 
 	];
 	const atoms = buildAtoms(ns, ls, 16);
 	assert.equal(atoms.nucleus[4], 0);
+	// On the circle of its atom, like the others.
 	const dist = (i: number) => Math.hypot(atoms.dx[i] ?? 0, atoms.dy[i] ?? 0);
-	assert.ok(dist(4) > dist(2) && dist(4) > dist(3));
+	assert.ok(Math.abs(dist(4) - dist(2)) < 1e-3);
+});
+
+test('puts the electrons of a generation on one circle, with the nucleus alone inside', () => {
+	const count = 60;
+	const ns = [{ generation: 0, radius: 6 }, ...Array.from({ length: count }, () => ({ generation: 1, radius: 2 }))];
+	const ls = ns.slice(1).map((_, i) => ({ source: 0, target: i + 1 }));
+	const atoms = buildAtoms(ns, ls, 16);
+	const dists = ns.slice(1).map((_, i) => Math.hypot(atoms.dx[i + 1] ?? 0, atoms.dy[i + 1] ?? 0));
+	const radius = dists[0] ?? 0;
+	assert.ok(dists.every((d) => Math.abs(d - radius) < 1e-3), 'all on one circle');
+	assert.ok(radius > 30, 'room around the nucleus');
+	// Neighbors on the circle are one spacing apart.
+	const gap = Math.hypot((atoms.dx[1] ?? 0) - (atoms.dx[2] ?? 0), (atoms.dy[1] ?? 0) - (atoms.dy[2] ?? 0));
+	assert.ok(Math.abs(gap - 16) < 0.5, `gap ${gap}`);
 });
 
 test('places electrons in their cloud, generation 1 inside, and sizes clouds by their electrons', () => {
@@ -70,13 +85,14 @@ test('places electrons in their cloud, generation 1 inside, and sizes clouds by 
 	assert.ok(dist(2) < dist(6), 'generation 2 outside generation 1');
 });
 
-test('keeps the density of clouds the same: the radius grows as the square root of the electrons', () => {
-	const many = (count: number) => {
+test('makes the circle as long as its electrons need: four times the works, four times the radius', () => {
+	const ring = (count: number) => {
 		const ns = [{ generation: 0, radius: 6 }, ...Array.from({ length: count }, () => ({ generation: 1, radius: 2 }))];
 		const ls = ns.slice(1).map((_, i) => ({ source: 0, target: i + 1 }));
-		return buildAtoms(ns, ls, 16).cloud[0] ?? 0;
+		const atoms = buildAtoms(ns, ls, 16);
+		return Math.hypot(atoms.dx[1] ?? 0, atoms.dy[1] ?? 0);
 	};
-	const small = many(25) - 14;
-	const large = many(100) - 14;
-	assert.ok(Math.abs(large / small - 2) < 0.25, `${small} → ${large}`);
+	const small = ring(25);
+	const large = ring(100);
+	assert.ok(Math.abs(large / small - 4) < 0.1, `${small} → ${large}`);
 });

@@ -89,6 +89,13 @@ function cssToHex(css: string): string {
 /** Colors given to new groups, in turn. */
 const GROUP_PALETTE = ['#d9a441', '#6fa8dc', '#8fbc6a', '#d4736a', '#b48ecf', '#5fb3a8'];
 
+/** The node limit of the settings: 0 (or empty) means no limit; otherwise at least 100. */
+function maxNodesOf(setting: unknown): number {
+	const value = Number(setting);
+	if (!Number.isFinite(value)) return 3000;
+	return value <= 0 ? Infinity : Math.max(100, value);
+}
+
 /** Starting zoom of the local graph. */
 const LOCAL_START_SCALE = 1.5;
 /**
@@ -125,6 +132,13 @@ const OUTSIDE_BLEND = 0.5;
 const GENERATION_2_BLEND = 0.3;
 /** Alpha of the edges that do not touch the hovered node. */
 const DIMMED_EDGE_ALPHA = 0.08;
+/** Width of lines on screen (pixels), and of the hovered work's arrows. */
+const EDGE_WIDTH = 0.6;
+const FOCUS_EDGE_WIDTH = 1.5;
+/** Lines fade from full at this zoom (and closer) to EDGE_FADE_MIN of their alpha at EDGE_FADE_FROM (and farther). */
+const EDGE_FADE_TO = 1;
+const EDGE_FADE_FROM = 0.15;
+const EDGE_FADE_MIN = 0.3;
 /** Arrowhead size, in pixels on screen; arrowheads are hidden when zoomed out past this scale. */
 const ARROW_SIZE = 4;
 const ARROW_MIN_SCALE = 0.5;
@@ -280,10 +294,16 @@ export class LiteratureGraphView extends ItemView {
 		this.options = {
 			generations: Number(s.graphGenerations) || 0,
 			minCitations: Math.max(1, Number(s.graphMinCitations) || 1),
-			maxNodes: Math.max(100, Number(s.graphMaxNodes) || 3000),
+			maxNodes: maxNodesOf(s.graphMaxNodes),
 			localWorks: true,
 		};
 		this.layoutStyle = s.graphLayout in LAYOUT_STYLES ? (s.graphLayout as LayoutStyle) : 'default';
+		const number = (value: unknown, fallback: number) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+		this.forces = {
+			repel: number(s.graphRepel, 90),
+			linkDistance: number(s.graphLinkDistance, 60),
+			center: number(s.graphCenter, 0.02),
+		};
 	}
 
 	getViewType(): string {
@@ -791,6 +811,9 @@ export class LiteratureGraphView extends ItemView {
 		/** Opens or closes the panel; its button is a gear when closed and a cross when open. */
 		const setOpen = (open: boolean) => {
 			panel.toggleClass('is-collapsed', !open);
+			// Closed while scrolled down, the small panel would show only the
+			// scrolled-away part of its content, without its buttons.
+			if (!open) panel.scrollTop = 0;
 			setIcon(toggle, open ? 'x' : 'settings');
 			toggle.setAttribute('aria-label', open ? 'Close graph settings' : 'Open graph settings');
 			// The room left for the graph changed.
@@ -853,7 +876,7 @@ export class LiteratureGraphView extends ItemView {
 			});
 		new Setting(body)
 			.setName('Layout')
-			.setDesc('Default graph, or atoms: each work of the vault with a cloud of the works only it cites.')
+			.setDesc('Default graph, or atoms: each work of the vault at the center of a circle of the works it cites.')
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOptions({ ...LAYOUT_STYLES })
@@ -1133,16 +1156,20 @@ export class LiteratureGraphView extends ItemView {
 		if (this.edgesDirty) {
 			this.edgesDirty = false;
 			this.lastEdgeScale = scale;
-			const width = 1 / Math.max(scale, 0.5);
+			// Widths in pixels on screen, whatever the zoom: thin lines, and the
+			// hovered work's arrows thicker.
 			const arrow = scale > ARROW_MIN_SCALE ? ARROW_SIZE / Math.max(scale, 1) : 0;
-			this.vaultEdges.update(width, arrow);
-			this.outsideEdges.update(width, arrow);
-			this.focusOutEdges.update(width * 1.5, arrow);
-			this.focusInEdges.update(width * 1.5, arrow);
+			this.vaultEdges.update(EDGE_WIDTH / scale, arrow);
+			this.outsideEdges.update(EDGE_WIDTH / scale, arrow);
+			this.focusOutEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
+			this.focusInEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
 		}
 		const lerp = (a: number, b: number) => a + (b - a) * level;
-		this.vaultEdges.style(theme.line, lerp(theme.line.alpha, DIMMED_EDGE_ALPHA));
-		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45, DIMMED_EDGE_ALPHA));
+		// Lines fade as the view zooms out, so the works stay readable; the
+		// hovered work's arrows do not.
+		const zoomFade = Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
+		this.vaultEdges.style(theme.line, lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
+		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.focusOutEdges.style(theme.focused, theme.focused.alpha * level);
 		this.focusInEdges.style(theme.incoming, theme.incoming.alpha * level);
 

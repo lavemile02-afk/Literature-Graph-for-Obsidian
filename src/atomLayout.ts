@@ -1,6 +1,6 @@
 /**
  * The "Atom graph" layout style: each work of the vault is a nucleus, with a
- * cloud of the works outside the vault that only it cites (see `atoms.ts`).
+ * circle of the works outside the vault that it cites (see `atoms.ts`).
  *
  * - Electrons are held at their place in the cloud relative to their nucleus
  *   (`orbit`), so a cloud moves with its nucleus and keeps its shape.

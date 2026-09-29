@@ -46,7 +46,7 @@ export interface Forces {
 /**
  * Styles of layout: "default" (every work repelling the others, as in
  * Obsidian's graph view) or "atom" (each work of the vault a nucleus with a
- * cloud of the works only it cites, see `atoms.ts`). Others may be added.
+ * circle of the works it cites, see `atoms.ts`). Others may be added.
  */
 export type LayoutStyle = 'default' | 'atom';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {

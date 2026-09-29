@@ -1,9 +1,9 @@
 /**
  * The "atoms" of the literature graph: each work of the vault is a nucleus,
- * surrounded by a cloud of the works outside the vault that it cites
- * (generation 1), with the works that those cite (generation 2) further out.
- * A work cited by several atoms belongs to the one with the fewest electrons
- * (so clouds stay balanced), in its outer part; the arrows of the other atoms
+ * alone at the center of a circle of the works outside the vault that it
+ * cites (generation 1), with the works that those cite (generation 2) on a
+ * larger circle. A work cited by several atoms belongs to the one with the
+ * fewest electrons (so atoms stay balanced); the arrows of the other atoms
  * still reach it. A work that no atom cites is free.
  *
  * Nothing here knows about Obsidian, PixiJS or d3: it gives each node its
@@ -38,15 +38,14 @@ export interface Atoms {
 	cloud: Float32Array;
 }
 
-/** The golden angle, which spreads points evenly on a disc (as a sunflower's seeds). */
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-/** Room between the nucleus and its first electrons. */
+/** Room around a nucleus without electrons. */
 const INNER_GAP = 8;
 
 /**
- * Roles and places. `spacing` is the distance between neighboring electrons;
- * the cloud's radius grows with the square root of its number of electrons,
- * so that every cloud has the same density.
+ * Roles and places. Electrons stand on circles around their nucleus (the
+ * nucleus alone inside): generation 1 on one, generation 2 on a larger one.
+ * `spacing` is the distance between neighbors on a circle, so a circle's
+ * radius grows with its number of electrons.
  */
 export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[], spacing: number): Atoms {
 	const n = nodes.length;
@@ -88,10 +87,8 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 	for (const i of gen2) if (atomsOfCiters(i).size === 1) join(i, atomsOfCiters(i));
 	for (const i of gen2) if (atomsOfCiters(i).size > 1) join(i, atomsOfCiters(i));
 
-	// Places in each cloud: generation 1 first, then 2; in each, the works of
-	// this atom only, then the shared ones (at the edge, toward the other
-	// atoms' arrows); the larger (more cited) nearer the nucleus. Each atom is
-	// turned by its own angle.
+	// Places on each circle: the works of this atom only, then the shared ones,
+	// the larger (more cited) first. Each atom is turned by its own angle.
 	const electronsOf = new Map<number, number[]>();
 	for (let i = 0; i < n; i++) {
 		if (role[i] !== ELECTRON) continue;
@@ -105,17 +102,30 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 			(a, b) =>
 				gen(a) - gen(b) || (shared[a] ?? 0) - (shared[b] ?? 0) || (nodes[b]?.radius ?? 0) - (nodes[a]?.radius ?? 0) || a - b,
 		);
-		const start = (nodes[center]?.radius ?? 0) + INNER_GAP;
+		// Each generation on its own circle, the nucleus alone inside: the
+		// circle is as long as its electrons need, one `spacing` apart.
+		const minimum = (nodes[center]?.radius ?? 0) + MIN_RING;
 		const turn = center * 2.1;
-		let outer = start;
-		electrons.forEach((e, k) => {
-			const r = start + spacing * Math.sqrt(k + 0.5) * 0.55;
-			const angle = turn + k * GOLDEN_ANGLE;
-			dx[e] = Math.cos(angle) * r;
-			dy[e] = Math.sin(angle) * r;
-			outer = Math.max(outer, r + (nodes[e]?.radius ?? 0));
-		});
+		let ring = 0;
+		let outer = minimum;
+		for (const generation of [1, 2]) {
+			const onRing = electrons.filter((e) => gen(e) === generation);
+			if (onRing.length === 0) continue;
+			const radius = Math.max(ring === 0 ? minimum : ring + RING_GAP, (onRing.length * spacing) / (2 * Math.PI));
+			onRing.forEach((e, k) => {
+				const angle = turn + (2 * Math.PI * k) / onRing.length;
+				dx[e] = Math.cos(angle) * radius;
+				dy[e] = Math.sin(angle) * radius;
+				outer = Math.max(outer, radius + (nodes[e]?.radius ?? 0));
+			});
+			ring = radius;
+		}
 		cloud[center] = outer + spacing / 2;
 	}
 	return { role, nucleus, dx, dy, cloud };
 }
+
+/** Smallest distance between a nucleus and its circle of electrons. */
+const MIN_RING = 30;
+/** Distance between the circles of generation 1 and generation 2. */
+const RING_GAP = 24;
