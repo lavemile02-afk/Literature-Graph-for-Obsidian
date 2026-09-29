@@ -68,8 +68,12 @@ function parseCssColor(css: string, fallback: string): ThemeColor {
 const LOCAL_START_SCALE = 1.5;
 /** Radius of the shared circle texture, in pixels. */
 const CIRCLE_TEXTURE_RADIUS = 32;
-/** Largest node radius, for hit testing. */
+/** Largest node radius. */
 const MAX_NODE_RADIUS = 40;
+/** A node can be clicked this many pixels beyond its edge... */
+const HIT_SLACK = 3;
+/** ...and at least this many pixels from its center, however small it is on screen. */
+const MIN_HIT_RADIUS = 8;
 /** Labels appear when zoomed in past this scale (Obsidian's graph behaves the same). */
 const LABEL_FADE_START = 0.7;
 const LABEL_FADE_END = 1.2;
@@ -195,6 +199,7 @@ export class LiteratureGraphView extends ItemView {
 	private lastEdgeScale = 0;
 	private statusEl: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
+	private hintEl: HTMLElement | null = null;
 	private summary = '';
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
@@ -209,7 +214,7 @@ export class LiteratureGraphView extends ItemView {
 	/** Text typed in the filter: works whose label or title contain it stand out. */
 	private filter = '';
 	/** Forces of the layout, changed with the sliders of the view. */
-	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.05 };
+	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.02 };
 	private readonly reload = debounce(() => void this.loadData(), 2000, true);
 
 	constructor(
@@ -281,6 +286,7 @@ export class LiteratureGraphView extends ItemView {
 		container.empty();
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
+		this.hintEl = container.createDiv({ cls: 'literature-graph-view-hint is-hidden' });
 		this.buildControls(container);
 
 		const pixi = new Application();
@@ -657,19 +663,29 @@ export class LiteratureGraphView extends ItemView {
 
 	/** The panel of the view, like the controls of Obsidian's graph view. */
 	private buildControls(container: HTMLElement): void {
-		const panel = container.createDiv({ cls: 'literature-graph-controls' });
+		const panel = container.createDiv({ cls: 'literature-graph-controls is-collapsed' });
 		this.controlsEl = panel;
 		const header = panel.createDiv({ cls: 'literature-graph-controls-header' });
 		const fit = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Fit the graph to the view' } });
 		setIcon(fit, 'maximize');
 		fit.addEventListener('click', () => this.fitToView());
-		const toggle = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Show or hide the controls' } });
-		setIcon(toggle, 'settings-2');
+		const toggle = header.createDiv({ cls: 'clickable-icon' });
 		const body = panel.createDiv({ cls: 'literature-graph-controls-body' });
-		toggle.addEventListener('click', () => {
-			panel.toggleClass('is-collapsed', !panel.hasClass('is-collapsed'));
+		/** Opens or closes the panel; its button is a gear when closed and a cross when open. */
+		const setOpen = (open: boolean) => {
+			panel.toggleClass('is-collapsed', !open);
+			setIcon(toggle, open ? 'x' : 'settings');
+			toggle.setAttribute('aria-label', open ? 'Close graph settings' : 'Open graph settings');
 			// The room left for the graph changed.
 			if (this.cameraMode === 'fit') this.requestFrame();
+		};
+		setOpen(false);
+		toggle.addEventListener('click', () => setOpen(panel.hasClass('is-collapsed')));
+		// A click anywhere outside the open panel closes it (and still does what it does).
+		this.registerDomEvent(container.doc, 'pointerdown', (e: PointerEvent) => {
+			// (No `instanceof Node`: in a pop-out window, nodes belong to another realm.)
+			const target = e.target as Node | null;
+			if (!panel.hasClass('is-collapsed') && target && !panel.contains(target)) setOpen(false);
 		});
 
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
@@ -734,7 +750,7 @@ export class LiteratureGraphView extends ItemView {
 		);
 		new Setting(body).setName('Center force').addSlider((slider) =>
 			slider
-				.setLimits(0, 0.3, 0.01)
+				.setLimits(0, 0.2, 0.005)
 				.setValue(this.forces.center)
 				.onChange((value) => {
 					this.forces.center = value;
@@ -933,6 +949,7 @@ export class LiteratureGraphView extends ItemView {
 	private setHovered(node: SimNode | null): void {
 		if (this.dragged) return;
 		this.hovered = node;
+		this.showHint(node);
 		if (node && node !== this.shownFocus) {
 			this.shownFocus = node;
 			this.ensureLabel(node);
@@ -948,23 +965,51 @@ export class LiteratureGraphView extends ItemView {
 	/** The node under a point of the canvas, if any. */
 	private nodeAt(global: { x: number; y: number }): SimNode | null {
 		const p = this.world.toLocal(global);
-		const slack = 3 / this.world.scale.x;
-		// The node drawn on top (the last one) wins, as on screen.
-		for (let i = this.nodes.length - 1; i >= 0; i--) {
-			const node = this.nodes[i];
-			if (!node || node.x === undefined || node.y === undefined) continue;
-			const r = node.radius + slack;
-			const dx = node.x - p.x;
-			const dy = node.y - p.y;
-			if (dx * dx + dy * dy <= r * r) return node;
+		const scale = this.world.scale.x;
+		// Every node can be hit within a few pixels of its edge, and at least
+		// MIN_HIT_RADIUS pixels from its center, however small it is on screen;
+		// when several can, the one whose edge is nearest the pointer wins.
+		let best: SimNode | null = null;
+		let bestGap = Infinity;
+		for (const node of this.nodes) {
+			if (node.x === undefined || node.y === undefined) continue;
+			const reach = Math.max(node.radius + HIT_SLACK / scale, MIN_HIT_RADIUS / scale);
+			const d = Math.hypot(node.x - p.x, node.y - p.y);
+			if (d > reach) continue;
+			const gap = d - node.radius;
+			if (gap <= bestGap) {
+				best = node;
+				bestGap = gap;
+			}
 		}
-		return null;
+		return best;
 	}
 
 	private startDrag(node: SimNode, event: FederatedPointerEvent): void {
 		this.dragged = node;
 		this.dragMoved = false;
 		this.dragStart = { x: event.global.x, y: event.global.y };
+	}
+
+	/** What a click on a work opens, in words; null when there is nothing to open. */
+	private openAction(node: SimNode): string | null {
+		if (node.data.file) return 'Click to open the note';
+		if (node.data.doi) return 'Click to open its DOI';
+		if (node.data.openAlexId) return 'Click to open it on OpenAlex';
+		return null;
+	}
+
+	/** Under the status line: the hovered work, and what a click on it opens. */
+	private showHint(node: SimNode | null): void {
+		const hint = this.hintEl;
+		if (!hint) return;
+		hint.empty();
+		hint.toggleClass('is-hidden', !node);
+		if (!node) return;
+		const title = node.data.title && node.data.title !== node.data.label ? ` — ${node.data.title}` : '';
+		hint.createSpan({ cls: 'literature-graph-view-hint-title', text: `${node.data.label}${title}` });
+		const action = this.openAction(node);
+		if (action) hint.createSpan({ cls: 'literature-graph-view-hint-action', text: ` · ${action}` });
 	}
 
 	/** Opens a work: its note, or else its DOI or OpenAlex page. */
@@ -1016,7 +1061,7 @@ export class LiteratureGraphView extends ItemView {
 				this.requestFrame();
 			} else {
 				const node = this.nodeAt(e.global);
-				pixi.canvas.style.cursor = node ? 'pointer' : '';
+				pixi.canvas.style.cursor = node && this.openAction(node) ? 'pointer' : '';
 				if (node !== this.hovered) this.setHovered(node);
 			}
 		});

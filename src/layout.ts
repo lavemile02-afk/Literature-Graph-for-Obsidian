@@ -8,12 +8,14 @@
  * receives the positions of the nodes, in the order it gave them.
  */
 import {
-	forceCenter,
 	forceCollide,
 	forceLink,
 	forceManyBody,
 	forceSimulation,
-	ForceCenter,
+	forceX,
+	forceY,
+	ForceX,
+	ForceY,
 	ForceLink,
 	ForceManyBody,
 	Simulation,
@@ -24,6 +26,8 @@ import {
 export interface LayoutNode extends SimulationNodeDatum {
 	generation: number;
 	radius: number;
+	/** Number of links of the node (set by `createSimulation`). */
+	degree?: number;
 }
 
 export interface LayoutLink extends SimulationLinkDatum<LayoutNode> {
@@ -66,44 +70,77 @@ export interface LayoutUpdate {
 	moving: boolean;
 }
 
-/** With more nodes than this, the layout uses cheaper settings. */
-const MANY_NODES = 1000;
 /** Steps are at least this far apart (ms), so the layout moves at the pace of the screen. */
 const STEP_INTERVAL = 16;
 /** Alpha kept while a node is dragged, so the others follow it. */
 const DRAG_ALPHA_TARGET = 0.3;
 
-const linkDistance = (forces: Forces) => (l: LayoutLink) => (l.inVault ? forces.linkDistance : forces.linkDistance * 0.66);
-const repel = (forces: Forces) => (n: LayoutNode) => (n.generation === 0 ? -forces.repel : -forces.repel * 0.28);
+const ends = (l: LayoutLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
 
-/** A stopped simulation of the graph; `tick` advances it. */
+/** A number between 0 and 1 that is always the same for the same link, to vary lengths without randomness. */
+const jitter = (i: number) => ((i * 2654435761) >>> 0) / 4294967296;
+
+/**
+ * Length of a link: the chosen distance, plus room for the two nodes. A work
+ * with a single link (often one of hundreds around a much-cited work) gets a
+ * length that varies a little: with all the same length, they would sit on a
+ * perfect circle around the work they cite.
+ */
+const linkDistance = (forces: Forces) => (l: LayoutLink, i: number) => {
+	const [s, t] = ends(l);
+	let d = forces.linkDistance * (l.inVault ? 1 : 0.8) + (s.radius + t.radius) * 1.5;
+	if (Math.min(s.degree ?? 1, t.degree ?? 1) <= 1) d *= 0.7 + 0.6 * jitter(i);
+	return d;
+};
+
+/**
+ * Strength of a link, weaker for links of much-linked works (as d3 does by
+ * default), so a work cited hundreds of times does not pull everything into
+ * a tight ball.
+ */
+const linkStrength = (l: LayoutLink) => {
+	const [s, t] = ends(l);
+	return (l.inVault ? 1 : 0.7) / Math.max(1, Math.min(s.degree ?? 1, t.degree ?? 1));
+};
+
+/** Repulsion, larger for larger (more cited) works, which then get room around them. */
+const repel = (forces: Forces) => (n: LayoutNode) => -forces.repel * Math.min(4, 0.35 + n.radius / 6);
+
+/**
+ * A stopped simulation of the graph; `tick` advances it.
+ *
+ * Repulsion has no range limit: cutting it at a distance piles nodes up at
+ * that distance, in rings. The center force is a weak pull of every node
+ * toward the middle (like Obsidian's), not d3's `forceCenter`, which only
+ * moves the whole graph and cannot spread or tighten it.
+ */
 export function createSimulation(
 	nodes: LayoutNode[],
 	links: LayoutLink[],
 	forces: Forces,
 ): Simulation<LayoutNode, LayoutLink> {
-	const many = nodes.length > MANY_NODES;
-	return (
-		forceSimulation<LayoutNode, LayoutLink>(nodes)
-			.force(
-				'link',
-				forceLink<LayoutNode, LayoutLink>(links)
-					.distance(linkDistance(forces))
-					.strength((l) => (l.inVault ? 0.4 : 0.15)),
-			)
-			.force('charge', forceManyBody<LayoutNode>().strength(repel(forces)).distanceMax(many ? 300 : 600))
-			.force('center', forceCenter(0, 0).strength(forces.center))
-			// Collisions cost much with many nodes, where they matter little.
-			.force('collide', many ? null : forceCollide<LayoutNode>((n) => n.radius + 1))
-			.stop()
-	);
+	for (const n of nodes) n.degree = 0;
+	for (const l of links) {
+		const s = typeof l.source === 'number' ? nodes[l.source] : (l.source as LayoutNode);
+		const t = typeof l.target === 'number' ? nodes[l.target] : (l.target as LayoutNode);
+		if (s) s.degree = (s.degree ?? 0) + 1;
+		if (t) t.degree = (t.degree ?? 0) + 1;
+	}
+	return forceSimulation<LayoutNode, LayoutLink>(nodes)
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(linkDistance(forces)).strength(linkStrength))
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces)))
+		.force('x', forceX<LayoutNode>(0).strength(forces.center))
+		.force('y', forceY<LayoutNode>(0).strength(forces.center))
+		.force('collide', forceCollide<LayoutNode>((n) => n.radius + 2).strength(0.7))
+		.stop();
 }
 
 /** Changes the forces of a simulation. */
 export function setForces(sim: Simulation<LayoutNode, LayoutLink>, forces: Forces): void {
 	sim.force<ForceLink<LayoutNode, LayoutLink>>('link')?.distance(linkDistance(forces));
 	sim.force<ForceManyBody<LayoutNode>>('charge')?.strength(repel(forces));
-	sim.force<ForceCenter<LayoutNode>>('center')?.strength(forces.center);
+	sim.force<ForceX<LayoutNode>>('x')?.strength(forces.center);
+	sim.force<ForceY<LayoutNode>>('y')?.strength(forces.center);
 }
 
 /** Timer functions, from the worker or from Obsidian's window. */

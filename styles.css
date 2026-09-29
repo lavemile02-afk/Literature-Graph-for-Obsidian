@@ -75,6 +75,27 @@
 	pointer-events: none;
 }
 
+.literature-graph-view-hint {
+	position: absolute;
+	left: var(--size-4-3);
+	right: var(--size-4-3);
+	bottom: calc(var(--size-4-2) + 1.6em);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	pointer-events: none;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.literature-graph-view-hint.is-hidden {
+	display: none;
+}
+
+.literature-graph-view-hint-action {
+	color: var(--text-muted);
+}
+
 .literature-graph-controls {
 	position: absolute;
 	top: var(--size-4-2);
