@@ -80,13 +80,19 @@ The view looks like Obsidian's graph view and follows your theme (it uses the sa
 
 The layout runs in a background thread (a web worker), and the view draws only when something moves, so even a graph of a few thousand works stays smooth and costs nothing once still, or while its tab is hidden.
 
+### Reading suggestions
+
+The list button at the top right of the graph (or the command **Open reading suggestions**) opens, at the left of the view, the works outside your vault of the graph shown, most relevant first. Hover a work to highlight it in the graph and see why it is suggested; click it to open its ghost note (see below). The score is a plain sum, so that it can be explained: 1 for each work of your vault that cites it, then smaller amounts for the works of your vault it cites, the other works of the graph citing it, how often it is cited along with the works your vault cites most, how recent it is, and how often it is cited in all (OpenAlex).
+
+**Export reading suggestions** writes the 1000 most relevant works outside your vault (of generation 1, without node limit) to a [JSON Lines](https://jsonlines.org/) file, for AI agents and other programs: a first line describing the file and each field, then one work per line with its DOI, title, authors, year, score, the notes of your vault that cite it and the reasons for its score. **Reading suggestions file**, in the settings, sets where (a path in the vault, hidden folders included; by default `reading-suggestions.jsonl` in the plugin folder). The file is written only by this command.
+
 ### Works outside the vault: ghost notes
 
 Clicking a work outside your vault opens, in a new tab, its *ghost note*: what its note would look like, with its properties already filled from OpenAlex (title, authors, year, type, journal, volume, issue, pages, publisher, DOI, language, in-text citation and APA 7 reference) and its abstract. It is not a file: close it untouched, and nothing was created. As soon as you type in it, or change a property, the note is created in the literature folder, named after its in-text citation (for example `Smith et al., 2020.md`), and opens in its place, with the cursor where you were typing; **Create note** does the same at once. A work known only from a reference list gets that entry as its reference.
 
 **Note template** (settings) sets what the note contains, with fields such as `{{title}}`, `{{citationText}}`, `{{citation}}`, `{{authors}}`, `{{year}}`, `{{type}}`, `{{journal}}`, `{{volume}}`, `{{issue}}`, `{{pages}}`, `{{publisher}}`, `{{issn}}`, `{{doi}}`, `{{url}}`, `{{language}}` and `{{abstract}}`. In a property line such as `Journal: "{{journal}}"`, an unknown value leaves the property empty. Left empty, a simple template is used, with the property names of the settings. Titles are kept as OpenAlex gives them, often in title case: check them against APA's sentence case.
 
-**Download PDF** appears only when OpenAlex knows a free PDF of the work; the PDF is saved in the **Download folder** of the settings (anywhere on your computer; by default your Downloads folder), named like the note. When the free version is a web page rather than a PDF, it opens in your browser (**Read for free**). This folder is the only place outside your vault where the plugin writes.
+**Download PDF** appears only when OpenAlex knows a free PDF of the work; the PDF is saved in the **Download folder** of the settings (anywhere on your computer; by default your Downloads folder), named like the note. When the free version is a web page rather than a PDF, it opens in your browser (**Read for free**). This folder is the only place outside your vault where the plugin writes. Works that OpenAlex no longer has (merged or deleted), but that other works still list among their references, are left out of the graph.
 
 ## Network use
 
