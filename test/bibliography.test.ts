@@ -184,6 +184,18 @@ test('keeps a reference section open over its sub-headings, and reads <CAPITALS>
 	);
 });
 
+test('gives the same key to one work cited in different styles', async () => {
+	const { entryKey, entryTitle, parseEntry } = await import('../src/bibliography');
+	const a = parseEntry('Quinty, F., & Rochefort, L. (2003). *Peatland restoration guide* (2nd ed.). Université Laval.', 0);
+	const b = parseEntry('Quinty F, Rochefort L. 2003. Peatland Restoration Guide, Second edn. Canadian Sphagnum Peat Moss Association.', 0);
+	const c = parseEntry('Gorham, E. 1991. Northern peatlands: role in the carbon cycle. Ecol. Appl. 1: 182–195.', 0);
+	assert.ok(a && b && c);
+	assert.equal(entryTitle(c), 'Northern peatlands: role in the carbon cycle');
+	assert.equal(entryKey(a), 'quinty|2003|peatland restoration guide');
+	assert.equal(entryKey(a), entryKey(b));
+	assert.notEqual(entryKey(a), entryKey(c));
+});
+
 test('reads bold numbers and leaves editor marks out of the authors', async () => {
 	const { parseEntry } = await import('../src/bibliography');
 	const numbered = parseEntry('**34** Bell, J.N.B. and Tallis, J.H. (1973) *J. Ecol.* 62, 75–95', 0);

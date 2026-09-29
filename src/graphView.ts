@@ -255,6 +255,7 @@ export class LiteratureGraphView extends ItemView {
 			generations: Number(s.graphGenerations) || 0,
 			minCitations: Math.max(1, Number(s.graphMinCitations) || 1),
 			maxNodes: Math.max(100, Number(s.graphMaxNodes) || 3000),
+			localWorks: true,
 		};
 	}
 
@@ -779,6 +780,15 @@ export class LiteratureGraphView extends ItemView {
 						this.options.generations = Number(value);
 						reloadSoon();
 					}),
+			);
+		new Setting(body)
+			.setName('Works without a DOI')
+			.setDesc('Works of the reference lists that have no DOI, known only from your notes (generation 1).')
+			.addToggle((toggle) =>
+				toggle.setValue(this.options.localWorks !== false).onChange((value) => {
+					this.options.localWorks = value;
+					reloadSoon();
+				}),
 			);
 		new Setting(body)
 			.setName('Minimum citations')

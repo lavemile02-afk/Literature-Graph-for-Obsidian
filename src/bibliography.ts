@@ -58,8 +58,8 @@ export function isReferenceHeading(text: string): boolean {
 	return SECTION_TITLE.test(plainHeading(text));
 }
 
-/** An initial or a group of initials: "J", "AK", "J.", "J.E.P.", "M.-A.". */
-const INITIALS = /^(?:\p{Lu}{1,3}|(?:\p{Lu}\.[\s-]*)+\p{Lu}?\.?)$/u;
+/** An initial or a group of initials: "J", "AK", "DH.", "J.", "J.E.P.", "M.-A.". */
+const INITIALS = /^(?:\p{Lu}{1,3}\.?|(?:\p{Lu}\.[\s-]*)+\p{Lu}?\.?)$/u;
 
 /**
  * The family name in one author of a reference list, whatever the style:
@@ -140,6 +140,49 @@ export interface VaultWork {
 	otherTitles?: string[];
 }
 
+/**
+ * The title of an entry, as far as it can be told: the sentence after the
+ * year ("Gorham, E. 1991. Northern peatlands: role in the carbon cycle.
+ * Ecol. Appl." → "Northern peatlands: role in the carbon cycle"). Empty when
+ * there is no year or nothing after it.
+ */
+export function entryTitle(entry: BibEntry): string {
+	if (!entry.year) return '';
+	const plain = entry.text
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+		.replace(/<[^<>]*>/g, '')
+		.replace(/[*_]/g, '')
+		.replace(/https?:\/\/\S+/g, '');
+	const at = plain.indexOf(entry.year);
+	if (at < 0) return '';
+	const rest = plain
+		.slice(at + entry.year.length)
+		.replace(/^[a-z]?\s*\)?\s*[.,:;]?\s*/, '')
+		.trim();
+	const end = rest.search(/[.?!]\s/);
+	return (end > 0 ? rest.slice(0, end + (rest[end] === '.' ? 0 : 1)) : rest).trim();
+}
+
+/**
+ * A key that is the same for the same work cited in different reference
+ * lists, whatever the style: first author, year and the first three words of
+ * the title (four letters or more). Null when the title is too short to tell.
+ */
+export function entryKey(entry: BibEntry): string | null {
+	return workKeyOf(entry.authors[0] ?? '', entry.year ?? '', entryTitle(entry));
+}
+
+/**
+ * The same key for any work: first author's family name (reduced by
+ * `nameKey`), year and title. Used to recognize an entry without DOI as a
+ * work that OpenAlex knows.
+ */
+export function workKeyOf(firstAuthorKey: string, year: string, title: string): string | null {
+	const words = titleWords(title).slice(0, 3);
+	if (!firstAuthorKey || !year || words.length < 2) return null;
+	return `${firstAuthorKey}|${year}|${words.join(' ')}`;
+}
+
 /** Words of a title that are worth comparing (four letters or more). */
 function titleWords(text: string): string[] {
 	return text
@@ -166,7 +209,7 @@ export function titleOverlap(title: string, text: string): number {
 }
 
 /** Share of the title's words that the entry must contain to match by author and year. */
-const MIN_TITLE_OVERLAP = 0.6;
+export const MIN_TITLE_OVERLAP = 0.6;
 
 /**
  * Whether an entry is this work of the vault: same DOI, or same first author

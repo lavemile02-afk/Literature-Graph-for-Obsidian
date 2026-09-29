@@ -1,7 +1,8 @@
 import { App, TFile } from 'obsidian';
 import { citationText } from './citationLink';
 import type { CitationIndex } from './citationIndex';
-import { OpenAlexClient, WorkSummary, workCitation } from './openalex';
+import { BibEntry, entryKey, entryTitle, MIN_TITLE_OVERLAP, nameKey, titleOverlap } from './bibliography';
+import { OpenAlexClient, surnameOf, WorkSummary, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
 /** Where a citation between two works was found. */
@@ -48,7 +49,31 @@ export interface GraphOptions {
 	minCitations: number;
 	/** At most this many nodes; the most cited works outside the vault are kept. */
 	maxNodes: number;
+	/**
+	 * Also show the works of the reference lists that have no DOI (known only
+	 * from the notes, without OpenAlex). On unless set to false.
+	 */
+	localWorks?: boolean;
 }
+
+/**
+ * "Name et al., 2001" for a reference-list entry, with the names as the
+ * entry writes them ("Quinty et Rochefort, 2003" / "Quinty & Rochefort, 2003").
+ */
+export function entryCitation(entry: BibEntry, language: 'en' | 'fr'): string {
+	const first = entry.firstAuthor ?? '?';
+	const year = entry.year ?? (language === 'fr' ? 's.d.' : 'n.d.');
+	if (entry.etAl || entry.authors.length >= 3) return `${first} et al., ${year}`;
+	if (entry.authors.length === 2) {
+		// The second name as written, found back from its reduced form.
+		const second = entry.text.split(/[\s,;&.()*_]+/).find((t) => t.length > 1 && nameKey(t) === entry.authors[1]);
+		if (second) return `${first} ${language === 'fr' ? 'et' : '&'} ${second}, ${year}`;
+	}
+	return `${first}, ${year}`;
+}
+
+/** Two records whose titles share this much (both ways) are taken for the same work. */
+const SAME_TITLE = 0.8;
 
 /** Progress messages and intermediate graphs, generation by generation. */
 export interface GraphProgress {
@@ -196,13 +221,55 @@ export async function buildGraph(
 			if (!pathById.has(key)) cite(counts1, citers1, file.path, key);
 		}
 	}
+	// Works of the reference lists without a DOI, known only from the notes
+	// (no request). One work cited by several notes is one node; when OpenAlex
+	// already knows it (cited elsewhere with its DOI), it joins that node.
+	const localWorks = new Map<string, BibEntry>();
+	if (options.localWorks !== false) {
+		// Works OpenAlex knows, by first author and year, to recognize an entry
+		// without DOI by its title (as the vault's notes are).
+		const known = new Map<string, { id: string; title: string }[]>();
+		for (const id of counts1.keys()) {
+			const work = openAlex.cachedWork(id);
+			const first = work?.authors[0];
+			if (!work || !first || !work.year) continue;
+			const key = `${nameKey(surnameOf(first))}|${work.year}`;
+			known.set(key, [...(known.get(key) ?? []), { id, title: work.title }]);
+		}
+		const openAlexWork = (entry: BibEntry): string | null => {
+			const candidates = (known.get(`${entry.authors[0] ?? ''}|${entry.year ?? ''}`) ?? []).filter(
+				(c) => titleOverlap(c.title, entry.text) >= MIN_TITLE_OVERLAP,
+			);
+			const first = candidates[0];
+			if (!first) return null;
+			// OpenAlex often has several records of one work (an article and its
+			// preprint...): with the same title they are one work, and the most
+			// cited record stands for it. Different titles stay ambiguous.
+			const sameWork = candidates.every(
+				(c) => titleOverlap(c.title, first.title) >= SAME_TITLE && titleOverlap(first.title, c.title) >= SAME_TITLE,
+			);
+			if (!sameWork) return null;
+			return candidates.reduce((a, b) => ((counts1.get(b.id) ?? 0) > (counts1.get(a.id) ?? 0) ? b : a)).id;
+		};
+		for (const file of files) {
+			for (const entry of index.bibliographyOf(file)) {
+				if (entry.doi || index.resolveEntry(entry, file.path)) continue;
+				const key = entryKey(entry);
+				if (!key) continue;
+				const id = openAlexWork(entry);
+				const target = id ?? `ref:${key}`;
+				if (!id && !localWorks.has(target)) localWorks.set(target, entry);
+				cite(counts1, citers1, file.path, target);
+			}
+		}
+	}
 	// With two generations, generation 1 gets half of the remaining nodes.
 	const remaining = options.maxNodes - g.nodes.size;
 	const budget1 = options.generations >= 2 ? Math.floor(remaining / 2) : remaining;
 	const gen1 = mostCited(counts1, options.minCitations, budget1);
 	g.leftOut += gen1.leftOut;
 
-	const ids1 = gen1.kept.filter((k) => !k.startsWith('doi:'));
+	const ids1 = gen1.kept.filter((k) => !k.startsWith('doi:') && !k.startsWith('ref:'));
 	let works1: WorkSummary[] = [];
 	try {
 		works1 = await openAlex.worksByIds(ids1, (done, total) =>
@@ -213,6 +280,21 @@ export async function buildGraph(
 	}
 	const byId1 = new Map(works1.map((w) => [w.id, w]));
 	for (const key of gen1.kept) {
+		const local = localWorks.get(key);
+		if (local) {
+			g.nodes.set(key, {
+				id: key,
+				generation: 1,
+				file: null,
+				doi: null,
+				openAlexId: null,
+				label: entryCitation(local, language),
+				title: entryTitle(local),
+				citedBy: 0,
+			});
+			for (const from of citers1.get(key) ?? []) g.addEdge(from, key, 'bibliography');
+			continue;
+		}
 		const work = byId1.get(key) ?? openAlex.cachedWork(key);
 		const doi = key.startsWith('doi:') ? key.slice(4) : (work?.doi ?? null);
 		g.nodes.set(key, {
