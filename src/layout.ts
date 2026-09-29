@@ -22,6 +22,7 @@ import {
 	SimulationLinkDatum,
 	SimulationNodeDatum,
 } from 'd3-force';
+import { createAtomSimulation, setAtomSimulationForces } from './atomLayout';
 
 export interface LayoutNode extends SimulationNodeDatum {
 	generation: number;
@@ -42,6 +43,17 @@ export interface Forces {
 	center: number;
 }
 
+/**
+ * Styles of layout: "default" (every work repelling the others, as in
+ * Obsidian's graph view) or "atom" (each work of the vault a nucleus with a
+ * cloud of the works only it cites, see `atoms.ts`). Others may be added.
+ */
+export type LayoutStyle = 'default' | 'atom';
+export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
+	default: 'Default graph',
+	atom: 'Atom graph',
+};
+
 /** Messages from the view to the layout. */
 export type LayoutMessage =
 	| {
@@ -53,6 +65,8 @@ export type LayoutMessage =
 			links: { source: number; target: number; inVault: boolean }[];
 			forces: Forces;
 			alpha: number;
+			/** "default" when left out. */
+			style?: LayoutStyle;
 	  }
 	| { type: 'forces'; forces: Forces }
 	| { type: 'reheat'; alpha: number }
@@ -157,6 +171,7 @@ export interface Timers {
  */
 export class LayoutLoop {
 	private sim: Simulation<LayoutNode, LayoutLink> | null = null;
+	private style: LayoutStyle = 'default';
 	private nodes: LayoutNode[] = [];
 	private graph = 0;
 	private timer: number | null = null;
@@ -174,12 +189,18 @@ export class LayoutLoop {
 				this.nodes = message.nodes.map((n) => ({ ...n }));
 				const links = message.links.map((l) => ({ ...l }));
 				this.dragged.clear();
-				this.sim = createSimulation(this.nodes, links, message.forces).alpha(message.alpha);
+				this.style = message.style ?? 'default';
+				this.sim = (
+					this.style === 'atom'
+						? createAtomSimulation(this.nodes, links, message.forces)
+						: createSimulation(this.nodes, links, message.forces)
+				).alpha(message.alpha);
 				break;
 			}
 			case 'forces':
 				if (this.sim) {
-					setForces(this.sim, message.forces);
+					if (this.style === 'atom') setAtomSimulationForces(this.sim, message.forces);
+					else setForces(this.sim, message.forces);
 					this.sim.alpha(Math.max(this.sim.alpha(), 0.5));
 				}
 				break;

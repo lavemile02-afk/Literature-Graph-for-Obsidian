@@ -9,7 +9,7 @@ import { collectQueryData } from './groupQueries';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
-import type { Forces, LayoutUpdate } from './layout';
+import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { OpenAlexClient } from './openalex';
@@ -237,6 +237,8 @@ export class LiteratureGraphView extends ItemView {
 	/** Local mode: only the works around the active note, up to `depth` citations away. */
 	private local = false;
 	private depth = 1;
+	/** Style of layout, from the settings, changed in the panel for as long as the view is open. */
+	private layoutStyle: LayoutStyle = 'default';
 	/** Local mode: follow the citations of the center ("out"), the works citing it ("in"), or both. */
 	private direction: Direction = 'both';
 	/** Controls showing the view's state, updated when the state is restored. */
@@ -270,6 +272,7 @@ export class LiteratureGraphView extends ItemView {
 			maxNodes: Math.max(100, Number(s.graphMaxNodes) || 3000),
 			localWorks: true,
 		};
+		this.layoutStyle = s.graphLayout in LAYOUT_STYLES ? (s.graphLayout as LayoutStyle) : 'default';
 	}
 
 	getViewType(): string {
@@ -628,6 +631,7 @@ export class LiteratureGraphView extends ItemView {
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
 			alpha: previous.size > 0 ? 0.5 : 1,
+			style: this.layoutStyle,
 		});
 
 		const counts = [0, 0, 0];
@@ -810,6 +814,21 @@ export class LiteratureGraphView extends ItemView {
 					dropdown.setValue(this.direction);
 				});
 			});
+		new Setting(body)
+			.setName('Layout')
+			.setDesc('Default graph, or atoms: each work of the vault with a cloud of the works only it cites.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ ...LAYOUT_STYLES })
+					.setValue(this.layoutStyle)
+					.onChange((value) => {
+						this.layoutStyle = value as LayoutStyle;
+						// A new layout from the positions shown: the works move to their new places.
+						this.showCurrent();
+						this.layout?.send({ type: 'reheat', alpha: 1 });
+						if (!this.local) this.cameraMode = 'fit';
+					}),
+			);
 		new Setting(body)
 			.setName('Generations')
 			.setDesc('Works outside the vault cited by it (1), and by those (2).')

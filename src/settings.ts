@@ -1,4 +1,5 @@
 import { App, Plugin, PluginSettingTab, SecretComponent, SettingDefinitionItem } from 'obsidian';
+import { LAYOUT_STYLES } from './layout';
 
 export type CitationLanguage = 'en' | 'fr';
 
@@ -33,6 +34,8 @@ export interface LiteratureGraphSettings {
 	graphMaxNodes: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
+	/** Style of layout of the graph: "default" or "atom". */
+	graphLayout: string;
 	/** Color of the works outside the vault (any CSS color); empty: from the theme. */
 	graphOutsideColor: string;
 	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
@@ -55,6 +58,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
 	graphColorGroups: '',
+	graphLayout: 'default',
 	graphOutsideColor: '',
 	graphIncomingColor: '',
 };
@@ -136,6 +140,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 				type: 'group',
 				heading: 'Literature graph',
 				items: [
+					{
+						name: 'Layout',
+						desc: 'Default graph: every work repels the others, as in Obsidian\'s graph view. Atom graph: each work of the vault is a nucleus with a cloud of the works only it cites, and clouds do not overlap. Can be changed in the graph for the time it stays open.',
+						control: { type: 'dropdown', key: 'graphLayout', options: { ...LAYOUT_STYLES } },
+					},
 					{
 						name: 'Generations',
 						desc: '0: the works of the literature folder. 1: also the works outside the vault that they cite (from OpenAlex). 2: also the works those cite. Can be changed in the graph for the time it stays open.',
