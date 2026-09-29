@@ -70,6 +70,10 @@ path:Theses = hsl(140, 40%, 55%)
 
 Queries are `tag:#name` (nested tags included), `path:text`, `file:text`, `[property:value]` (the property contains the value), `[property]` (the property is not empty), or plain text found in the note's name or title. Groups color the works of your vault only.
 
+**All notes and sources of citations.** **All notes of the vault** also shows the notes outside the literature folder that cite works with citation links (drafts, course notes), and the notes they cite that way; only citation links count, never wikilinks. **Citations from** chooses where the citations drawn are found: citation links, reference lists, OpenAlex. With citation links alone, the graph shows only the citations made to a passage.
+
+**Finding a work.** The field at the top left, **Find a work**, suggests the works of the graph matching what you type (authors, year, words of the title, in any order); choosing one moves the view to it and highlights it.
+
 **Controls.** The panel at the top right filters the works by author, year or title, and changes the generations, the minimum citations and the forces of the layout for as long as the view is open (the defaults are in the plugin settings).
 
 The view looks like Obsidian's graph view and follows your theme (it uses the same `--graph-*` colors). Drag the background to move, scroll to zoom, drag a node to move it, hover a node to highlight its neighbors, and click a node to open its note (Ctrl/Cmd-click: new tab), or the ghost note of a work outside your vault. Hovering a work shows, at the bottom left, its title and what a click opens; even a tiny node can be clicked within a few pixels. The gear button opens the settings panel (filter, depth and direction, generations, minimum citations, color groups, forces); it turns into a cross to close the panel, and a click outside the panel closes it too. The graph fits itself to the view while it lays out, until you move or zoom; the **Fit** button (or a double click on the background) fits it again. Where labels would cover one another, only the most important are shown (the hovered work, then the works of your vault, then the most cited).
@@ -79,6 +83,10 @@ The view looks like Obsidian's graph view and follows your theme (it uses the sa
 **The graph keeps its shape.** When the layout comes to rest, the place of each work is saved (in the plugin folder); at the next opening, the works move for a few seconds and settle back in their places, so the map of your literature stays the same. **Restart layout** starts the layout again from the current places.
 
 The layout runs in a background thread (a web worker), and the view draws only when something moves, so even a graph of a few thousand works stays smooth and costs nothing once still, or while its tab is hidden.
+
+### Duplicate works
+
+When another note of the literature folder seems to be the same work as the active note (same DOI, or same first author, year and title), the citations panel says so under its title, with a link to the other note. **Find duplicate works** lists every such group. Notes with different DOIs, such as the two parts of a study, are never taken for one work.
 
 ### Reading suggestions
 
