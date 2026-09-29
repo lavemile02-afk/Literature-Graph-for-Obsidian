@@ -1,5 +1,5 @@
 import { debounce, ItemView, Keymap, MarkdownView, Setting, TFile, ViewStateResult, WorkspaceLeaf, setIcon } from 'obsidian';
-import { Application, Container, FederatedPointerEvent, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
+import { Application, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
 import { ColorGroup, colorFor, formatColorGroups, parseColorGroups } from './colorGroups';
@@ -723,12 +723,19 @@ export class LiteratureGraphView extends ItemView {
 		};
 		setOpen(false);
 		toggle.addEventListener('click', () => setOpen(panel.hasClass('is-collapsed')));
-		// A click anywhere outside the open panel closes it (and still does what it does).
-		this.registerDomEvent(container.doc, 'pointerdown', (e: PointerEvent) => {
-			// (No `instanceof Node`: in a pop-out window, nodes belong to another realm.)
-			const target = e.target as Node | null;
-			if (!panel.hasClass('is-collapsed') && target && !panel.contains(target)) setOpen(false);
-		});
+		// A click anywhere in the view outside the open panel closes it (and still
+		// does what it does). The listener is on the view, not on its document,
+		// so that it follows the view into a pop-out window.
+		this.registerDomEvent(
+			container,
+			'pointerdown',
+			(e: PointerEvent) => {
+				// (No `instanceof Node`: in a pop-out window, nodes belong to another realm.)
+				const target = e.target as Node | null;
+				if (!panel.hasClass('is-collapsed') && target && !panel.contains(target)) setOpen(false);
+			},
+			{ capture: true },
+		);
 
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
 		new Setting(body).setName('Filter').addSearch((search) =>
@@ -1133,10 +1140,10 @@ export class LiteratureGraphView extends ItemView {
 		return best;
 	}
 
-	private startDrag(node: SimNode, event: FederatedPointerEvent): void {
+	private startDrag(node: SimNode, at: { x: number; y: number }): void {
 		this.dragged = node;
 		this.dragMoved = false;
-		this.dragStart = { x: event.global.x, y: event.global.y };
+		this.dragStart = { x: at.x, y: at.y };
 	}
 
 	/** What a click on a work opens, in words; null when there is nothing to open. */
@@ -1161,10 +1168,10 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** Opens a work: its note, or else its DOI or OpenAlex page. */
-	private openNode(node: SimNode, event: FederatedPointerEvent): void {
+	private openNode(node: SimNode, event: MouseEvent): void {
 		const data = node.data;
 		if (data.file) {
-			const newTab = event.button === 1 ? 'tab' : Keymap.isModEvent(event.nativeEvent as MouseEvent);
+			const newTab = event.button === 1 ? 'tab' : Keymap.isModEvent(event);
 			void openFileAtLine(this.app, data.file, 0, newTab);
 		} else if (data.doi) {
 			window.open(`https://doi.org/${data.doi}`);
@@ -1178,55 +1185,78 @@ export class LiteratureGraphView extends ItemView {
 		this.cameraMode = null;
 	}
 
+	/**
+	 * Pointer interactions, handled on the canvas itself rather than by Pixi's
+	 * event system: Pixi listens for moves and releases on the main window's
+	 * document, which never sees them when the view is in a pop-out window.
+	 * During a drag or a pan the canvas captures the pointer, so the moves and
+	 * the release still reach it outside the canvas, in any window.
+	 */
 	private setUpInteractions(pixi: Application): void {
-		const stage = pixi.stage;
-		stage.eventMode = 'static';
-		stage.hitArea = pixi.screen;
+		const canvas = pixi.canvas;
+		pixi.stage.eventMode = 'none';
+		/** The pointer's position in the canvas, in the units of `pixi.screen` (CSS pixels). */
+		const at = (e: PointerEvent) => {
+			const rect = canvas.getBoundingClientRect();
+			return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+		};
 
-		stage.on('pointerdown', (e: FederatedPointerEvent) => {
-			const node = this.nodeAt(e.global);
-			if (node) this.startDrag(node, e);
-			else this.panning = { x: e.global.x - this.world.x, y: e.global.y - this.world.y };
+		canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+			if (e.button !== 0 && e.button !== 1) return;
+			const p = at(e);
+			const node = this.nodeAt(p);
+			if (node) this.startDrag(node, p);
+			else this.panning = { x: p.x - this.world.x, y: p.y - this.world.y };
+			try {
+				canvas.setPointerCapture(e.pointerId);
+			} catch {
+				// The pointer is already gone (released at once): nothing to capture.
+			}
+			// A middle click would otherwise start the browser's autoscroll.
+			if (e.button === 1) e.preventDefault();
 		});
-		stage.on('globalpointermove', (e: FederatedPointerEvent) => {
+		canvas.addEventListener('pointermove', (e: PointerEvent) => {
+			const p = at(e);
 			if (this.dragged) {
-				if (!this.dragMoved && Math.hypot(e.global.x - this.dragStart.x, e.global.y - this.dragStart.y) > 3) {
+				if (!this.dragMoved && Math.hypot(p.x - this.dragStart.x, p.y - this.dragStart.y) > 3) {
 					this.dragMoved = true;
 					this.takeCamera();
 				}
 				if (!this.dragMoved) return;
 				// The node follows the pointer at once; the layout moves the others.
-				const p = this.world.toLocal(e.global);
-				this.dragged.x = p.x;
-				this.dragged.y = p.y;
-				this.layout?.send({ type: 'drag', index: this.dragged.index, x: p.x, y: p.y });
+				const w = this.world.toLocal(p);
+				this.dragged.x = w.x;
+				this.dragged.y = w.y;
+				this.layout?.send({ type: 'drag', index: this.dragged.index, x: w.x, y: w.y });
 				this.edgesDirty = true;
 				this.requestFrame();
 			} else if (this.panning) {
 				this.takeCamera();
 				this.zoom = null;
-				this.world.position.set(e.global.x - this.panning.x, e.global.y - this.panning.y);
+				this.world.position.set(p.x - this.panning.x, p.y - this.panning.y);
 				this.requestFrame();
 			} else {
-				const node = this.nodeAt(e.global);
-				pixi.canvas.style.cursor = node && this.openAction(node) ? 'pointer' : '';
+				const node = this.nodeAt(p);
+				canvas.style.cursor = node && this.openAction(node) ? 'pointer' : '';
 				if (node !== this.hovered) this.setHovered(node);
 			}
 		});
-		pixi.canvas.addEventListener('pointerleave', () => {
-			if (!this.dragged) this.setHovered(null);
+		canvas.addEventListener('pointerleave', () => {
+			if (!this.dragged && !this.panning) this.setHovered(null);
 		});
-		const release = (e: FederatedPointerEvent) => {
+		const release = (e: PointerEvent, open: boolean) => {
 			const node = this.dragged;
 			this.panning = null;
+			if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
 			if (!node) return;
 			this.dragged = null;
 			if (this.dragMoved) this.layout?.send({ type: 'release', index: node.index });
-			if (!this.dragMoved) this.openNode(node, e);
+			else if (open) this.openNode(node, e);
 			this.requestFrame();
 		};
-		stage.on('pointerup', release);
-		stage.on('pointerupoutside', release);
+		canvas.addEventListener('pointerup', (e: PointerEvent) => release(e, true));
+		// A drag cut short (the window lost the pointer): release without opening.
+		canvas.addEventListener('pointercancel', (e: PointerEvent) => release(e, false));
 
 		// Zoom around the pointer, smoothly: each wheel step changes the zoom to
 		// reach, and the frames move toward it keeping the point under the pointer.
