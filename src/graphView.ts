@@ -234,6 +234,8 @@ export class LiteratureGraphView extends ItemView {
 	private fullGraph: LiteratureGraph | null = null;
 	/** Text typed in the filter: works whose label or title contain it stand out. */
 	private filter = '';
+	/** Hide the works that cite and are cited by none of the works shown. */
+	private hideIsolated = false;
 	/** Forces of the layout, changed with the sliders of the view. */
 	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.02 };
 	private readonly reload = debounce(() => void this.loadData(), 2000, true);
@@ -432,12 +434,23 @@ export class LiteratureGraphView extends ItemView {
 	private showCurrent(): void {
 		if (!this.fullGraph || !this.pixi) return;
 		if (!this.local) {
-			this.show(this.fullGraph);
+			this.show(this.withoutIsolated(this.fullGraph, null));
 			return;
 		}
 		this.center ??= this.activeNotePath();
 		this.cameraMode = 'center';
-		this.show(this.localGraph(this.fullGraph, this.center));
+		this.show(this.withoutIsolated(this.localGraph(this.fullGraph, this.center), this.center));
+	}
+
+	/** The graph without the works that cite and are cited by none, when they are hidden (never the center). */
+	private withoutIsolated(graph: LiteratureGraph, center: string | null): LiteratureGraph {
+		if (!this.hideIsolated) return graph;
+		const linked = new Set<string>();
+		for (const e of graph.edges) {
+			linked.add(e.source);
+			linked.add(e.target);
+		}
+		return { ...graph, nodes: graph.nodes.filter((n) => linked.has(n.id) || n.id === center) };
 	}
 
 	/**
@@ -778,6 +791,15 @@ export class LiteratureGraphView extends ItemView {
 						this.options.minCitations = value;
 						reloadSoon();
 					}),
+			);
+		new Setting(body)
+			.setName('Hide works without citations')
+			.setDesc('Works that cite none of the works shown and are cited by none.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.hideIsolated).onChange((value) => {
+					this.hideIsolated = value;
+					this.showCurrent();
+				}),
 			);
 		this.buildGroups(body);
 		new Setting(body).setName('Repel force').addSlider((slider) =>
