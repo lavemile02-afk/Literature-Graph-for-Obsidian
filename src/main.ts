@@ -4,12 +4,14 @@ import { BETTER_CITATIONS_READY, betterCitations } from './navigation';
 import { OpenAlexClient } from './openalex';
 import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
+import { PositionStore } from './positions';
 import { DEFAULT_SETTINGS, LiteratureGraphSettings, LiteratureGraphSettingTab } from './settings';
 
 export default class LiteratureGraphPlugin extends Plugin {
 	settings!: LiteratureGraphSettings;
 	index!: CitationIndex;
 	openAlex!: OpenAlexClient;
+	positions!: PositionStore;
 
 	async onload() {
 		await this.loadSettings();
@@ -24,6 +26,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 				: '',
 		}));
 		this.openAlex.onLimit = (error) => new Notice(error.message, 12000);
+		this.positions = new PositionStore(this.app, `${this.manifest.dir ?? ''}/layout-positions.json`);
 		this.app.workspace.onLayoutReady(() => {
 			void this.startIndex();
 			this.connectBetterCitations();
@@ -36,11 +39,18 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.registerView(
 			GRAPH_VIEW,
 			(leaf) =>
-				new LiteratureGraphView(leaf, this.index, this.openAlex, () => this.settings, async (groups) => {
-					this.settings.graphColorGroups = groups;
-					await this.saveSettings();
-					this.onSettingsChanged();
-				}),
+				new LiteratureGraphView(
+					leaf,
+					this.index,
+					this.openAlex,
+					() => this.settings,
+					async (groups) => {
+						this.settings.graphColorGroups = groups;
+						await this.saveSettings();
+						this.onSettingsChanged();
+					},
+					this.positions,
+				),
 		);
 		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
 		this.addCommand({
@@ -121,6 +131,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 	onunload() {
 		betterCitations(this.app)?.setDoiTitleProvider(null);
 		void this.openAlex.flush();
+		void this.positions.flush();
 	}
 
 	/** Called when a setting changes in the settings tab. */

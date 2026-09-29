@@ -12,6 +12,7 @@ import { buildGraph, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from 
 import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
+import type { PositionStore } from './positions';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
@@ -90,6 +91,14 @@ const GROUP_PALETTE = ['#d9a441', '#6fa8dc', '#8fbc6a', '#d4736a', '#b48ecf', '#
 
 /** Starting zoom of the local graph. */
 const LOCAL_START_SCALE = 1.5;
+/**
+ * The opening animation from saved positions: works start a little closer to
+ * the middle and shaken by up to this many units, and the layout brings them
+ * back from this alpha (about 2 to 4 s).
+ */
+const OPENING_SHRINK = 0.9;
+const OPENING_SHAKE = 40;
+const OPENING_ALPHA = 0.3;
 /** Radius of the shared circle texture, in pixels. */
 const CIRCLE_TEXTURE_RADIUS = 32;
 /** Largest node radius. */
@@ -262,6 +271,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly settings: () => LiteratureGraphSettings,
 		/** Saves the color groups (in their text form) and recolors every graph view. */
 		private readonly saveColorGroups: (text: string) => Promise<void>,
+		/** Where the works were when the layout last came to rest. */
+		private readonly positions: PositionStore,
 	) {
 		super(leaf);
 		const s = settings();
@@ -380,6 +391,7 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
+		await this.positions.load();
 		await this.loadData();
 	}
 
@@ -598,6 +610,18 @@ export class LiteratureGraphView extends ItemView {
 			target.neighbors.add(source);
 			return [{ data, source, target }];
 		});
+		// Works not shown yet start where they were when the layout last came to
+		// rest (global graph), a little shaken: the graph keeps its shape, and
+		// its points move for a moment as it opens, as in Obsidian's graph view.
+		const saved = this.local ? {} : this.positions.get(this.layoutStyle);
+		let fromSaved = 0;
+		for (const node of this.nodes) {
+			const at = node.x === undefined ? saved[node.data.id] : undefined;
+			if (!at) continue;
+			node.x = at[0] * OPENING_SHRINK + (Math.random() - 0.5) * OPENING_SHAKE;
+			node.y = at[1] * OPENING_SHRINK + (Math.random() - 0.5) * OPENING_SHAKE;
+			fromSaved++;
+		}
 		// New works outside the vault start next to a work that cites them.
 		for (const node of this.nodes) {
 			if (node.x !== undefined) continue;
@@ -630,7 +654,8 @@ export class LiteratureGraphView extends ItemView {
 			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, generation: n.data.generation, radius: n.radius })),
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
-			alpha: previous.size > 0 ? 0.5 : 1,
+			// From saved places, a short settling (about 2 to 4 s) is enough.
+			alpha: previous.size > 0 ? 0.5 : fromSaved > this.nodes.length / 2 ? OPENING_ALPHA : 1,
 			style: this.layoutStyle,
 		});
 
@@ -739,6 +764,18 @@ export class LiteratureGraphView extends ItemView {
 		}
 		this.edgesDirty = true;
 		this.requestFrame();
+		// At rest: remember where each work is, for the next opening (global graph only).
+		if (!update.moving && !this.local) this.savePositions();
+	}
+
+	/** Saves the positions of the works shown, for the current layout style. */
+	private savePositions(): void {
+		const saved: Record<string, [number, number]> = { ...this.positions.get(this.layoutStyle) };
+		for (const node of this.nodes) {
+			if (node.x === undefined || node.y === undefined) continue;
+			saved[node.data.id] = [Math.round(node.x * 10) / 10, Math.round(node.y * 10) / 10];
+		}
+		this.positions.set(this.layoutStyle, saved);
 	}
 
 	/** The panel of the view, like the controls of Obsidian's graph view. */
