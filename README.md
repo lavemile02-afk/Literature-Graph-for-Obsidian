@@ -58,7 +58,9 @@ The notes' properties give the authors, year and title of each work (see the set
 
 **Generations.** By default the graph shows the works of your vault (generation 0). With generation 1, it also shows, smaller and darker, the works outside your vault that they cite; with generation 2, the works those cite. These come from OpenAlex, and, for generation 1, also from the reference lists of your notes: works without a DOI (books, reports, older papers) are shown too, recognized from one note to another by first author, year and title, without any request (switch **Works without a DOI**). **Hide works without citations** hides the works that cite and are cited by none of the works shown. Since this can mean tens of thousands of works, a work outside the vault is shown only if enough works of the graph cite it (by default at least one), and the graph keeps at most a set number of works (by default 3000), the most cited first; the status line says how many were left out. Clicking a work outside the vault opens its DOI.
 
-**Color groups.** As in Obsidian's graph view, notes can be colored by groups: in the graph's settings panel, **New group**, then a query and a color. They are saved in the plugin settings, where they can also be written one per line as `query = color`; a note takes the color of the first group it matches:
+**Colors.** The graph takes its colors from your theme. Works outside your vault are the notes' color blended with the background (darker on a dark theme, paler on a light one; generation 2 further), so the works you have stand out. When you hover a work, the arrows to the works it cites keep the accent color, and the arrows from the works citing it are orange; the line at the bottom left says how many of each. **Color of works outside the vault** and **Color of citing works**, in the settings, take any CSS color (empty: the theme's).
+
+**Color groups.** As in Obsidian's graph view, notes can be colored by groups. In the graph's settings panel, **New group** opens a menu: pick a tag, a property's value (for example Type, then Book) or a folder from lists taken from your literature notes, and the group is created with its query; or type the query yourself, with suggestions (tags after `tag:`, properties after `[`, their values after `[Type:`, folders after `path:`). Groups are saved in the plugin settings, where they can also be written one per line as `query = color`; a note takes the color of the first group it matches:
 
 ```
 tag:#review = #d9a441
@@ -66,7 +68,7 @@ tag:#review = #d9a441
 path:Theses = hsl(140, 40%, 55%)
 ```
 
-Queries are `tag:#name` (nested tags included), `path:text`, `file:text`, `[property:value]` (the property contains the value), `[property]` (the property is not empty), or plain text found in the note's name or title. Works outside the vault keep the unresolved-node color.
+Queries are `tag:#name` (nested tags included), `path:text`, `file:text`, `[property:value]` (the property contains the value), `[property]` (the property is not empty), or plain text found in the note's name or title. Groups color the works of your vault only.
 
 **Controls.** The panel at the top right filters the works by author, year or title, and changes the generations, the minimum citations and the forces of the layout for as long as the view is open (the defaults are in the plugin settings).
 
