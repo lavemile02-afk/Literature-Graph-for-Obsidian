@@ -25,6 +25,8 @@ export interface GraphNode {
 	title: string;
 	/** Number of works of the graph that cite this one. */
 	citedBy: number;
+	/** For a work known only from a reference list: the entry as written, and its year. */
+	entry?: { text: string; year: string };
 }
 
 export interface GraphEdge {
@@ -74,6 +76,9 @@ export function entryCitation(entry: BibEntry, language: 'en' | 'fr'): string {
 
 /** Two records whose titles share this much (both ways) are taken for the same work. */
 const SAME_TITLE = 0.8;
+
+/** Label of a work outside the vault that OpenAlex has not described (yet). */
+const UNKNOWN_WORK = 'Unknown work';
 
 /** Progress messages and intermediate graphs, generation by generation. */
 export interface GraphProgress {
@@ -291,6 +296,7 @@ export async function buildGraph(
 				label: entryCitation(local, language),
 				title: entryTitle(local),
 				citedBy: 0,
+				entry: { text: local.text, year: local.year ?? '' },
 			});
 			for (const from of citers1.get(key) ?? []) g.addEdge(from, key, 'bibliography');
 			continue;
@@ -303,7 +309,8 @@ export async function buildGraph(
 			file: null,
 			doi,
 			openAlexId: work?.id ?? (key.startsWith('doi:') ? null : key),
-			label: work ? workCitation(work, language) : (doi ?? key),
+			// Not fetched from OpenAlex (yet): its DOI, rather than an opaque id.
+			label: work ? workCitation(work, language) : (doi ?? UNKNOWN_WORK),
 			title: work?.title ?? '',
 			citedBy: 0,
 		});
@@ -342,7 +349,7 @@ export async function buildGraph(
 			file: null,
 			doi: work?.doi ?? null,
 			openAlexId: key,
-			label: work ? workCitation(work, language) : key,
+			label: work ? workCitation(work, language) : UNKNOWN_WORK,
 			title: work?.title ?? '',
 			citedBy: 0,
 		});

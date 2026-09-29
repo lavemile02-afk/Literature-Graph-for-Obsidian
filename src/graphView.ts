@@ -13,6 +13,7 @@ import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
+import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
@@ -1292,8 +1293,7 @@ export class LiteratureGraphView extends ItemView {
 	/** What a click on a work opens, in words; null when there is nothing to open. */
 	private openAction(node: SimNode): string | null {
 		if (node.data.file) return 'Click to open the note';
-		if (node.data.doi) return 'Click to open its DOI';
-		if (node.data.openAlexId) return 'Click to open it on OpenAlex';
+		if (node.data.doi || node.data.openAlexId || node.data.entry) return 'Click to see its note-to-be';
 		return null;
 	}
 
@@ -1324,17 +1324,23 @@ export class LiteratureGraphView extends ItemView {
 		if (action) hint.createSpan({ cls: 'literature-graph-view-hint-action', text: ` · ${action}` });
 	}
 
-	/** Opens a work: its note, or else its DOI or OpenAlex page. */
+	/**
+	 * Opens a work: its note; or, for a work outside the vault, its "ghost
+	 * note" in a new tab (see `workView.ts`), which becomes a note once written in.
+	 */
 	private openNode(node: SimNode, event: MouseEvent): void {
 		const data = node.data;
 		if (data.file) {
 			const newTab = event.button === 1 ? 'tab' : Keymap.isModEvent(event);
 			void openFileAtLine(this.app, data.file, 0, newTab);
-		} else if (data.doi) {
-			window.open(`https://doi.org/${data.doi}`);
-		} else if (data.openAlexId) {
-			window.open(`https://openalex.org/${data.openAlexId}`);
+			return;
 		}
+		const state: WorkState | null = data.entry
+			? { entry: { text: data.entry.text, title: data.title, label: data.label, year: data.entry.year } }
+			: data.openAlexId || data.doi
+				? { id: data.openAlexId, doi: data.doi }
+				: null;
+		if (state) void this.app.workspace.getLeaf('tab').setViewState({ type: WORK_VIEW, active: true, state: { ...state } });
 	}
 
 	/** The user moved the view: the camera stops moving by itself. */

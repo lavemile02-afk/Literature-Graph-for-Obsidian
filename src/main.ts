@@ -5,6 +5,7 @@ import { OpenAlexClient } from './openalex';
 import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
 import { PositionStore } from './positions';
+import { WORK_VIEW, WorkView } from './workView';
 import { DEFAULT_SETTINGS, LiteratureGraphSettings, LiteratureGraphSettingTab } from './settings';
 
 export default class LiteratureGraphPlugin extends Plugin {
@@ -52,6 +53,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 					this.positions,
 				),
 		);
+		this.registerView(WORK_VIEW, (leaf) => new WorkView(leaf, this.openAlex, () => this.settings));
 		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
 		this.addCommand({
 			id: 'open-graph',

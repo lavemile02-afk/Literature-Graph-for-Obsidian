@@ -159,3 +159,76 @@
 .literature-graph-view:not(.is-local) .literature-graph-local-only {
 	display: none;
 }
+
+/* Ghost note of a work outside the vault: it looks like a note, but is not one yet. */
+.literature-graph-work-view {
+	padding: var(--size-4-6) var(--size-4-8);
+	max-width: var(--file-line-width);
+	margin: 0 auto;
+}
+
+.literature-graph-work-banner {
+	padding: var(--size-4-2) var(--size-4-3);
+	margin-bottom: var(--size-4-4);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.literature-graph-work-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
+}
+
+.literature-graph-work-button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+}
+
+.literature-graph-work-title {
+	opacity: 0.85;
+}
+
+.literature-graph-work-properties {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: var(--size-2-2) var(--size-4-3);
+	margin-bottom: var(--size-4-4);
+	font-size: var(--font-ui-small);
+}
+
+.literature-graph-work-property {
+	display: contents;
+}
+
+.literature-graph-work-property-key {
+	color: var(--text-muted);
+	align-self: center;
+}
+
+.literature-graph-work-property input {
+	width: 100%;
+}
+
+.literature-graph-work-property-extra {
+	grid-column: 1 / -1;
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
+}
+
+.literature-graph-work-body {
+	width: 100%;
+	min-height: 40vh;
+	font-family: var(--font-text);
+	font-size: var(--font-text-size);
+	resize: vertical;
+}
+
+.literature-graph-work-status {
+	color: var(--text-muted);
+	margin-bottom: var(--size-4-2);
+}

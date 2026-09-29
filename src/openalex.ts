@@ -30,9 +30,42 @@ export interface WorkSummary {
 	citedByCount: number;
 }
 
+/**
+ * The full record of one work, for its ghost note: what a literature note's
+ * properties need. Fetched only when a work is opened (a lookup by id or DOI
+ * is free on OpenAlex), then cached.
+ */
+export interface WorkDetails {
+	id: string;
+	doi: string | null;
+	title: string;
+	year: number | null;
+	/** Author names as OpenAlex writes them ("Benoît Bourgeois"). */
+	authors: string[];
+	/** OpenAlex's type: "article", "book", "book-chapter", "dissertation", "report", "preprint"... */
+	type: string | null;
+	/** Journal or book series. */
+	journal: string | null;
+	volume: string | null;
+	issue: string | null;
+	firstPage: string | null;
+	lastPage: string | null;
+	publisher: string | null;
+	issn: string | null;
+	/** ISO 639-1 code ("en"). */
+	language: string | null;
+	/** A link to a free, legal PDF, when OpenAlex knows one. */
+	pdfUrl: string | null;
+	/** A page where the work can be read for free (when there is no direct PDF). */
+	openAccessUrl: string | null;
+	abstract: string | null;
+}
+
 interface CacheFile {
 	version: number;
 	works: Record<string, WorkSummary>;
+	/** Full records of the works opened as ghost notes, by OpenAlex id. */
+	details?: Record<string, WorkDetails>;
 	/** DOI → OpenAlex id, or null when OpenAlex does not know the DOI. */
 	doiToId: Record<string, string | null>;
 	/** OpenAlex ids that OpenAlex did not return (merged or deleted works). */
@@ -59,6 +92,59 @@ interface RawWork {
 }
 
 const shortId = (id: string): string => id.replace(/^https:\/\/openalex\.org\//, '');
+
+const DETAILS_SELECT =
+	'id,doi,display_name,publication_year,authorships,type,biblio,primary_location,best_oa_location,open_access,language,abstract_inverted_index';
+
+interface RawDetails {
+	id?: string;
+	doi?: string | null;
+	display_name?: string | null;
+	publication_year?: number | null;
+	authorships?: { author?: { display_name?: string | null } }[];
+	type?: string | null;
+	biblio?: { volume?: string | null; issue?: string | null; first_page?: string | null; last_page?: string | null };
+	primary_location?: {
+		source?: { display_name?: string | null; host_organization_name?: string | null; issn_l?: string | null } | null;
+	} | null;
+	best_oa_location?: { pdf_url?: string | null; landing_page_url?: string | null } | null;
+	open_access?: { oa_url?: string | null } | null;
+	language?: string | null;
+	abstract_inverted_index?: Record<string, number[]> | null;
+}
+
+/** An abstract from OpenAlex's inverted index (word → its positions). */
+export function abstractFromIndex(index: Record<string, number[]> | null | undefined): string | null {
+	if (!index) return null;
+	const words: string[] = [];
+	for (const [word, positions] of Object.entries(index)) for (const p of positions) words[p] = word;
+	const text = words.filter((w) => w !== undefined).join(' ').trim();
+	return text || null;
+}
+
+function details(raw: RawDetails): WorkDetails {
+	const source = raw.primary_location?.source ?? null;
+	const pdf = raw.best_oa_location?.pdf_url ?? null;
+	return {
+		id: shortId(raw.id ?? ''),
+		doi: raw.doi ? normalizeDoi(raw.doi) : null,
+		title: raw.display_name ?? '',
+		year: raw.publication_year ?? null,
+		authors: (raw.authorships ?? []).map((a) => a.author?.display_name ?? '').filter(Boolean),
+		type: raw.type ?? null,
+		journal: source?.display_name ?? null,
+		volume: raw.biblio?.volume ?? null,
+		issue: raw.biblio?.issue ?? null,
+		firstPage: raw.biblio?.first_page ?? null,
+		lastPage: raw.biblio?.last_page ?? null,
+		publisher: source?.host_organization_name ?? null,
+		issn: source?.issn_l ?? null,
+		language: raw.language ?? null,
+		pdfUrl: pdf,
+		openAccessUrl: pdf ? null : (raw.open_access?.oa_url ?? raw.best_oa_location?.landing_page_url ?? null),
+		abstract: abstractFromIndex(raw.abstract_inverted_index),
+	};
+}
 
 function summarize(raw: RawWork): WorkSummary {
 	return {
@@ -299,6 +385,30 @@ export class OpenAlexClient {
 			total: entry.total,
 			works: entry.ids.map((i) => this.cache.works[i]).filter((w): w is WorkSummary => w !== undefined),
 		};
+	}
+
+	/**
+	 * The full record of a work (by OpenAlex id, or by DOI), from the cache or
+	 * OpenAlex (a free lookup); null when unknown, or offline and not cached.
+	 */
+	async workDetails(ref: { id?: string | null; doi?: string | null }): Promise<WorkDetails | null> {
+		await this.load();
+		const all = (this.cache.details ??= {});
+		const id = ref.id ?? (ref.doi ? this.cachedIdForDoi(ref.doi) : null);
+		if (id && all[id]) return all[id] ?? null;
+		if (!this.options().enabled || this.isRateLimited) return null;
+		const path = id ? `/works/${id}` : ref.doi ? `/works/doi:${normalizeDoi(ref.doi)}` : null;
+		if (!path) return null;
+		let found: WorkDetails | null = null;
+		await this.tryFetch(async () => {
+			const raw = (await this.request(path, { select: DETAILS_SELECT })) as RawDetails | null;
+			if (!raw?.id) return;
+			found = details(raw);
+			all[found.id] = found;
+			if (found.doi) this.cache.doiToId[found.doi] = found.id;
+			this.scheduleSave();
+		});
+		return found;
 	}
 
 	/** Whether a DOI was already looked up (found or not). */
