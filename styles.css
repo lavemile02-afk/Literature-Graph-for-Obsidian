@@ -317,3 +317,47 @@
 	width: 100%;
 	margin-top: var(--size-4-2);
 }
+
+/* A discreet warning in the citations panel: another note seems to be the same work. */
+.literature-graph-duplicate {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 var(--size-2-2);
+	margin: 0 var(--size-4-2) var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-warning);
+}
+
+.literature-graph-duplicate-icon {
+	display: flex;
+}
+
+.literature-graph-duplicate-icon svg {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.literature-graph-duplicate-link {
+	cursor: pointer;
+}
+
+/* "Find duplicate works". */
+.literature-graph-duplicates-group {
+	padding: var(--size-4-2) 0;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.literature-graph-duplicates-reason {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.literature-graph-duplicates-note {
+	color: var(--text-accent);
+	cursor: pointer;
+}
+
+.literature-graph-duplicates-note:hover {
+	text-decoration: underline;
+}

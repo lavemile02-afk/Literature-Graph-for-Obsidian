@@ -106,6 +106,7 @@ export class CitationsView extends ItemView {
 			return;
 		}
 		root.createDiv({ cls: 'literature-graph-panel-title', text: file.basename });
+		this.renderDuplicates(root, file);
 
 		// Cites: works cited by the note's citation links.
 		const cited = this.citedByLinks(file);
@@ -129,6 +130,26 @@ export class CitationsView extends ItemView {
 		// ...and from the note's own reference list.
 		const entries = this.index.bibliographyOf(file);
 		if (entries.length > 0) this.renderNoteBibliography(root, file, entries, doi === null);
+	}
+
+	/** A discreet warning when another note seems to be the same work. */
+	private renderDuplicates(root: HTMLElement, file: TFile): void {
+		if (!this.index.isLiterature(file)) return;
+		const group = this.index.duplicates().find((g) => g.paths.includes(file.path));
+		if (!group) return;
+		const warning = root.createDiv({ cls: 'literature-graph-duplicate' });
+		setIcon(warning.createSpan({ cls: 'literature-graph-duplicate-icon' }), 'copy');
+		warning.appendText(group.reason === 'doi' ? 'Same DOI as ' : 'Same author, year and title as ');
+		group.paths
+			.filter((p) => p !== file.path)
+			.forEach((path, i) => {
+				if (i > 0) warning.appendText(', ');
+				const other = this.app.vault.getAbstractFileByPath(path);
+				const link = warning.createEl('a', { cls: 'literature-graph-duplicate-link', text: other instanceof TFile ? other.basename : path });
+				link.addEventListener('click', () => {
+					if (other instanceof TFile) void openFileAtLine(this.app, other, 0, false);
+				});
+			});
 	}
 
 	/** The reference list of the note itself, each entry linked to a note or a DOI when possible. */

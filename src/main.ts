@@ -4,6 +4,7 @@ import { BETTER_CITATIONS_READY, betterCitations } from './navigation';
 import { OpenAlexClient } from './openalex';
 import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
+import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
 import { writeSuggestionsFile } from './suggestionsFile';
 import { WORK_VIEW, WorkView } from './workView';
@@ -72,6 +73,11 @@ export default class LiteratureGraphPlugin extends Plugin {
 			id: 'open-citations-panel',
 			name: 'Open citations panel',
 			callback: () => void this.openCitationsPanel(),
+		});
+		this.addCommand({
+			id: 'find-duplicate-works',
+			name: 'Find duplicate works',
+			callback: () => new DuplicatesModal(this.app, this.index.duplicates()).open(),
 		});
 		this.addCommand({
 			id: 'open-reading-suggestions',

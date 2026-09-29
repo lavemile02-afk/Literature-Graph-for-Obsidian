@@ -2,6 +2,7 @@ import { App, Events, parseFrontMatterAliases, TAbstractFile, TFile, TFolder } f
 import { BibEntry, VaultWork, bibliographyEntries, entryMatches, isReferenceHeading, nameKey } from './bibliography';
 import { CITE_URL_PREFIX, CitationTarget } from './citation';
 import { CitationLink, citationLinksIn } from './links';
+import { DuplicateGroup, findDuplicates } from './duplicates';
 import { resolveCitedNote } from './navigation';
 import type { LiteratureGraphSettings } from './settings';
 
@@ -93,6 +94,18 @@ export class CitationIndex extends Events {
 			doi: this.doiByPath.get(file.path) ?? null,
 			otherTitles: parseFrontMatterAliases(fm) ?? [],
 		};
+	}
+
+	/** Notes of the literature folder that may be the same work twice (see `duplicates.ts`). */
+	duplicates(): DuplicateGroup[] {
+		const works = this.app.vault
+			.getMarkdownFiles()
+			.filter((f) => this.isLiterature(f))
+			.flatMap((file) => {
+				const work = this.vaultWork(file);
+				return work ? [{ path: file.path, work }] : [];
+			});
+		return findDuplicates(works);
 	}
 
 	/** Reads every Markdown note. */
