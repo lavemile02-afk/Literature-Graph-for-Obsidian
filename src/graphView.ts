@@ -613,6 +613,8 @@ export class LiteratureGraphView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.loading++;
+		// A computation of meaning still running stops at its next step.
+		this.meaningRun++;
 		this.layout?.destroy();
 		this.layout = null;
 		if (this.frameId !== null) this.frameWindow?.cancelAnimationFrame(this.frameId);

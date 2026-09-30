@@ -204,7 +204,7 @@ export class OpenAlexLimitError extends Error {
 
 export class OpenAlexClient {
 	private cache: CacheFile = { version: CACHE_VERSION, works: {}, doiToId: {} };
-	private loaded = false;
+	private loaded: Promise<void> | null = null;
 	private lastRequest = 0;
 	private queue: Promise<unknown> = Promise.resolve();
 	private saveTimer: number | null = null;
@@ -215,18 +215,19 @@ export class OpenAlexClient {
 		private readonly options: () => { enabled: boolean; email: string; apiKey: string },
 	) {}
 
-	/** Reads the cache file, once. */
-	async load(): Promise<void> {
-		if (this.loaded) return;
-		this.loaded = true;
-		try {
-			if (await this.app.vault.adapter.exists(this.cachePath)) {
-				const data = JSON.parse(await this.app.vault.adapter.read(this.cachePath)) as CacheFile;
-				if (data.version === CACHE_VERSION) this.cache = data;
+	/** Reads the cache file, once; callers during the reading wait for it. */
+	load(): Promise<void> {
+		this.loaded ??= (async () => {
+			try {
+				if (await this.app.vault.adapter.exists(this.cachePath)) {
+					const data = JSON.parse(await this.app.vault.adapter.read(this.cachePath)) as CacheFile;
+					if (data.version === CACHE_VERSION) this.cache = data;
+				}
+			} catch (error) {
+				console.error('Literature Graph: could not read the OpenAlex cache', error);
 			}
-		} catch (error) {
-			console.error('Literature Graph: could not read the OpenAlex cache', error);
-		}
+		})();
+		return this.loaded;
 	}
 
 	/** Writes the cache file a little after the last change. */

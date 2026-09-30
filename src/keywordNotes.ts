@@ -56,10 +56,20 @@ export async function writeKeywordsToNotes(
 			none++;
 			continue;
 		}
+		let wrote = false;
 		await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+			// Checked again on the file itself: Obsidian's cache may lag behind an edit.
+			const value = frontmatter[property];
+			const empty = value === undefined || value === null || (Array.isArray(value) ? value.length === 0 : typeof value === 'string' && value.trim() === '');
+			if (!empty) return;
 			frontmatter[property] = names;
+			wrote = true;
 		});
-		written++;
+		if (wrote) written++;
+		else {
+			kept++;
+			continue;
+		}
 		if (written % 10 === 0) onStatus(`writing: ${written} notes…`);
 	}
 	return { written, kept, none };

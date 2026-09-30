@@ -203,6 +203,8 @@ export class CitationIndex extends Events {
 		this.descriptions.delete(oldPath);
 		if (description !== undefined) this.descriptions.set(file.path, description);
 		this.trigger('changed');
+		// Maybe moved into the literature folder: its reference list was not read yet.
+		if (literature && entries.length === 0) void this.indexFile(file);
 	}
 
 	private workKey(file: TFile): string | null {
@@ -293,13 +295,19 @@ export class CitationIndex extends Events {
 
 	private setDoi(path: string, doi: string | null): void {
 		const old = this.doiByPath.get(path);
-		if (old && this.fileByDoi.get(old) === path) this.fileByDoi.delete(old);
-		if (doi) {
-			this.doiByPath.set(path, doi);
-			if (!this.fileByDoi.has(doi)) this.fileByDoi.set(doi, path);
-		} else {
-			this.doiByPath.delete(path);
+		if (doi) this.doiByPath.set(path, doi);
+		else this.doiByPath.delete(path);
+		if (old && old !== doi && this.fileByDoi.get(old) === path) {
+			// Another note with the same DOI (a duplicate) takes its place.
+			this.fileByDoi.delete(old);
+			for (const [other, otherDoi] of this.doiByPath) {
+				if (otherDoi === old) {
+					this.fileByDoi.set(old, other);
+					break;
+				}
+			}
 		}
+		if (doi && !this.fileByDoi.has(doi)) this.fileByDoi.set(doi, path);
 	}
 
 	/** The note of the vault with this DOI, if any. */
