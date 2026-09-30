@@ -14,7 +14,19 @@ import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
 import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
-import { appearanceOrder, fitSphere, projectOnSphere, Sphere } from './sphere';
+import { appearanceOrder, fitSphere, Sphere } from './sphere';
+import {
+	AnimationSetup,
+	framesShape,
+	hasSignals,
+	IDLE_ANIMATIONS,
+	IdleAnimation,
+	isIdleAnimation,
+	keepsEdges,
+	placeWork,
+	setUpAnimation,
+	signals,
+} from './animations';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -134,8 +146,11 @@ const IDLE_FOLD_SECONDS = 1.5;
 const IDLE_UNFOLD_SECONDS = 0.4;
 /** Seconds for every work to appear, one by one, on the sphere. */
 const APPEAR_SECONDS = 25;
-/** Radians per second of rotation for each step of the speed setting. */
-const ROTATION_STEP = 0.04;
+/** The speed setting at which the idle animations run at their own pace. */
+const NORMAL_SPEED = 5;
+/** Signals running along the citations in the constellation, and their radius on screen (pixels). */
+const SIGNALS = 40;
+const SIGNAL_RADIUS = 3;
 /** Share of the view the sphere fills. */
 const SPHERE_FILL = 0.8;
 /** Alpha of the works at the back of the sphere. */
@@ -244,6 +259,9 @@ export class LiteratureGraphView extends ItemView {
 	private readonly focusOutEdges = new EdgeMesh();
 	private readonly focusInEdges = new EdgeMesh();
 	private readonly nodesLayer = new Container();
+	/** Bright signals running along the citations (the constellation animation). */
+	private readonly signalsLayer = new Container();
+	private signalSprites: Sprite[] = [];
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
 	/** The layout, run in a web worker. */
@@ -286,6 +304,9 @@ export class LiteratureGraphView extends ItemView {
 		startedAt: 0,
 		lastFrame: 0,
 		sphere: null as Sphere | null,
+		/** The animation playing, and what it needs about the works. */
+		animation: 'sphere' as IdleAnimation,
+		setup: null as AnimationSetup | null,
 		rank: [] as number[],
 		anchor: [] as (SimNode | null)[],
 		appear: [] as number[],
@@ -359,8 +380,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly index: CitationIndex,
 		private readonly openAlex: OpenAlexClient,
 		private readonly settings: () => LiteratureGraphSettings,
-		/** Saves the color groups (in their text form) and recolors every graph view. */
-		private readonly saveColorGroups: (text: string) => Promise<void>,
+		/** Saves settings changed in the view (color groups, idle animation) and updates every graph view. */
+		private readonly saveSettings: (changes: Partial<LiteratureGraphSettings>) => Promise<void>,
 		/** Where the works were when the layout last came to rest. */
 		private readonly positions: PositionStore,
 	) {
@@ -471,6 +492,7 @@ export class LiteratureGraphView extends ItemView {
 			this.vaultEdges.mesh,
 			this.focusInEdges.mesh,
 			this.focusOutEdges.mesh,
+			this.signalsLayer,
 			this.nodesLayer,
 			this.labelsLayer,
 		);
@@ -923,9 +945,21 @@ export class LiteratureGraphView extends ItemView {
 			window.setInterval(() => {
 				const s = this.settings();
 				const delay = Math.max(3, Number(s.graphIdleDelay) || 10) * 1000;
-				if (!this.idle.running && s.graphIdleAnimation === 'sphere' && Date.now() - this.lastActivity >= delay) this.startIdle();
+				if (!this.idle.running && this.idleAnimation() !== 'none' && Date.now() - this.lastActivity >= delay) this.startIdle();
 			}, 1000),
 		);
+	}
+
+	/** The idle animation chosen (setting shared by every graph view). */
+	private idleAnimation(): IdleAnimation {
+		const chosen = this.settings().graphIdleAnimation;
+		return isIdleAnimation(chosen) ? chosen : 'sphere';
+	}
+
+	/** Seconds of animation since it started, at the pace of the speed setting. */
+	private idleTime(now: number): number {
+		const speed = Math.max(1, Number(this.settings().graphRotationSpeed) || NORMAL_SPEED);
+		return ((now - this.idle.startedAt) / 1000) * (speed / NORMAL_SPEED);
 	}
 
 	/** Starts the idle animation, if the view can show it now (`grace`: milliseconds during which input does not stop it). */
@@ -948,8 +982,24 @@ export class LiteratureGraphView extends ItemView {
 			}
 			return best;
 		});
+		// "None" in the settings: the panel's Play button still shows the sphere.
+		const chosen = this.idleAnimation();
+		const animation = chosen === 'none' ? 'sphere' : chosen;
+		// The works cited by one work of the vault go together (on one orbit).
+		const setup = setUpAnimation(
+			this.nodes.map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })),
+			sphere,
+			(i) => {
+				const node = this.nodes[i];
+				if (!node || node.data.generation === 0) return i;
+				for (const m of node.neighbors) if (m.data.generation === 0) return m.index;
+				return i;
+			},
+		);
 		this.idle = {
 			...this.idle,
+			animation,
+			setup,
 			running: true,
 			startedAt: performance.now(),
 			lastFrame: performance.now(),
@@ -988,8 +1038,8 @@ export class LiteratureGraphView extends ItemView {
 			: Math.max(0, idle.level - dt / IDLE_UNFOLD_SECONDS);
 		const screen = this.pixi?.screen;
 		const sphere = idle.sphere;
-		if (idle.running && screen && sphere) {
-			// The whole sphere in view.
+		if (idle.running && screen && sphere && framesShape(idle.animation)) {
+			// The whole shape in view (the free drift stays where the graph is).
 			const goal = { x: sphere.cx, y: sphere.cy, scale: clampScale((Math.min(screen.width, screen.height) * SPHERE_FILL) / (2 * sphere.radius)) };
 			this.setCamera(approach(this.getCamera(), goal, CAMERA_STEP / 2));
 		} else if (!idle.running && idle.returnTo) {
@@ -1010,10 +1060,10 @@ export class LiteratureGraphView extends ItemView {
 	private projectIdle(now: number): Float64Array {
 		const idle = this.idle;
 		const saved = new Float64Array(this.nodes.length * 2);
-		const sphere = idle.sphere;
-		if (!sphere) return saved;
+		const setup = idle.setup;
+		if (!setup) return saved;
 		const s = this.settings();
-		const angle = ((now - idle.startedAt) / 1000) * ROTATION_STEP * Math.max(1, Number(s.graphRotationSpeed) || 5);
+		const t = this.idleTime(now);
 		// How many works have appeared (all of them when stopping, or without the setting).
 		const grown =
 			idle.running && s.graphAppearOneByOne
@@ -1028,7 +1078,7 @@ export class LiteratureGraphView extends ItemView {
 			const y = node.y ?? 0;
 			saved[node.index * 2] = x;
 			saved[node.index * 2 + 1] = y;
-			const own = projectOnSphere(x, y, sphere, angle);
+			const own = placeWork(idle.animation, setup, node.index, x, y, t);
 			const appear = Math.min(1, Math.max(0, grown - (idle.rank[node.index] ?? 0)));
 			idle.appear[node.index] = appear;
 			// Not fully there yet: on its way out of the work it grows from.
@@ -1043,6 +1093,39 @@ export class LiteratureGraphView extends ItemView {
 			node.y = y + (p.y - y) * level;
 		}
 		return saved;
+	}
+
+	/**
+	 * The constellation's signals: bright dots running along citations, from
+	 * the citing work to the cited one, at the works' drawn places.
+	 */
+	private drawSignals(now: number, theme: Theme): void {
+		const idle = this.idle;
+		const on = idle.level > 0 && hasSignals(idle.animation) && this.links.length > 0;
+		this.signalsLayer.visible = on;
+		if (!on) return;
+		const list = signals(SIGNALS, this.links.length, this.idleTime(now));
+		while (this.signalSprites.length < list.length) {
+			const sprite = new Sprite(this.circleTexture ?? Texture.WHITE);
+			sprite.anchor.set(0.5);
+			this.signalsLayer.addChild(sprite);
+			this.signalSprites.push(sprite);
+		}
+		const size = SIGNAL_RADIUS / this.world.scale.x / CIRCLE_TEXTURE_RADIUS;
+		list.forEach(({ link, along }, k) => {
+			const sprite = this.signalSprites[k];
+			const l = this.links[link];
+			if (!sprite || !l) return;
+			const there = (idle.appear[l.source.index] ?? 1) >= 1 && (idle.appear[l.target.index] ?? 1) >= 1;
+			sprite.visible = there && !this.outOfTime(l.source) && !this.outOfTime(l.target);
+			const sx = l.source.x ?? 0;
+			const sy = l.source.y ?? 0;
+			sprite.position.set(sx + ((l.target.x ?? 0) - sx) * along, sy + ((l.target.y ?? 0) - sy) * along);
+			sprite.tint = theme.focused.color;
+			// Fades in as it leaves, out as it arrives.
+			sprite.alpha = Math.sin(Math.PI * along) * idle.level;
+			sprite.scale.set(size);
+		});
 	}
 
 	/**
@@ -1534,7 +1617,16 @@ export class LiteratureGraphView extends ItemView {
 		this.register(() => this.stopTimeline());
 		new Setting(body)
 			.setName('Idle animation')
-			.setDesc('Starts by itself after a while without input (see the plugin settings). A click in the graph stops it.')
+			.setDesc('Plays by itself after a while without input (delay and speed in the plugin settings); a click in the graph stops it. Kept for every graph, also after closing it.')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({ ...IDLE_ANIMATIONS })
+					.setValue(this.idleAnimation())
+					.onChange((value) => void this.saveSettings({ graphIdleAnimation: value }));
+				this.syncControls.push(() => {
+					dropdown.setValue(this.idleAnimation());
+				});
+			})
 			.addButton((button) =>
 				button.setButtonText('Play').onClick(() => {
 					setOpen(false);
@@ -1572,7 +1664,7 @@ export class LiteratureGraphView extends ItemView {
 			.setHeading();
 		const list = body.createDiv({ cls: 'literature-graph-groups' });
 		let groups: ColorGroup[] = [];
-		const save = () => void this.saveColorGroups(formatColorGroups(groups, this.settings().graphColorGroups));
+		const save = () => void this.saveSettings({ graphColorGroups: formatColorGroups(groups, this.settings().graphColorGroups) });
 		const saveSoon = debounce(save, 500, true);
 		// What queries can name, from the notes of the graph (read when needed).
 		const queryData = () =>
@@ -1736,6 +1828,7 @@ export class LiteratureGraphView extends ItemView {
 
 		const saved = this.idle.level > 0 ? this.projectIdle(now) : null;
 		this.draw(theme);
+		this.drawSignals(now, theme);
 		if (saved) this.finishIdle(saved);
 		pixi.render();
 		if (again) this.requestFrame();
@@ -1766,8 +1859,10 @@ export class LiteratureGraphView extends ItemView {
 		}
 		const lerp = (a: number, b: number) => a + (b - a) * level;
 		// Lines fade as the view zooms out, so the works stay readable; the
-		// hovered work's arrows do not.
-		const zoomFade = Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
+		// hovered work's arrows do not. Most idle animations fade them out too,
+		// so that every work moves freely.
+		const idleFade = this.idle.level > 0 && !keepsEdges(this.idle.animation) ? 1 - this.idle.level : 1;
+		const zoomFade = idleFade * Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
 		this.vaultEdges.style(theme.line, lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.focusOutEdges.style(theme.focused, theme.focused.alpha * level);

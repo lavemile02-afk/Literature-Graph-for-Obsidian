@@ -1,4 +1,5 @@
 import { App, Plugin, PluginSettingTab, SecretComponent, SettingDefinitionItem } from 'obsidian';
+import { IDLE_ANIMATIONS } from './animations';
 import { LAYOUT_STYLES } from './layout';
 
 export type CitationLanguage = 'en' | 'fr';
@@ -254,8 +255,8 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Idle animation',
-						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph wraps itself around a sphere that turns slowly; a click in the graph brings the flat graph back. Never when your system asks for reduced motion.',
-						control: { type: 'dropdown', key: 'graphIdleAnimation', options: { sphere: 'Rotating sphere', none: 'None' } },
+						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph turns into an animation: a rotating sphere, works drifting freely, orbits, a wave, a braid... A click in the graph brings the flat graph back. Also chosen in the graph\'s panel. Never when your system asks for reduced motion.',
+						control: { type: 'dropdown', key: 'graphIdleAnimation', options: { ...IDLE_ANIMATIONS } },
 					},
 					{
 						name: 'Idle delay',
@@ -263,8 +264,8 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'number', key: 'graphIdleDelay', min: 3 },
 					},
 					{
-						name: 'Rotation speed',
-						desc: 'How fast the sphere turns.',
+						name: 'Animation speed',
+						desc: 'How fast the idle animation moves.',
 						control: { type: 'slider', key: 'graphRotationSpeed', min: 1, max: 20, step: 1 },
 					},
 					{

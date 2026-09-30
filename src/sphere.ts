@@ -71,11 +71,11 @@ export interface Projected {
 }
 
 /**
- * Where a point of the flat graph is seen when the graph is wrapped around the
- * sphere turned by `angle` (radians, around its axis).
+ * The direction (unit vector) of a point of the flat graph on the sphere,
+ * before it is tilted and turned: z points to the viewer, the graph's center
+ * at the front pole (z = 1).
  */
-export function projectOnSphere(x: number, y: number, sphere: Sphere, angle: number): Projected {
-	const R = sphere.radius;
+export function sphereDirection(x: number, y: number, sphere: Sphere): [number, number, number] {
 	const dx = x - sphere.cx;
 	const dy = y - sphere.cy;
 	// A share q of the sphere's area lies within polar angle φ of the pole
@@ -83,10 +83,20 @@ export function projectOnSphere(x: number, y: number, sphere: Sphere, angle: num
 	const q = shareWithin(sphere.distances, Math.hypot(dx, dy));
 	const polar = Math.acos(1 - q * (1 - Math.cos(MAX_POLAR)));
 	const azimuth = Math.atan2(dy, dx);
+	return [Math.sin(polar) * Math.cos(azimuth), Math.sin(polar) * Math.sin(azimuth), Math.cos(polar)];
+}
+
+/**
+ * Where a point of the flat graph is seen when the graph is wrapped around the
+ * sphere turned by `angle` (radians, around its axis).
+ */
+export function projectOnSphere(x: number, y: number, sphere: Sphere, angle: number): Projected {
+	const R = sphere.radius;
 	// On the sphere, the front pole toward the viewer (z > 0).
-	const px = R * Math.sin(polar) * Math.cos(azimuth);
-	const py0 = R * Math.sin(polar) * Math.sin(azimuth);
-	const pz0 = R * Math.cos(polar);
+	const [ux, uy, uz] = sphereDirection(x, y, sphere);
+	const px = R * ux;
+	const py0 = R * uy;
+	const pz0 = R * uz;
 	// The front pole leans down a little, then the globe turns around its (tilted) axis.
 	const py = py0 * Math.cos(TILT) - pz0 * Math.sin(TILT);
 	const pz1 = py0 * Math.sin(TILT) + pz0 * Math.cos(TILT);

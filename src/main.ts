@@ -49,8 +49,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 					this.index,
 					this.openAlex,
 					() => this.settings,
-					async (groups) => {
-						this.settings.graphColorGroups = groups;
+					async (changes) => {
+						Object.assign(this.settings, changes);
 						await this.saveSettings();
 						this.onSettingsChanged();
 					},
