@@ -299,7 +299,8 @@ export class LiteratureGraphView extends ItemView {
 	private meaningKin: [number, number][][] = [];
 	/** What meaning is learned from: the literature notes of the vault (see `meaningModel`). */
 	private meaningModelCache: { key: string; vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null } | null = null;
-	private meaningFor: LiteratureGraph | null = null;
+	/** The works (their ids) whose meaning was last computed: a graph shown again with the same works is not computed again. */
+	private meaningFor: string | null = null;
 	private meaningRun = 0;
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
@@ -1048,8 +1049,13 @@ export class LiteratureGraphView extends ItemView {
 	 */
 	private async computeMeaning(): Promise<void> {
 		const graph = this.shownGraph;
-		if (!graph || this.meaningFor === graph) return;
-		this.meaningFor = graph;
+		if (!graph) return;
+		// By the works shown, not by the graph object: showing the same works
+		// again (the Meaning layout does, once the meaning is known) builds a
+		// new object, and must not start the computation again.
+		const works = this.nodes.map((n) => n.data.id).join('\n');
+		if (this.meaningFor === works) return;
+		this.meaningFor = works;
 		const run = ++this.meaningRun;
 		const nodes = this.nodes.slice();
 		const ids = nodes.flatMap((n) => (n.data.openAlexId ? [n.data.openAlexId] : []));
