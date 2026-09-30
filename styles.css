@@ -48,11 +48,17 @@
 	color: var(--text-faint);
 }
 
-/* Literature graph view. */
-.literature-graph-view {
+/*
+ * Literature graph view. As specific as Obsidian's
+ * `.workspace-leaf-content .view-content`, which otherwise wins and lets the
+ * view scroll. `clip`, not `hidden`: a hidden overflow can still be scrolled
+ * by the browser (to bring a focused slider of the panel into view), which
+ * pushed the panel's buttons out of sight.
+ */
+.workspace-leaf-content .view-content.literature-graph-view {
 	position: relative;
 	padding: 0;
-	overflow: hidden;
+	overflow: clip;
 }
 
 .literature-graph-view canvas {
