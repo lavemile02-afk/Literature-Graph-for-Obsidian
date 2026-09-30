@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blendColors, colorsFromSharedKeywords, hslColor, mainTopics, TopicInfo, topicColors, topicVector, WorkTopics } from '../src/topics';
+import { blendColors, colorsFromSharedKeywords, hslColor, mainTopics, meaningPlaces, TopicInfo, topicColors, topicName, topicsFromNames, topicVector, WorkTopics } from '../src/topics';
 
 const place = (subfield: string, field: string): Omit<TopicInfo, 'name'> => ({ subfield, subfieldName: '', field, fieldName: '' });
 const info: Record<string, TopicInfo> = {
@@ -107,4 +107,26 @@ test('lists the main topics of the graph, most frequent first', () => {
 		{ id: 'TP', works: 2 },
 		{ id: 'TE', works: 1 },
 	]);
+});
+
+test('reads the topics written in a note: OpenAlex names, and keywords of the user', () => {
+	const idOf = (name: string) => Object.entries(info).find(([, t]) => t.name.toLowerCase() === name.toLowerCase())?.[0];
+	const topics = topicsFromNames(['Peatland hydrology', 'Sphaignes rouges'], [['TP', 0.8], ['TE', 0.5]], idOf);
+	assert.deepEqual(topics, [
+		['TP', 0.8],
+		['kw:sphaignes rouges', 1],
+	]);
+	assert.equal(topicName('kw:sphaignes rouges', lookup), 'sphaignes rouges');
+	assert.equal(topicName('TP', lookup), 'Peatland hydrology');
+	// A keyword counts in the vector of meaning.
+	assert.ok((topicVector(topics, lookup).get('kw:sphaignes rouges') ?? 0) > 0);
+});
+
+test('places works on related topics near each other, far from other domains', () => {
+	const works: WorkTopics[] = [[['TP', 1]], [['TP', 1]], [['TM', 1]], [['TC', 1]], [['TD', 1]], undefined];
+	const places = meaningPlaces(works, lookup);
+	assert.equal(places[5], null);
+	const d = (a: number, b: number) => Math.hypot(places[a]![0] - places[b]![0], places[a]![1] - places[b]![1]);
+	assert.ok(d(0, 1) < 1e-9);
+	assert.ok(d(0, 2) < d(0, 3), `${d(0, 2)} < ${d(0, 3)}`);
 });

@@ -30,7 +30,8 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
-import { colorsFromSharedKeywords, mainTopics, topicColors, topicLegendColors } from './topics';
+import { colorsFromSharedKeywords, mainTopics, meaningPlaces, topicColors, topicLegendColors, topicName, topicsFromNames, WorkTopics } from './topics';
+import { topicsInNote } from './topicNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -539,6 +540,28 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.index.on('changed', () => this.reload()));
+		// Topics edited in a note: colors again, and the topics layout places its works again.
+		const topicsEdited = debounce(
+			() => {
+				if (!this.byTopic() && this.layoutStyle !== 'topics') return;
+				this.applyColorGroups();
+				if (this.layoutStyle === 'topics') this.showCurrent();
+			},
+			1000,
+			true,
+		);
+		// (Only when the topics themselves changed: typing in a note does nothing.)
+		const seenTopics = new Map<string, string>();
+		this.registerEvent(
+			this.app.metadataCache.on('changed', (file) => {
+				if (!this.nodes.some((n) => n.data.file === file)) return;
+				const topics = topicsInNote(this.app, file, this.settings().topicsProperty.trim() || 'topics').join('\n');
+				const before = seenTopics.get(file.path);
+				seenTopics.set(file.path, topics);
+				// (First time a note is seen: only if it has topics, which may be new.)
+				if (before !== topics && (before !== undefined || topics !== '')) topicsEdited();
+			}),
+		);
 		this.registerEvent(this.app.workspace.on('file-open', () => this.followActiveNote()));
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', () => {
@@ -811,10 +834,11 @@ export class LiteratureGraphView extends ItemView {
 		// Years first: the chronological and circle layouts place the works by them.
 		this.readYears();
 		this.buildTimeAxis();
+		const anchors = this.layoutStyle === 'topics' ? this.topicAnchors() : null;
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
-			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius, year: plausibleYear(this.years[n.index]) })),
+			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius, year: plausibleYear(this.years[n.index]), anchor: anchors?.[n.index] ?? null })),
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
 			// From saved places, a short settling (about 2 to 4 s) is enough.
@@ -859,14 +883,34 @@ export class LiteratureGraphView extends ItemView {
 	 * usual color. Topics missing from the cache are fetched once, then the
 	 * graph is colored again.
 	 */
+	/**
+	 * A work's topics: those written in its note's topics property if any (the
+	 * user's word wins), otherwise OpenAlex's.
+	 */
+	private workTopics(node: SimNode): WorkTopics | undefined {
+		const fromOpenAlex = node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined;
+		const file = node.data.file;
+		if (!file) return fromOpenAlex;
+		const names = topicsInNote(this.app, file, this.settings().topicsProperty.trim() || 'topics');
+		return names.length > 0 ? topicsFromNames(names, fromOpenAlex, (name) => this.openAlex.topicIdByName(name)) : fromOpenAlex;
+	}
+
+	/** Places of the works for the topics layout: their place in the plane of meaning, scaled to the graph. */
+	private topicAnchors(): ([number, number] | null)[] {
+		const places = meaningPlaces(this.nodes.map((n) => this.workTopics(n)), (id) => this.openAlex.topicInfo(id));
+		const scale = Math.max(300, 45 * Math.sqrt(this.nodes.length));
+		return places.map((p) => (p ? [p[0] * scale, p[1] * scale] : null));
+	}
+
 	private applyTopicColors(): void {
-		if (!this.byTopic()) {
+		// Topics serve the colors and the topics layout.
+		if (!this.byTopic() && this.layoutStyle !== 'topics') {
 			for (const node of this.nodes) node.topicColor = null;
 			this.topicLegend = [];
 			this.renderTopicLegend();
 			return;
 		}
-		const topicsOf = (node: SimNode) => (node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined);
+		const topicsOf = (node: SimNode) => this.workTopics(node);
 		const ids = this.nodes.flatMap((n) => (n.data.openAlexId && topicsOf(n) === undefined ? [n.data.openAlexId] : []));
 		if (ids.length > 0 && this.topicsRequested !== this.shownGraph) {
 			this.topicsRequested = this.shownGraph;
@@ -876,7 +920,15 @@ export class LiteratureGraphView extends ItemView {
 				.finally(() => {
 					this.setStatus(this.summary);
 					this.applyTopicColors();
+					// The topics layout places the works by their topics, now known.
+					if (this.layoutStyle === 'topics') this.showCurrent();
 				});
+		}
+		if (!this.byTopic()) {
+			for (const node of this.nodes) node.topicColor = null;
+			this.topicLegend = [];
+			this.renderTopicLegend();
+			return;
 		}
 		// Colors relative to the diversity of the works of this graph (see `topics.ts`).
 		const info = (id: string) => this.openAlex.topicInfo(id);
@@ -901,7 +953,7 @@ export class LiteratureGraphView extends ItemView {
 		const main = mainTopics(topics, TOPIC_LEGEND);
 		const legend = topicLegendColors(main.map((t) => t.id), topics, info, lightness, intensity);
 		this.topicLegend = main.map(({ id, works }) => ({
-			name: this.openAlex.topicInfo(id)?.name ?? id,
+			name: topicName(id, info),
 			works,
 			color: legend.get(id) ?? 0x888888,
 		}));
@@ -1843,7 +1895,7 @@ export class LiteratureGraphView extends ItemView {
 	private buildDisplay(body: HTMLElement, close: () => void): void {
 		new Setting(body)
 			.setName('Layout')
-			.setDesc('For as long as the view is open; the default is in the plugin settings.')
+			.setDesc('For as long as the view is open; the default is in the plugin settings. Topics: works on related topics gather in clouds.')
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOptions({ ...LAYOUT_STYLES })

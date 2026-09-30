@@ -7,7 +7,10 @@
  * - "layers": the works of the vault in the middle, then a ring for each
  *   depth, like the rings of a tree;
  * - "circle": the works of the vault on a circle, by year, their citations
- *   as chords, and the other works around.
+ *   as chords, and the other works around;
+ * - "topics": each work drawn to its place in the plane of meaning of its
+ *   topics (see `topics.ts`), so works on related topics make clouds, and
+ *   the further apart their topics, the further apart the clouds.
  *
  * Like `layout.ts`, nothing here knows about Obsidian or PixiJS: it runs in
  * the layout's web worker.
@@ -317,6 +320,23 @@ export function createCircleSimulation(nodes: LayoutNode[], links: LayoutLink[],
 		.force('x', forceX<LayoutNode>((n) => place(n)?.x ?? 0).strength((n) => (place(n) ? 1 : 0)))
 		.force('y', forceY<LayoutNode>((n) => place(n)?.y ?? 0).strength((n) => (place(n) ? 1 : 0)))
 		.force('radial', forceRadial<LayoutNode>(ring, 0, 0).strength((n) => (n.depth === 0 ? 0 : 0.6)))
+		.force('collide', collide())
+		.stop();
+}
+
+// ----- Topics -----
+
+export function createTopicsSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
+	countDegrees(nodes, links);
+	const placed = (n: LayoutNode) => Array.isArray(n.anchor);
+	// Citations between placed works barely pull (the topics place them); a
+	// work without topics follows the works it is linked to.
+	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
+	return forceSimulation<LayoutNode, LayoutLink>(nodes)
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (bothPlaced(l) ? 0.02 : 0.3) / weakestDegree(l)))
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 0.3)).distanceMax(300))
+		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.25 : 0.005 + forces.center / 4)))
+		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.25 : 0.005 + forces.center / 4)))
 		.force('collide', collide())
 		.stop();
 }

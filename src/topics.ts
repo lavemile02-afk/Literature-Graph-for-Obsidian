@@ -44,6 +44,33 @@ const DOMAIN_OF_FIELD: Record<number, number> = {
  */
 const LEVEL_WEIGHTS = { domain: 2, field: 1.5, subfield: 1, topic: 0.7 };
 
+/**
+ * A keyword the user wrote in a note's topics property that is not one of
+ * OpenAlex's topics: a feature of its own, "kw:" + the keyword in lower case,
+ * weighing as much as a field (notes sharing it draw together).
+ */
+export const KEYWORD_PREFIX = 'kw:';
+const KEYWORD_WEIGHT = 1.5;
+
+/**
+ * The topics of a work from the names written in its note (the user's word
+ * wins over OpenAlex's): each name is OpenAlex's topic of that name if there
+ * is one (with the score OpenAlex gave the work, if it did), otherwise a
+ * keyword of its own.
+ */
+export function topicsFromNames(names: string[], openAlexTopics: WorkTopics | undefined, idOfName: (name: string) => string | undefined): WorkTopics {
+	const scores = new Map(openAlexTopics ?? []);
+	return names.map((name): [string, number] => {
+		const id = idOfName(name);
+		return id ? [id, scores.get(id) ?? 1] : [KEYWORD_PREFIX + name.trim().toLowerCase(), 1];
+	});
+}
+
+/** The name to show for a topic id (OpenAlex's name, or the keyword itself). */
+export function topicName(id: string, info: (id: string) => TopicInfo | undefined): string {
+	return id.startsWith(KEYWORD_PREFIX) ? id.slice(KEYWORD_PREFIX.length) : (info(id)?.name ?? id);
+}
+
 /** The number in an OpenAlex id ("fields/23" → 23), or NaN. */
 function idNumber(id: string): number {
 	const match = /(\d+)$/.exec(id);
@@ -57,6 +84,10 @@ export function topicVector(topics: WorkTopics | undefined, info: (id: string) =
 		if (feature) vector.set(feature, (vector.get(feature) ?? 0) + weight);
 	};
 	for (const [id, score] of topics ?? []) {
+		if (id.startsWith(KEYWORD_PREFIX)) {
+			add(id, KEYWORD_WEIGHT * score);
+			continue;
+		}
 		const place = info(id);
 		add(id, LEVEL_WEIGHTS.topic * score);
 		if (!place) continue;
@@ -180,6 +211,17 @@ export function topicColors(topics: (WorkTopics | undefined)[], info: (id: strin
 	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
 	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
 	return vectors.map((v) => (v === null ? null : plane ? colorOfPlace(placeInPlane(v, plane), lightness, intensity) : hslColor(210, 0.6 * intensity, lightness)));
+}
+
+/**
+ * The place of each work in the plane of meaning of the works given (in
+ * units of the spread of each axis), or null for a work without topics: the
+ * targets of the "topics" layout.
+ */
+export function meaningPlaces(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined): ([number, number] | null)[] {
+	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
+	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
+	return vectors.map((v) => (v && plane ? placeInPlane(v, plane) : null));
 }
 
 /** The color a single topic gets in the same plane (for the legend). */

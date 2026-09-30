@@ -353,6 +353,16 @@ export class OpenAlexClient {
 		}
 	}
 
+	/** OpenAlex's topic of this name (any case), among the topics of the cached works. */
+	topicIdByName(name: string): string | undefined {
+		const topics = this.cache.topics ?? {};
+		if (!this.topicNames || this.topicNames.size !== Object.keys(topics).length) {
+			this.topicNames = new Map(Object.entries(topics).map(([id, t]) => [t.name.trim().toLowerCase(), id]));
+		}
+		return this.topicNames.get(name.trim().toLowerCase());
+	}
+	private topicNames: Map<string, string> | null = null;
+
 	/** A topic's place in OpenAlex's hierarchy, if a work with it was fetched. */
 	topicInfo(id: string): TopicInfo | undefined {
 		return this.cache.topics?.[id];

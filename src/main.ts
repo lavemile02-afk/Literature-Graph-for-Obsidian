@@ -7,6 +7,7 @@ import { CITATIONS_VIEW, CitationsView } from './panel';
 import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
 import { writeSuggestionsFile } from './suggestionsFile';
+import { writeTopicsToNotes } from './topicNotes';
 import { WORK_VIEW, WorkView } from './workView';
 import { DEFAULT_SETTINGS, LiteratureGraphSettings, LiteratureGraphSettingTab } from './settings';
 
@@ -89,6 +90,31 @@ export default class LiteratureGraphPlugin extends Plugin {
 			name: 'Export reading suggestions',
 			callback: () => void this.exportReadingSuggestions(),
 		});
+		this.addCommand({
+			id: 'write-topics-to-notes',
+			name: 'Write topics to notes',
+			callback: () => void this.writeTopics(),
+		});
+	}
+
+	/**
+	 * Writes OpenAlex's topics into the topics property of the literature notes
+	 * where it is empty; topics already there (maybe edited) are kept.
+	 */
+	async writeTopics() {
+		const notice = new Notice('Topics: starting…', 0);
+		try {
+			await this.indexReady;
+			const { written, kept, none } = await writeTopicsToNotes(this.app, this.index, this.openAlex, this.settings, (message) =>
+				notice.setMessage(`Topics: ${message}`),
+			);
+			notice.hide();
+			new Notice(`Topics written to ${written} notes; ${kept} already had topics (kept as they are); ${none} have none on OpenAlex.`);
+			this.onSettingsChanged();
+		} catch (error) {
+			notice.hide();
+			new Notice(`The topics could not be written: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	/** Opens the literature graph with its list of reading suggestions. */

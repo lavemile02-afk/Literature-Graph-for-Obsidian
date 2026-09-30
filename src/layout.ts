@@ -28,6 +28,7 @@ import {
 	createCircleSimulation,
 	createIslandsSimulation,
 	createLayersSimulation,
+	createTopicsSimulation,
 } from './shapes';
 
 export interface LayoutNode extends SimulationNodeDatum {
@@ -37,6 +38,8 @@ export interface LayoutNode extends SimulationNodeDatum {
 	degree?: number;
 	/** Year of publication, if known (the chronological and circle layouts). */
 	year?: number | null;
+	/** Place given by the work's topics (the topics layout), or null. */
+	anchor?: [number, number] | null;
 }
 
 export interface LayoutLink extends SimulationLinkDatum<LayoutNode> {
@@ -57,7 +60,7 @@ export interface Forces {
  * circle of the works it cites, see `atoms.ts`), and the shapes of
  * `shapes.ts`: "chronological", "islands", "layers" and "circle".
  */
-export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle';
+export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'topics';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	default: 'Default graph',
 	atom: 'Atom graph',
@@ -65,6 +68,7 @@ export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	islands: 'Islands',
 	layers: 'Layers',
 	circle: 'Circle',
+	topics: 'Topics',
 };
 
 export function isLayoutStyle(value: unknown): value is LayoutStyle {
@@ -84,6 +88,8 @@ function createStyleSimulation(style: LayoutStyle, nodes: LayoutNode[], links: L
 			return createLayersSimulation(nodes, links, forces);
 		case 'circle':
 			return createCircleSimulation(nodes, links, forces);
+		case 'topics':
+			return createTopicsSimulation(nodes, links, forces);
 		default:
 			return createSimulation(nodes, links, forces);
 	}
@@ -95,7 +101,7 @@ export type LayoutMessage =
 			type: 'start';
 			/** Number of this graph, sent back with its positions. */
 			graph: number;
-			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number; year?: number | null }[];
+			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number; year?: number | null; anchor?: [number, number] | null }[];
 			/** Indices into `nodes`. */
 			links: { source: number; target: number; inVault: boolean }[];
 			forces: Forces;
