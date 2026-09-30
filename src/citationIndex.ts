@@ -5,6 +5,7 @@ import { CitationLink, citationLinksIn } from './links';
 import { DuplicateGroup, findDuplicates } from './duplicates';
 import { resolveCitedNote } from './navigation';
 import type { LiteratureGraphSettings } from './settings';
+import { propertyValue } from './properties';
 
 /** What a citation points to: a note of the vault, a DOI outside it, or nothing. */
 export type CitedWork =
@@ -78,7 +79,7 @@ export class CitationIndex extends Events {
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
 		if (!fm) return null;
 		const read = (key: string): string => {
-			const value: unknown = fm[key];
+			const value = propertyValue(fm, key);
 			return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
 		};
 		const s = this.settings();
@@ -153,7 +154,7 @@ export class CitationIndex extends Events {
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 		const s = this.settings();
 		return [s.citationTextProperty, s.authorsProperty, s.yearProperty, s.titleProperty, 'aliases']
-			.map((key) => JSON.stringify(fm[key] ?? null))
+			.map((key) => JSON.stringify(propertyValue(fm, key) ?? null))
 			.join('|');
 	}
 
@@ -285,7 +286,7 @@ export class CitationIndex extends Events {
 	}
 
 	private doiOf(file: TFile, text: string): string | null {
-		const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings().doiProperty];
+		const value = propertyValue(this.app.metadataCache.getFileCache(file)?.frontmatter, this.settings().doiProperty);
 		if (typeof value === 'string' && value.trim()) return normalizeDoi(value);
 		// Without the property, the note's own DOI is the first one near its
 		// start, before any reference list (whose DOIs are other works').

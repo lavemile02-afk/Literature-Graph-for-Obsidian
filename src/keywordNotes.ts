@@ -2,6 +2,7 @@ import { App, TFile } from 'obsidian';
 import type { CitationIndex } from './citationIndex';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
+import { propertyKey, propertyValue } from './properties';
 
 /** The property of the keywords, from the settings. */
 export const keywordsProperty = (settings: LiteratureGraphSettings): string => settings.keywordsProperty.trim() || 'keywords';
@@ -12,7 +13,7 @@ export const keywordsProperty = (settings: LiteratureGraphSettings): string => s
  * may edit them; they are part of the text of the note's vector of meaning.
  */
 export function keywordsInNote(app: App, file: TFile, property: string): string[] {
-	const value: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.[property];
+	const value = propertyValue(app.metadataCache.getFileCache(file)?.frontmatter, property);
 	const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
 	return list.map((v) => String(v ?? '').trim()).filter(Boolean);
 }
@@ -59,10 +60,12 @@ export async function writeKeywordsToNotes(
 		let wrote = false;
 		await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 			// Checked again on the file itself: Obsidian's cache may lag behind an edit.
-			const value = frontmatter[property];
+			// (In the case the note already uses for this property.)
+			const key = propertyKey(frontmatter, property);
+			const value = frontmatter[key];
 			const empty = value === undefined || value === null || (Array.isArray(value) ? value.length === 0 : typeof value === 'string' && value.trim() === '');
 			if (!empty) return;
-			frontmatter[property] = names;
+			frontmatter[key] = names;
 			wrote = true;
 		});
 		if (wrote) written++;

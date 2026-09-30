@@ -6,6 +6,7 @@ import type { CitationLink } from './links';
 import { betterCitations, openFileAtLine } from './navigation';
 import { OpenAlexClient, WorkSummary, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
+import { propertyValue } from './properties';
 
 export const CITATIONS_VIEW = 'literature-graph-citations';
 
@@ -196,7 +197,7 @@ export class CitationsView extends ItemView {
 	}
 
 	private rowForFile(file: TFile): WorkRow {
-		const title: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings().titleProperty];
+		const title = propertyValue(this.app.metadataCache.getFileCache(file)?.frontmatter, this.settings().titleProperty);
 		return {
 			kind: 'note',
 			file,

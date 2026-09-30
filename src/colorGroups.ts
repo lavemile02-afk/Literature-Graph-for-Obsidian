@@ -1,4 +1,5 @@
 import { App, getAllTags, TFile } from 'obsidian';
+import { propertyValue } from './properties';
 
 /**
  * Color groups of the literature graph, like the groups of Obsidian's graph
@@ -8,7 +9,7 @@ import { App, getAllTags, TFile } from 'obsidian';
  * Written one per line, "query = color", for example:
  *   tag:#litterature = #d9a441
  *   [Type:Livre] = rgb(120, 170, 220)
- *   path:Documents/Thèses = hsl(140, 40%, 55%)
+ *   path:Literature/Theses = hsl(140, 40%, 55%)
  * Queries: tag:NAME (with or without #, nested tags included), path:TEXT
  * (text in the path), file:TEXT (text in the name), [PROPERTY:VALUE] (the
  * property contains the value), [PROPERTY] (the property is not empty), or
@@ -88,12 +89,12 @@ export function queryMatcher(app: App, query: string, titleProperty: string): (f
 		const key = (property[1] ?? '').trim();
 		const value = property[2]?.trim().toLowerCase();
 		return (file) => {
-			const text = propertyText(cacheOf(file)?.frontmatter?.[key]);
+			const text = propertyText(propertyValue(cacheOf(file)?.frontmatter, key));
 			return value === undefined ? text !== '' : text.includes(value);
 		};
 	}
 	return (file) => {
-		const title = propertyText(cacheOf(file)?.frontmatter?.[titleProperty]);
+		const title = propertyText(propertyValue(cacheOf(file)?.frontmatter, titleProperty));
 		return file.basename.toLowerCase().includes(lower) || title.includes(lower);
 	};
 }

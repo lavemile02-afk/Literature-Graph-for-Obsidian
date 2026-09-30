@@ -17,7 +17,7 @@ Literature Graph works on its own. With [Better Citations](https://github.com/la
 
 The plugin is not yet in Obsidian's community plugin directory. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/lavemile02-afk/Literature-Graph-for-Obsidian/releases/latest), put them in `<vault>/.obsidian/plugins/literature-graph/`, then enable **Literature Graph** in **Settings → Community plugins**. It requires Obsidian 1.13.7 or later, on desktop.
 
-Then, in the plugin settings, choose the **literature folder** (the folder of your literature notes) and the **citation language** of the labels, and check the names of the properties that hold each work's citation text, authors, year, title and DOI.
+Then, in the plugin settings, choose the **literature folder** (the folder of your literature notes; `Literature` by default) and the **citation language** of the labels, and check the names of the properties that hold each work's citation text, authors, year, title and DOI (by default `citation-text`, `authors`, `year`, `title` and `doi`; the case does not matter, as in Obsidian: `DOI` works too).
 
 ## Citation links
 

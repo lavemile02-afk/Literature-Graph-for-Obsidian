@@ -1,5 +1,6 @@
 import { App, TFile } from 'obsidian';
 import type { LiteratureGraphSettings } from './settings';
+import { propertyValue } from './properties';
 
 /** Family names from an authors string such as "Bourgeois, B., Vanasse, A.". */
 export function familyNames(authors: string): string[] {
@@ -26,7 +27,7 @@ export function citationText(app: App, file: TFile, settings: LiteratureGraphSet
 	if (settings.useNoteNameAsCitation) return file.basename;
 	const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 	const read = (key: string): string => {
-		const value: unknown = frontmatter[key];
+		const value = propertyValue(frontmatter, key);
 		return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
 	};
 

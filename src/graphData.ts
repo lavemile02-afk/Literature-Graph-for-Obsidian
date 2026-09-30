@@ -4,6 +4,7 @@ import type { CitationIndex } from './citationIndex';
 import { BibEntry, entryKey, entryTitle, MIN_TITLE_OVERLAP, nameKey, titleOverlap } from './bibliography';
 import { OpenAlexClient, surnameOf, WorkSummary, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
+import { propertyValue } from './properties';
 
 /** Where a citation between two works was found. */
 export type EdgeSource = 'link' | 'bibliography' | 'openalex';
@@ -158,7 +159,7 @@ export async function buildGraph(
 	}
 	const allFiles = [...files, ...others];
 	for (const file of allFiles) {
-		const title: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.[settings.titleProperty];
+		const title = propertyValue(app.metadataCache.getFileCache(file)?.frontmatter, settings.titleProperty);
 		g.nodes.set(file.path, {
 			id: file.path,
 			depth: 0,

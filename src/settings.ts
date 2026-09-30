@@ -79,14 +79,14 @@ export interface LiteratureGraphSettings {
 }
 
 export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
-	literatureFolder: 'Documents',
+	literatureFolder: 'Literature',
 	citationLanguage: 'en',
-	citationTextProperty: 'Citation_texte',
-	authorsProperty: 'Auteurs',
-	yearProperty: 'Annee',
-	titleProperty: 'Titre',
+	citationTextProperty: 'citation-text',
+	authorsProperty: 'authors',
+	yearProperty: 'year',
+	titleProperty: 'title',
 	useNoteNameAsCitation: false,
-	doiProperty: 'DOI',
+	doiProperty: 'doi',
 	keywordsProperty: 'keywords',
 	openAlexEnabled: true,
 	openAlexEmail: '',
@@ -144,7 +144,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 				control: {
 					type: 'folder',
 					key: 'literatureFolder',
-					placeholder: 'Documents',
+					placeholder: 'Literature',
 				},
 			},
 			{
@@ -163,22 +163,22 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					{
 						name: 'Citation text property',
 						desc: 'Property that holds the in-text citation of a work, such as "(Smith et al., 2020)". Works are labelled with it in the graph and the citations panel.',
-						control: { type: 'text', key: 'citationTextProperty', placeholder: 'Citation_texte' },
+						control: { type: 'text', key: 'citationTextProperty', placeholder: 'citation-text' },
 					},
 					{
 						name: 'Authors property',
 						desc: 'Property that holds the authors, as "Family, I., Family, I.". Used to label a work when the citation text property is empty, and to recognize it in reference lists.',
-						control: { type: 'text', key: 'authorsProperty', placeholder: 'Auteurs' },
+						control: { type: 'text', key: 'authorsProperty', placeholder: 'authors' },
 					},
 					{
 						name: 'Year property',
 						desc: 'Property that holds the year of publication, to recognize a work in reference lists.',
-						control: { type: 'text', key: 'yearProperty', placeholder: 'Annee' },
+						control: { type: 'text', key: 'yearProperty', placeholder: 'year' },
 					},
 					{
 						name: 'Title property',
 						desc: 'Property that holds the title, to recognize a work in reference lists (with the note\'s aliases, such as the original title of a translation).',
-						control: { type: 'text', key: 'titleProperty', placeholder: 'Titre' },
+						control: { type: 'text', key: 'titleProperty', placeholder: 'title' },
 					},
 					{
 						name: 'Always use the note name',
