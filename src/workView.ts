@@ -23,6 +23,8 @@ interface PropertyLine {
 	key: string | null;
 	value: string;
 	raw: string;
+	/** The items of a list property (one per line in the note), if it is one. */
+	list?: string[];
 }
 
 /**
@@ -125,19 +127,35 @@ export class WorkView extends ItemView {
 	/** Splits the note's text into its properties (one per line) and its body. */
 	private split(text: string): void {
 		const match = /^---\n([\s\S]*?)\n---\n?/.exec(text);
-		this.lines = (match?.[1] ?? '').split('\n').map((raw) => {
+		const unquote = (v: string) => v.replace(/^"(.*)"$/, '$1').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+		this.lines = [];
+		for (const raw of (match?.[1] ?? '').split('\n')) {
+			// An item of a list property ("  - value") belongs to the property above it.
+			const item = /^\s+-\s+(.*)$/.exec(raw);
+			const last = this.lines[this.lines.length - 1];
+			if (item && last && last.key !== null && last.value === '') {
+				(last.list ??= []).push(unquote(item[1] ?? ''));
+				continue;
+			}
 			const property = /^([^\s:#-][^:]*):\s*(.*)$/.exec(raw);
-			if (!property) return { key: null, value: '', raw };
-			const value = (property[2] ?? '').replace(/^"(.*)"$/, '$1').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-			return { key: property[1] ?? '', value, raw };
-		});
+			if (!property) {
+				this.lines.push({ key: null, value: '', raw });
+				continue;
+			}
+			this.lines.push({ key: property[1] ?? '', value: unquote(property[2] ?? ''), raw });
+		}
 		this.body = match ? text.slice(match[0].length) : text;
 	}
 
 	/** The note's text from its properties and body, as they are now. */
 	private text(): string {
 		const quote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-		const lines = this.lines.map((l) => (l.key === null ? l.raw : l.value ? `${l.key}: ${quote(l.value)}` : `${l.key}:`));
+		const lines = this.lines.map((l) => {
+			if (l.key === null) return l.raw;
+			// A list property: one item per line (or empty).
+			if (l.list) return [`${l.key}:`, ...l.list.map((v) => `  - ${quote(v)}`)].join('\n');
+			return l.value ? `${l.key}: ${quote(l.value)}` : `${l.key}:`;
+		});
 		return lines.length > 0 ? `---\n${lines.join('\n')}\n---\n${this.body}` : this.body;
 	}
 
@@ -176,9 +194,15 @@ export class WorkView extends ItemView {
 			}
 			const row = table.createDiv({ cls: 'literature-graph-work-property' });
 			row.createDiv({ cls: 'literature-graph-work-property-key', text: line.key });
-			const input = row.createEl('input', { type: 'text', value: line.value });
+			// A list property shows its items separated by commas.
+			const input = row.createEl('input', { type: 'text', value: line.list ? line.list.join(', ') : line.value });
 			input.addEventListener('input', () => {
-				line.value = input.value;
+				if (line.list) {
+					line.list = input.value
+						.split(',')
+						.map((v) => v.trim())
+						.filter(Boolean);
+				} else line.value = input.value;
 				void this.create(null);
 			});
 		});
