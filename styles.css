@@ -158,6 +158,27 @@
 	display: none;
 }
 
+/* In the narrow panels, a setting with a description puts it above its controls. */
+.literature-graph-controls .setting-item:has(.setting-item-description:not(:empty)) {
+	flex-wrap: wrap;
+	row-gap: var(--size-2-3);
+}
+
+.literature-graph-controls .setting-item:has(.setting-item-description:not(:empty)) .setting-item-info {
+	flex: 1 0 100%;
+	margin-inline-end: 0;
+}
+
+.literature-graph-controls .setting-item:has(.setting-item-description:not(:empty)) .setting-item-control {
+	flex: 1 0 100%;
+	justify-content: flex-start;
+}
+
+.literature-graph-controls .setting-item:has(.setting-item-description:not(:empty)) .setting-item-control .dropdown {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
 .literature-graph-controls .setting-item {
 	padding: var(--size-4-2) 0;
 }

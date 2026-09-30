@@ -38,10 +38,13 @@ const collide = () => forceCollide<LayoutNode>((n) => n.radius + 2).strength(0.7
 
 // ----- Chronological -----
 
-/** Width of the chronological layout, in world units, for n works. */
+/** Width of the chronological layout, in world units, for n works (narrow enough for the works to be seen when it is all in view). */
 export function timelineWidth(n: number): number {
-	return Math.max(1200, 150 * Math.sqrt(n));
+	return Math.max(1000, 60 * Math.sqrt(n));
 }
+
+/** In the chronological layout, the works are drawn this much bigger (it is wide, so seen from far). */
+export const CHRONOLOGICAL_POINT_SCALE = 3;
 
 /**
  * The horizontal place of each year: by the rank of the year among the
@@ -93,7 +96,7 @@ export function createChronologicalSimulation(nodes: LayoutNode[], links: Layout
 		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 0.5)))
 		.force('x', forceX<LayoutNode>(target).strength(0.6))
 		.force('y', forceY<LayoutNode>(0).strength(Math.max(0.01, forces.center)))
-		.force('collide', collide())
+		.force('collide', forceCollide<LayoutNode>((n) => n.radius * CHRONOLOGICAL_POINT_SCALE + 2).strength(0.7))
 		.stop();
 }
 

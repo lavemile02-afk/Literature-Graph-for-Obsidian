@@ -166,26 +166,26 @@ export function hslColor(hue: number, saturation: number, lightness: number): nu
  * The color of a place in the plane: its angle gives the hue, all around
  * the wheel; works near the middle (a mix of everything) are paler.
  */
-export function colorOfPlace([x, y]: [number, number], lightness: number): number {
+export function colorOfPlace([x, y]: [number, number], lightness: number, intensity = 1): number {
 	const hue = (Math.atan2(y, x) * 180) / Math.PI;
-	const saturation = 0.35 + 0.5 * Math.min(1, Math.hypot(x, y) / 1.5);
-	return hslColor(hue, saturation, lightness);
+	const saturation = (0.35 + 0.5 * Math.min(1, Math.hypot(x, y) / 1.5)) * intensity;
+	return hslColor(hue, Math.min(1, saturation), lightness);
 }
 
 /**
  * Colors of the works by topic, relative to the works given (the graph):
  * `topics[i]` → color, or null for a work without topics.
  */
-export function topicColors(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6): (number | null)[] {
+export function topicColors(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6, intensity = 1): (number | null)[] {
 	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
 	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
-	return vectors.map((v) => (v === null ? null : plane ? colorOfPlace(placeInPlane(v, plane), lightness) : hslColor(210, 0.6, lightness)));
+	return vectors.map((v) => (v === null ? null : plane ? colorOfPlace(placeInPlane(v, plane), lightness, intensity) : hslColor(210, 0.6 * intensity, lightness)));
 }
 
 /** The color a single topic gets in the same plane (for the legend). */
-export function topicLegendColors(ids: string[], works: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6): Map<string, number> {
+export function topicLegendColors(ids: string[], works: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6, intensity = 1): Map<string, number> {
 	const plane = meaningPlane(works.filter((t) => t && t.length > 0).map((t) => topicVector(t, info)));
-	return new Map(ids.map((id) => [id, plane ? colorOfPlace(placeInPlane(topicVector([[id, 1]], info), plane), lightness) : hslColor(210, 0.6, lightness)]));
+	return new Map(ids.map((id) => [id, plane ? colorOfPlace(placeInPlane(topicVector([[id, 1]], info), plane), lightness, intensity) : hslColor(210, 0.6 * intensity, lightness)]));
 }
 
 /** Colors mixed by weight (their average in RGB); null without any weight. */

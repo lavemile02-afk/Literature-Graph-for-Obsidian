@@ -37,6 +37,22 @@ export const IDLE_ANIMATIONS: Record<IdleAnimation, string> = {
 	constellation: 'Constellation',
 };
 
+/** The choices of the menus: an animation, or a random one each time. */
+export type IdleChoice = IdleAnimation | 'random';
+export const IDLE_CHOICES: Record<IdleChoice, string> = { random: 'Random animation', ...IDLE_ANIMATIONS };
+
+/** An animation picked at random, other than the one just played (if there is a choice). */
+export function randomAnimation(previous: IdleAnimation | null, random: () => number = Math.random): IdleAnimation {
+	const all = Object.keys(IDLE_ANIMATIONS) as IdleAnimation[];
+	const others = all.filter((a) => a !== previous);
+	const pool = others.length > 0 ? others : all;
+	return pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))] ?? 'sphere';
+}
+
+export function isIdleChoice(value: unknown): value is IdleChoice {
+	return value === 'random' || isIdleAnimation(value);
+}
+
 export function isIdleAnimation(value: unknown): value is IdleAnimation {
 	return typeof value === 'string' && value in IDLE_ANIMATIONS;
 }

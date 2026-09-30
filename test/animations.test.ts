@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fibonacci, IDLE_ANIMATIONS, IdleAnimation, keepsEdges, placeWork, setUpAnimation, signals } from '../src/animations';
+import { fibonacci, IDLE_ANIMATIONS, IdleAnimation, isIdleChoice, keepsEdges, placeWork, randomAnimation, setUpAnimation, signals } from '../src/animations';
 import { fitSphere } from '../src/sphere';
 
 const points = Array.from({ length: 300 }, (_, i) => ({ x: 400 * Math.cos(i * 2.4) * Math.sqrt(i / 300), y: 400 * Math.sin(i * 2.4) * Math.sqrt(i / 300) }));
@@ -59,4 +59,13 @@ test('runs signals along existing citations', () => {
 		assert.ok(s.along >= 0 && s.along < 1);
 	}
 	assert.deepEqual(signals(5, 0, 1), []);
+});
+
+test('picks a random animation other than the last one', () => {
+	for (let i = 0; i < 50; i++) {
+		const r = i / 50;
+		assert.notEqual(randomAnimation('orbits', () => r), 'orbits');
+	}
+	assert.ok(randomAnimation(null, () => 0.999) in IDLE_ANIMATIONS);
+	assert.ok(isIdleChoice('random') && isIdleChoice('wave') && !isIdleChoice('none'));
 });

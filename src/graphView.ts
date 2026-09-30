@@ -10,7 +10,7 @@ import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, EdgeSource, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
 import { Forces, isLayoutStyle, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
-import { timelineWidth, unknownYearX, yearScale } from './shapes';
+import { CHRONOLOGICAL_POINT_SCALE, timelineWidth, unknownYearX, yearScale } from './shapes';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
@@ -20,9 +20,11 @@ import {
 	AnimationSetup,
 	framesShape,
 	hasSignals,
-	IDLE_ANIMATIONS,
+	IDLE_CHOICES,
 	IdleAnimation,
-	isIdleAnimation,
+	IdleChoice,
+	isIdleChoice,
+	randomAnimation,
 	keepsEdges,
 	placeWork,
 	setUpAnimation,
@@ -326,6 +328,10 @@ export class LiteratureGraphView extends ItemView {
 		sphere: null as Sphere | null,
 		/** The animation playing, and what it needs about the works. */
 		animation: 'sphere' as IdleAnimation,
+		/** Zoom chosen with the wheel while it plays (1: the shape fills the view). */
+		zoom: 1,
+		/** Where each work is drawn (x, y by index), for hovering while it plays. */
+		shown: new Float64Array(0),
 		setup: null as AnimationSetup | null,
 		rank: [] as number[],
 		anchor: [] as (SimNode | null)[],
@@ -874,9 +880,11 @@ export class LiteratureGraphView extends ItemView {
 		}
 		// Colors relative to the diversity of the works of this graph (see `topics.ts`).
 		const info = (id: string) => this.openAlex.topicInfo(id);
-		const lightness = this.topicLightness();
+		const s = this.settings();
+		const lightness = Math.min(0.9, Math.max(0.15, this.topicLightness() + (Number(s.graphTopicBrightness) || 0) / 100));
+		const intensity = Math.max(0.1, (Number(s.graphTopicIntensity) || 100) / 100);
 		const topics = this.nodes.map(topicsOf);
-		const colors = topicColors(topics, info, lightness);
+		const colors = topicColors(topics, info, lightness, intensity);
 		const colored = new Map<SimNode, number>();
 		this.nodes.forEach((node, i) => {
 			const color = colors[i] ?? null;
@@ -891,7 +899,7 @@ export class LiteratureGraphView extends ItemView {
 		}
 		for (const [node, color] of colorsFromSharedKeywords(keywords, colored)) node.topicColor = color;
 		const main = mainTopics(topics, TOPIC_LEGEND);
-		const legend = topicLegendColors(main.map((t) => t.id), topics, info, lightness);
+		const legend = topicLegendColors(main.map((t) => t.id), topics, info, lightness, intensity);
 		this.topicLegend = main.map(({ id, works }) => ({
 			name: this.openAlex.topicInfo(id)?.name ?? id,
 			works,
@@ -957,7 +965,7 @@ export class LiteratureGraphView extends ItemView {
 			const list = this.suggestionsEl;
 			const left = list && !list.hasClass('is-hidden') && list.offsetWidth < screen.width / 2 ? list.offsetWidth + 16 : 0;
 			const width = screen.width - right - left;
-			const fit = fitCamera(this.nodes, width, screen.height, this.local ? LOCAL_START_SCALE : 1.5);
+			const fit = fitCamera(this.fitPoints(), width, screen.height, this.local ? LOCAL_START_SCALE : 1.5);
 			if (fit) fit.x += (right - left) / 2 / fit.scale;
 			return fit;
 		}
@@ -1035,21 +1043,19 @@ export class LiteratureGraphView extends ItemView {
 		const activity = () => {
 			this.lastActivity = Date.now();
 		};
-		// A click anywhere in the view stops it; the click does nothing else.
+		// A click on the graph itself stops it (not in its panels or buttons); the click does nothing else.
 		this.registerDomEvent(
 			this.contentEl,
 			'pointerdown',
-			() => {
+			(e: PointerEvent) => {
+				if (e.target !== this.pixi?.canvas) return;
 				if (this.idle.running && performance.now() > this.idle.graceUntil) this.stopIdle();
 			},
 			{ capture: true },
 		);
-		const listen = (doc: Document) => {
-			for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel'] as const) {
-				this.registerDomEvent(doc, type, activity, { capture: true, passive: true });
-			}
-		};
-		listen(this.contentEl.doc);
+		// Only clicks count as activity (decision of the user): moving the
+		// mouse, the wheel or the keyboard let the time run.
+		this.registerDomEvent(this.contentEl.doc, 'pointerdown', activity, { capture: true, passive: true });
 		this.registerInterval(
 			window.setInterval(() => {
 				const s = this.settings();
@@ -1061,10 +1067,16 @@ export class LiteratureGraphView extends ItemView {
 		);
 	}
 
-	/** The idle animation chosen (setting shared by every graph view). */
-	private idleAnimation(): IdleAnimation {
+	/** The idle animation chosen (setting shared by every graph view), or "random". */
+	private idleChoice(): IdleChoice {
 		const chosen = this.settings().graphIdleAnimation;
-		return isIdleAnimation(chosen) ? chosen : 'sphere';
+		return isIdleChoice(chosen) ? chosen : 'sphere';
+	}
+
+	/** The animation to play now: the one chosen, or a random one other than the last. */
+	private idleAnimation(): IdleAnimation {
+		const chosen = this.idleChoice();
+		return chosen === 'random' ? randomAnimation(this.idle.setup ? this.idle.animation : null) : chosen;
 	}
 
 	/** Seconds of animation since it started, at the pace of the speed setting. */
@@ -1109,6 +1121,8 @@ export class LiteratureGraphView extends ItemView {
 			...this.idle,
 			animation,
 			setup,
+			zoom: 1,
+			shown: new Float64Array(this.nodes.length * 2),
 			running: true,
 			startedAt: performance.now(),
 			lastFrame: performance.now(),
@@ -1149,14 +1163,14 @@ export class LiteratureGraphView extends ItemView {
 		const sphere = idle.sphere;
 		if (idle.running && screen && sphere && framesShape(idle.animation)) {
 			// The whole shape in view (the free drift stays where the graph is).
-			const goal = { x: sphere.cx, y: sphere.cy, scale: clampScale((Math.min(screen.width, screen.height) * SPHERE_FILL) / (2 * sphere.radius)) };
+			const goal = { x: sphere.cx, y: sphere.cy, scale: clampScale(((Math.min(screen.width, screen.height) * SPHERE_FILL) / (2 * sphere.radius)) * idle.zoom) };
 			this.setCamera(approach(this.getCamera(), goal, CAMERA_STEP / 2));
 		} else if (!idle.running && idle.returnTo) {
 			this.setCamera(idle.level === 0 ? idle.returnTo : approach(this.getCamera(), idle.returnTo, CAMERA_STEP * 2));
 		}
 		if (idle.level === 0) {
 			idle.returnTo = null;
-			for (const node of this.nodes) node.sprite.scale.set(node.radius / CIRCLE_TEXTURE_RADIUS);
+			for (const node of this.nodes) node.sprite.scale.set(this.drawnRadius(node) / CIRCLE_TEXTURE_RADIUS);
 		}
 		this.edgesDirty = true;
 		return idle.running || idle.level > 0;
@@ -1200,6 +1214,8 @@ export class LiteratureGraphView extends ItemView {
 			idle.perspectiveScale[node.index] = own.scale;
 			node.x = x + (p.x - x) * level;
 			node.y = y + (p.y - y) * level;
+			idle.shown[node.index * 2] = node.x;
+			idle.shown[node.index * 2 + 1] = node.y;
 		}
 		return saved;
 	}
@@ -1261,7 +1277,7 @@ export class LiteratureGraphView extends ItemView {
 			const appear = idle.appear[node.index] ?? 1;
 			const factor = 1 + ((BACK_ALPHA + (1 - BACK_ALPHA) * front) * appear - 1) * level;
 			node.sprite.alpha *= factor;
-			node.sprite.scale.set((node.radius / CIRCLE_TEXTURE_RADIUS) * (1 + (perspectiveScale * Math.max(0.05, appear) - 1) * level));
+			node.sprite.scale.set((this.drawnRadius(node) / CIRCLE_TEXTURE_RADIUS) * (1 + (perspectiveScale * Math.max(0.05, appear) - 1) * level));
 			if (node.label?.visible) {
 				node.label.alpha *= factor;
 				if (appear < 1) node.label.visible = false;
@@ -1827,7 +1843,7 @@ export class LiteratureGraphView extends ItemView {
 	private buildDisplay(body: HTMLElement, close: () => void): void {
 		new Setting(body)
 			.setName('Layout')
-			.setDesc('Default graph; atoms (each work of the vault with a circle of the works it cites); chronological (by year, left to right); islands (communities of citations); layers (a ring per depth); circle (the vault on a circle by year, citations as chords).')
+			.setDesc('For as long as the view is open; the default is in the plugin settings.')
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOptions({ ...LAYOUT_STYLES })
@@ -1851,14 +1867,14 @@ export class LiteratureGraphView extends ItemView {
 		);
 		new Setting(body)
 			.setName('Idle animation')
-			.setDesc('After a while without input (switch and delay in the plugin settings). Kept for every graph; a click in the graph stops it.')
+			.setDesc('Kept for every graph. A click on the graph stops it; switch and delay in the plugin settings.')
 			.addDropdown((dropdown) => {
 				dropdown
-					.addOptions({ ...IDLE_ANIMATIONS })
-					.setValue(this.idleAnimation())
+					.addOptions({ ...IDLE_CHOICES })
+					.setValue(this.idleChoice())
 					.onChange((value) => void this.saveSettings({ graphIdleAnimation: value }));
 				this.syncControls.push(() => {
-					dropdown.setValue(this.idleAnimation());
+					dropdown.setValue(this.idleChoice());
 				});
 			})
 			.addButton((button) =>
@@ -2120,6 +2136,8 @@ export class LiteratureGraphView extends ItemView {
 								: theme.outside2;
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
+			// (The idle animation sets the sizes itself, after drawing.)
+			if (this.idle.level === 0) sprite.scale.set(this.drawnRadius(node) / CIRCLE_TEXTURE_RADIUS);
 			// Around the highlighted work, its neighbors take the color of their
 			// arrows: cited works the accent, citing works orange (both: between).
 			const cited = focus && node !== focus && this.focusCited.has(node);
@@ -2170,7 +2188,7 @@ export class LiteratureGraphView extends ItemView {
 			label.visible = false;
 			if (alpha <= 0.01) continue;
 			label.alpha = alpha;
-			label.position.set(node.x ?? 0, (node.y ?? 0) + node.radius + 3);
+			label.position.set(node.x ?? 0, (node.y ?? 0) + this.drawnRadius(node) + 3);
 			label.scale.set(labelScale);
 			// The label's box on screen; labels off screen are not drawn at all.
 			const width = label.width * scale;
@@ -2224,9 +2242,35 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** The node under a point of the canvas, if any. */
+	/**
+	 * What fitting the view must show: the works as drawn, and in the
+	 * chronological layout the years above them (enough points along the top
+	 * of the axis to survive the extremes `fitCamera` ignores).
+	 */
+	private fitPoints(): { x?: number; y?: number; radius: number }[] {
+		const points: { x?: number; y?: number; radius: number }[] = this.nodes.map((n) => ({ x: n.x, y: n.y, radius: this.drawnRadius(n) }));
+		const parts = this.axisParts;
+		if (!parts || !this.axisLayer.visible || this.nodes.length === 0) return points;
+		const bounds = parts.top.getLocalBounds();
+		const top = parts.top.y + bounds.y;
+		const count = Math.ceil(this.nodes.length * 0.02) + 2;
+		for (let i = 0; i < count; i++) points.push({ x: bounds.x + (bounds.width * i) / (count - 1), y: top, radius: 0 });
+		return points;
+	}
+
+	/** A work's radius as drawn: bigger in the chronological layout, which is seen from far. */
+	private drawnRadius(node: SimNode): number {
+		return this.layoutStyle === 'chronological' ? node.radius * CHRONOLOGICAL_POINT_SCALE : node.radius;
+	}
+
+	/**
+	 * The work under a point of the view. During the idle animation, the works
+	 * are looked for where they are drawn, not where the layout has them.
+	 */
 	private nodeAt(global: { x: number; y: number }): SimNode | null {
 		const p = this.world.toLocal(global);
 		const scale = this.world.scale.x;
+		const idle = this.idle.level > 0 ? this.idle : null;
 		// Every node can be hit within a few pixels of its edge, and at least
 		// MIN_HIT_RADIUS pixels from its center, however small it is on screen;
 		// when several can, the one whose edge is nearest the pointer wins.
@@ -2234,10 +2278,14 @@ export class LiteratureGraphView extends ItemView {
 		let bestGap = Infinity;
 		for (const node of this.nodes) {
 			if (node.x === undefined || node.y === undefined || this.outOfTime(node)) continue;
-			const reach = Math.max(node.radius + HIT_SLACK / scale, MIN_HIT_RADIUS / scale);
-			const d = Math.hypot(node.x - p.x, node.y - p.y);
+			if (idle && (idle.appear[node.index] ?? 1) < 1) continue;
+			const x = idle ? (idle.shown[node.index * 2] ?? node.x) : node.x;
+			const y = idle ? (idle.shown[node.index * 2 + 1] ?? node.y) : node.y;
+			const radius = this.drawnRadius(node) * (idle ? 1 + ((idle.perspectiveScale[node.index] ?? 1) - 1) * idle.level : 1);
+			const reach = Math.max(radius + HIT_SLACK / scale, MIN_HIT_RADIUS / scale);
+			const d = Math.hypot(x - p.x, y - p.y);
 			if (d > reach) continue;
-			const gap = d - node.radius;
+			const gap = d - radius;
 			if (gap <= bestGap) {
 				best = node;
 				bestGap = gap;
@@ -2362,10 +2410,10 @@ export class LiteratureGraphView extends ItemView {
 				this.zoom = null;
 				this.world.position.set(p.x - this.panning.x, p.y - this.panning.y);
 				this.requestFrame();
-			} else if (this.idle.level === 0) {
-				// (No hover during the idle animation: works are not where they are drawn.)
+			} else {
+				// (During the idle animation too: `nodeAt` then looks where the works are drawn.)
 				const node = this.nodeAt(p);
-				canvas.style.cursor = node && this.openAction(node) ? 'pointer' : '';
+				canvas.style.cursor = node && this.idle.level === 0 && this.openAction(node) ? 'pointer' : '';
 				if (node !== this.hovered) this.setHovered(node);
 			}
 		});
@@ -2392,16 +2440,20 @@ export class LiteratureGraphView extends ItemView {
 			'wheel',
 			(e: WheelEvent) => {
 				e.preventDefault();
-				// The idle animation moves the camera itself.
-				if (this.idle.level > 0) return;
+				const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+				// The idle animation moves the camera itself: the wheel changes its zoom.
+				if (this.idle.level > 0 && framesShape(this.idle.animation)) {
+					this.idle.zoom = Math.min(8, Math.max(0.25, this.idle.zoom * Math.exp(-delta * 0.0015)));
+					this.requestFrame();
+					return;
+				}
 				this.takeCamera();
 				const rect = pixi.canvas.getBoundingClientRect();
 				const px = e.clientX - rect.left;
 				const py = e.clientY - rect.top;
 				const scale = this.world.scale.x;
 				const from = this.zoom?.scale ?? scale;
-				// Pixel and line wheels (trackpads send many small pixel steps).
-				const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+				// (Pixel and line wheels: trackpads send many small pixel steps.)
 				this.zoom = {
 					scale: clampScale(from * Math.exp(-delta * 0.0015)),
 					px,
