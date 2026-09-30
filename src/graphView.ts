@@ -13,6 +13,7 @@ import { Forces, isLayoutStyle, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from 
 import { CHRONOLOGICAL_POINT_SCALE, timelineWidth, unknownYearX, yearScale } from './shapes';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
+import type { GhostNoteStore } from './ghostNotes';
 import type { PositionStore } from './positions';
 import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
 import { appearanceOrder, fitSphere, Sphere } from './sphere';
@@ -425,6 +426,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly saveSettings: (changes: Partial<LiteratureGraphSettings>) => Promise<void>,
 		/** Where the works were when the layout last came to rest. */
 		private readonly positions: PositionStore,
+		/** What was written in the ghost notes of the works outside the vault. */
+		private readonly ghosts: GhostNoteStore,
 	) {
 		super(leaf);
 		const s = settings();
@@ -552,7 +555,7 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		this.registerEvent(this.index.on('changed', () => this.reload()));
-		// Topics edited in a note: colors again, and the topics layout places its works again.
+		// Keywords edited in a note, or a ghost note edited: colors again, and the Meaning layout places its works again.
 		const topicsEdited = debounce(
 			() => {
 				if (!this.byMeaning() && this.layoutStyle !== 'meaning') return;
@@ -562,7 +565,8 @@ export class LiteratureGraphView extends ItemView {
 			1000,
 			true,
 		);
-		// (Only when the topics themselves changed: typing in a note does nothing.)
+		this.register(this.ghosts.onChange(() => topicsEdited()));
+		// (Only when the keywords themselves changed: typing in a note does nothing.)
 		const seenTopics = new Map<string, string>();
 		this.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
@@ -583,7 +587,7 @@ export class LiteratureGraphView extends ItemView {
 		);
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
 		this.watchActivity();
-		await this.positions.load();
+		await Promise.all([this.positions.load(), this.ghosts.load()]);
 		await this.loadData();
 	}
 
@@ -939,7 +943,8 @@ export class LiteratureGraphView extends ItemView {
 	/**
 	 * The words of a work, for its vector of meaning: its whole note (with its
 	 * title and keywords, without its other properties); or what OpenAlex says
-	 * of it: title, topics, keywords and abstract; or its reference.
+	 * of it: title, topics, keywords and abstract; or its reference. What was
+	 * written in the ghost note of a work outside the vault counts too.
 	 */
 	private async workWords(node: SimNode): Promise<string[]> {
 		const file = node.data.file;
@@ -958,9 +963,11 @@ export class LiteratureGraphView extends ItemView {
 			const work = this.openAlex.cachedWork(id);
 			const topics = (work?.topics ?? []).map(([topic]) => this.openAlex.topicInfo(topic)?.name ?? '');
 			const keywords = (work?.keywords ?? []).map(([keyword]) => keyword);
-			return tokenize([work?.title ?? node.data.title, ...topics, ...keywords, this.openAlex.cachedAbstract(id) ?? ''].join('\n'));
+			const ghost = this.ghosts.get({ id, doi: node.data.doi }) ?? '';
+			return tokenize([work?.title ?? node.data.title, ...topics, ...keywords, this.openAlex.cachedAbstract(id) ?? '', ghost].join('\n'));
 		}
-		return tokenize(`${node.data.title} ${node.data.entry?.text ?? ''}`);
+		const ghost = this.ghosts.get({ doi: node.data.doi, entry: node.data.entry }) ?? '';
+		return tokenize(`${node.data.title} ${node.data.entry?.text ?? ''} ${ghost}`);
 	}
 
 	/**

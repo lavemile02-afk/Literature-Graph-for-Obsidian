@@ -6,6 +6,7 @@ import { GRAPH_VIEW, LiteratureGraphView } from './graphView';
 import { CITATIONS_VIEW, CitationsView } from './panel';
 import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
+import { GhostNoteStore } from './ghostNotes';
 import { writeSuggestionsFile } from './suggestionsFile';
 import { writeKeywordsToNotes } from './keywordNotes';
 import { WORK_VIEW, WorkView } from './workView';
@@ -16,6 +17,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 	index!: CitationIndex;
 	openAlex!: OpenAlexClient;
 	positions!: PositionStore;
+	ghosts!: GhostNoteStore;
 	/** Resolves when the citation index is first built. */
 	private indexReady: Promise<void> | null = null;
 
@@ -33,6 +35,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		}));
 		this.openAlex.onLimit = (error) => new Notice(error.message, 12000);
 		this.positions = new PositionStore(this.app, `${this.manifest.dir ?? ''}/layout-positions.json`);
+		this.ghosts = new GhostNoteStore(this.app, `${this.manifest.dir ?? ''}/ghost-notes.json`);
 		this.app.workspace.onLayoutReady(() => {
 			void this.startIndex();
 			this.connectBetterCitations();
@@ -56,9 +59,10 @@ export default class LiteratureGraphPlugin extends Plugin {
 						this.onSettingsChanged();
 					},
 					this.positions,
+					this.ghosts,
 				),
 		);
-		this.registerView(WORK_VIEW, (leaf) => new WorkView(leaf, this.openAlex, () => this.settings));
+		this.registerView(WORK_VIEW, (leaf) => new WorkView(leaf, this.openAlex, () => this.settings, this.ghosts));
 		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
 		this.addCommand({
 			id: 'open-graph',
@@ -204,6 +208,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		betterCitations(this.app)?.setDoiTitleProvider(null);
 		void this.openAlex.flush();
 		void this.positions.flush();
+		void this.ghosts.flush();
 	}
 
 	/** Called when a setting changes in the settings tab. */

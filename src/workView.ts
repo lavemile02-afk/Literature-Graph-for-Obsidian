@@ -1,9 +1,10 @@
-import { ItemView, MarkdownView, normalizePath, Notice, requestUrl, setIcon, TFile, ViewStateResult, WorkspaceLeaf } from 'obsidian';
+import { ItemView, normalizePath, Notice, requestUrl, setIcon, ViewStateResult, WorkspaceLeaf } from 'obsidian';
 // The download folder may be anywhere on the computer (the plugin is for
 // desktop only), so Node's file system is used for it, not the vault's.
 import { mkdir, writeFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
+import type { GhostNoteStore, GhostWork } from './ghostNotes';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 import { defaultTemplate, fillTemplate, valuesFromDetails, valuesFromEntry, WorkValues } from './workNote';
@@ -30,9 +31,9 @@ interface PropertyLine {
 /**
  * The "ghost note" of a work that is not in the vault: it looks like its
  * note-to-be (title, properties filled from OpenAlex, text of the template),
- * but it is not a file. As soon as something is written in it or a property
- * changed, the note is created in the literature folder and takes its place;
- * closed untouched, nothing was created.
+ * but it is not a file. What is written in it (properties and text) is kept
+ * with the plugin (see `ghostNotes.ts`) and shown again next time; only the
+ * "Create note" button creates the note, in the literature folder.
  */
 export class WorkView extends ItemView {
 	private work: WorkState = {};
@@ -42,11 +43,14 @@ export class WorkView extends ItemView {
 	private lines: PropertyLine[] = [];
 	private body = '';
 	private creating = false;
+	/** The work as the ghost notes know it (its OpenAlex id once known). */
+	private ghost: GhostWork = {};
 
 	constructor(
 		leaf: WorkspaceLeaf,
 		private readonly openAlex: OpenAlexClient,
 		private readonly settings: () => LiteratureGraphSettings,
+		private readonly ghosts: GhostNoteStore,
 	) {
 		super(leaf);
 	}
@@ -84,6 +88,8 @@ export class WorkView extends ItemView {
 		const language = s.citationLanguage === 'fr' ? 'fr' : 'en';
 		this.pdfUrl = null;
 		this.openAccessUrl = null;
+		this.ghost = { ...this.work };
+		await this.ghosts.load();
 		if (this.work.entry) {
 			this.values = valuesFromEntry(this.work.entry);
 		} else {
@@ -100,6 +106,7 @@ export class WorkView extends ItemView {
 				return;
 			}
 			this.values = valuesFromDetails(details, language);
+			this.ghost = { id: details.id, doi: this.values.doi || this.work.doi };
 			this.pdfUrl = details.pdfUrl;
 			this.openAccessUrl = details.openAccessUrl;
 			// Its topics and keywords, from the cache (fetched once if missing).
@@ -118,7 +125,7 @@ export class WorkView extends ItemView {
 				doi: s.doiProperty || 'doi',
 				keywords: s.keywordsProperty.trim() || 'keywords',
 			});
-		this.split(fillTemplate(template, this.values));
+		this.split(this.ghosts.get(this.ghost) ?? fillTemplate(template, this.values));
 		// The tab's title follows the work.
 		(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
 		this.render();
@@ -174,10 +181,11 @@ export class WorkView extends ItemView {
 		const folder = this.settings().literatureFolder.replace(/\/+$/, '');
 		const banner = el.createDiv({ cls: 'literature-graph-work-banner' });
 		banner.createDiv({
-			text: `Not in your vault. Write in this note or change a property, and it becomes “${values.fileName}” in ${folder || 'the vault'}.`,
+			text: `Not in your vault. What you write here is kept with the plugin; “Create note” makes it “${values.fileName}” in ${folder || 'the vault'}.`,
 		});
 		const buttons = banner.createDiv({ cls: 'literature-graph-work-buttons' });
-		this.addButton(buttons, 'file-plus', 'Create note', () => void this.create(null));
+		this.addButton(buttons, 'file-plus', 'Create note', () => void this.create());
+		if (this.ghosts.get(this.ghost) !== undefined) this.addButton(buttons, 'rotate-ccw', 'Discard changes', () => this.discard());
 		if (values.doi) this.addButton(buttons, 'external-link', 'Open DOI', () => window.open(`https://doi.org/${values.doi}`));
 		if (this.pdfUrl) this.addButton(buttons, 'download', 'Download PDF', () => void this.download());
 		else if (this.openAccessUrl) {
@@ -203,23 +211,36 @@ export class WorkView extends ItemView {
 						.map((v) => v.trim())
 						.filter(Boolean);
 				} else line.value = input.value;
-				void this.create(null);
+				this.keep();
 			});
 		});
 		const body = el.createEl('textarea', { cls: 'literature-graph-work-body' });
 		body.value = this.body;
-		body.placeholder = 'Write here to create the note.';
+		body.placeholder = 'Write here: your notes on this work.';
 		body.addEventListener('input', () => {
 			this.body = body.value;
-			void this.create(body.selectionStart);
+			this.keep();
 		});
 	}
 
-	/**
-	 * Creates the note (once) and opens it in place of the ghost note, with
-	 * the cursor where the user was writing in its body, if they were.
-	 */
-	private async create(cursorInBody: number | null): Promise<void> {
+	/** Keeps what was written, with the plugin; the first change brings the "Discard changes" button. */
+	private keep(): void {
+		const first = this.ghosts.get(this.ghost) === undefined;
+		this.ghosts.set(this.ghost, this.text());
+		if (first) {
+			const buttons = this.contentEl.querySelector<HTMLElement>('.literature-graph-work-buttons');
+			if (buttons) this.addButton(buttons, 'rotate-ccw', 'Discard changes', () => this.discard());
+		}
+	}
+
+	/** Forgets what was written: the ghost note is filled from its template again. */
+	private discard(): void {
+		this.ghosts.delete(this.ghost);
+		void this.loadWork();
+	}
+
+	/** Creates the note (once) and opens it in place of the ghost note; what was kept for it is then forgotten. */
+	private async create(): Promise<void> {
 		if (this.creating || !this.values) return;
 		this.creating = true;
 		try {
@@ -230,23 +251,14 @@ export class WorkView extends ItemView {
 			for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) {
 				path = normalizePath(`${folder ? `${folder}/` : ''}${base} (${n}).md`);
 			}
-			const text = this.text();
-			const file = await this.app.vault.create(path, text);
+			const file = await this.app.vault.create(path, this.text());
+			this.ghosts.delete(this.ghost);
 			await this.leaf.openFile(file, { active: true });
 			new Notice(`Created “${file.basename}”.`);
-			if (cursorInBody !== null) this.placeCursor(file, text.length - this.body.length + cursorInBody);
 		} catch (error) {
 			this.creating = false;
 			new Notice(`The note could not be created: ${error instanceof Error ? error.message : String(error)}`);
 		}
-	}
-
-	/** Puts the cursor at an offset of the new note, in its editor. */
-	private placeCursor(file: TFile, offset: number): void {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || view.file !== file || view.getMode() !== 'source') return;
-		view.editor.focus();
-		view.editor.setCursor(view.editor.offsetToPos(offset));
 	}
 
 	/**
