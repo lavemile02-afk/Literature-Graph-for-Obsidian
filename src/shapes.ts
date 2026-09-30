@@ -331,17 +331,61 @@ export function createCircleSimulation(nodes: LayoutNode[], links: LayoutLink[],
 
 // ----- Meaning -----
 
+/** A pull between two works close in meaning (the Meaning layout). */
+interface KinLink {
+	source: LayoutNode | number;
+	target: LayoutNode | number;
+	similarity: number;
+}
+
+/**
+ * The Meaning layout: works close in meaning draw together, the more so the
+ * closer they are, through links to their nearest works in meaning (`kin`);
+ * every work also leans lightly towards its place in the plane of meaning
+ * (`anchor`, the place that gives its color), so distant meanings, and
+ * distant colors, end up apart. The usual repulsion, in proportion to the
+ * size of the works, keeps the clouds airy rather than dense.
+ */
 export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
 	countDegrees(nodes, links);
 	const placed = (n: LayoutNode) => Array.isArray(n.anchor);
+	// Each pair once, the stronger similarity kept.
+	const pairs = new Map<string, KinLink>();
+	nodes.forEach((n, i) => {
+		for (const [j, similarity] of n.kin ?? []) {
+			if (j < 0 || j >= nodes.length || j === i) continue;
+			const key = i < j ? `${i} ${j}` : `${j} ${i}`;
+			const known = pairs.get(key);
+			if (!known || known.similarity < similarity) pairs.set(key, { source: i, target: j, similarity });
+		}
+	});
+	const kinLinks = [...pairs.values()];
+	const kinCount = new Map<number, number>();
+	for (const l of kinLinks) for (const end of [l.source, l.target] as number[]) kinCount.set(end, (kinCount.get(end) ?? 0) + 1);
+	const kinEnds = (l: KinLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
 	// Citations between placed works barely pull (their meaning places them); a
-	// work without topics follows the works it is linked to.
+	// work without any text follows the works it is linked to.
 	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
-	return forceSimulation<LayoutNode, LayoutLink>(nodes)
-		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (bothPlaced(l) ? 0.02 : 0.3) / weakestDegree(l)))
-		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 0.3)).distanceMax(300))
-		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.25 : 0.005 + forces.center / 4)))
-		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.25 : 0.005 + forces.center / 4)))
+	const sim = forceSimulation<LayoutNode, LayoutLink>(nodes)
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (bothPlaced(l) ? 0.01 : 0.3) / weakestDegree(l)))
+		.force(
+			'kin',
+			forceLink<LayoutNode, KinLink>(kinLinks)
+				// Close meanings: short and strong; farther ones: longer and weaker.
+				.distance((l) => {
+					const [a, b] = kinEnds(l);
+					return (collideRadius(a) + collideRadius(b)) * (1.5 + 2 * (1 - l.similarity));
+				})
+				.strength((l) => {
+					const [a, b] = kinEnds(l);
+					const count = Math.min(kinCount.get(a.index ?? 0) ?? 1, kinCount.get(b.index ?? 0) ?? 1);
+					return (0.6 * l.similarity * l.similarity) / count;
+				}),
+		)
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)))
+		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.06 : 0.005 + forces.center / 4)))
+		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.06 : 0.005 + forces.center / 4)))
 		.force('collide', collide())
 		.stop();
+	return sim;
 }

@@ -40,6 +40,8 @@ export interface LayoutNode extends SimulationNodeDatum {
 	year?: number | null;
 	/** Place given by the work's meaning (the Meaning layout), or null. */
 	anchor?: [number, number] | null;
+	/** The works nearest in meaning (index, similarity), which it is drawn to in the Meaning layout. */
+	kin?: [number, number][] | null;
 }
 
 export interface LayoutLink extends SimulationLinkDatum<LayoutNode> {
@@ -101,7 +103,7 @@ export type LayoutMessage =
 			type: 'start';
 			/** Number of this graph, sent back with its positions. */
 			graph: number;
-			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number; year?: number | null; anchor?: [number, number] | null }[];
+			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number; year?: number | null; anchor?: [number, number] | null; kin?: [number, number][] | null }[];
 			/** Indices into `nodes`. */
 			links: { source: number; target: number; inVault: boolean }[];
 			forces: Forces;

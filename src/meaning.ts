@@ -7,6 +7,10 @@
  * randomized subspace iteration). Works using the same words, or words that
  * occur together, get close vectors.
  *
+ * The vocabulary, the directions and the plane can be learned from one
+ * corpus (the notes of the vault) and applied to other texts, so a work's
+ * meaning does not depend on which works are shown with it.
+ *
  * No dependency and no model to download: plain arithmetic on sparse
  * vectors, deterministic (seeded), and cooperative (it yields between the
  * steps, so Obsidian stays responsive). No Obsidian or Pixi here.
@@ -48,43 +52,51 @@ export interface SparseVector {
 	weights: Float64Array;
 }
 
+/** The words kept and their weights (IDF), learned from a corpus. */
+export interface Vocabulary {
+	index: Map<string, number>;
+	idf: Float64Array;
+}
+
 /**
- * TF-IDF vectors of documents (given as their words): a term's weight is
- * (1 + log of its count) times log(documents / documents with it), then
- * each vector has length 1. Terms in fewer than `minDocuments` documents or
- * in more than `maxShare` of them are left out (typos, and words everyone
- * uses); at most `maxTerms` terms are kept, the most widespread first.
+ * The vocabulary of a corpus (documents given as their words): a term's
+ * weight is log(documents / documents with it). Terms in fewer than
+ * `minDocuments` documents or in more than `maxShare` of them are left out
+ * (typos, and words everyone uses); at most `maxTerms` terms are kept, the
+ * most widespread first.
  */
-export function tfidf(documents: string[][], options: { minDocuments?: number; maxShare?: number; maxTerms?: number } = {}): { vectors: SparseVector[]; terms: number } {
+export function vocabularyOf(documents: string[][], options: { minDocuments?: number; maxShare?: number; maxTerms?: number } = {}): Vocabulary {
 	const minDocuments = options.minDocuments ?? 2;
 	const maxShare = options.maxShare ?? 0.5;
 	const maxTerms = options.maxTerms ?? 30000;
-	const counts = documents.map((words) => {
-		const c = new Map<string, number>();
-		for (const w of words) c.set(w, (c.get(w) ?? 0) + 1);
-		return c;
-	});
 	const df = new Map<string, number>();
-	for (const c of counts) for (const w of c.keys()) df.set(w, (df.get(w) ?? 0) + 1);
+	for (const words of documents) for (const w of new Set(words)) df.set(w, (df.get(w) ?? 0) + 1);
 	const n = documents.length;
 	const kept = [...df]
 		.filter(([, d]) => d >= minDocuments && d <= Math.max(minDocuments, maxShare * n))
 		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
 		.slice(0, maxTerms);
-	const index = new Map(kept.map(([w], i) => [w, i]));
-	const idf = kept.map(([, d]) => Math.log(n / d));
-	const vectors = counts.map((c) => {
-		const entries: [number, number][] = [];
-		for (const [w, count] of c) {
-			const t = index.get(w);
-			if (t === undefined) continue;
-			entries.push([t, (1 + Math.log(count)) * (idf[t] ?? 0)]);
-		}
-		entries.sort((a, b) => a[0] - b[0]);
-		const length = Math.sqrt(entries.reduce((s, [, x]) => s + x * x, 0)) || 1;
-		return { terms: Int32Array.from(entries.map(([t]) => t)), weights: Float64Array.from(entries.map(([, x]) => x / length)) };
-	});
-	return { vectors, terms: kept.length };
+	return { index: new Map(kept.map(([w], i) => [w, i])), idf: Float64Array.from(kept, ([, d]) => Math.log(n / d)) };
+}
+
+/** The TF-IDF vector of a document: (1 + log of each kept word's count) × its IDF, of length 1. */
+export function vectorize(words: string[], vocabulary: Vocabulary): SparseVector {
+	const counts = new Map<number, number>();
+	for (const w of words) {
+		const t = vocabulary.index.get(w);
+		if (t !== undefined) counts.set(t, (counts.get(t) ?? 0) + 1);
+	}
+	const terms = Int32Array.from([...counts.keys()].sort((a, b) => a - b));
+	const weights = Float64Array.from(terms, (t) => (1 + Math.log(counts.get(t) ?? 1)) * (vocabulary.idf[t] ?? 0));
+	const length = Math.sqrt(weights.reduce((s, x) => s + x * x, 0)) || 1;
+	for (let i = 0; i < weights.length; i++) weights[i] = (weights[i] ?? 0) / length;
+	return { terms, weights };
+}
+
+/** TF-IDF vectors of documents, with the vocabulary of these same documents (see `vocabularyOf`). */
+export function tfidf(documents: string[][], options: { minDocuments?: number; maxShare?: number; maxTerms?: number } = {}): { vectors: SparseVector[]; terms: number } {
+	const vocabulary = vocabularyOf(documents, options);
+	return { vectors: documents.map((words) => vectorize(words, vocabulary)), terms: vocabulary.idf.length };
 }
 
 /** A small seeded random generator (mulberry32), so the vectors are the same each time. */
@@ -128,13 +140,17 @@ function orthonormalize(m: Float64Array, rows: number, k: number): void {
 	}
 }
 
+/** The main directions of meaning among the terms: an orthonormal basis (terms × k, by rows). */
+export interface MeaningBasis {
+	basis: Float64Array;
+	k: number;
+}
+
 /**
- * The vectors of meaning: the documents projected on the `dimensions` main
- * directions of the corpus (truncated SVD by randomized subspace
- * iteration), each of length 1. Documents without any kept word get null.
- * `pause` is awaited between the heavy steps.
+ * The `dimensions` main directions of a corpus (truncated SVD by randomized
+ * subspace iteration, seeded). `pause` is awaited between the heavy steps.
  */
-export async function lsa(vectors: SparseVector[], terms: number, dimensions = 64, pause: () => Promise<void> = () => Promise.resolve()): Promise<(Float32Array | null)[]> {
+export async function meaningBasis(vectors: SparseVector[], terms: number, dimensions = 64, pause: () => Promise<void> = () => Promise.resolve()): Promise<MeaningBasis> {
 	const n = vectors.length;
 	const k = Math.max(1, Math.min(dimensions, terms, n));
 	const rand = random(20260930);
@@ -162,8 +178,8 @@ export async function lsa(vectors: SparseVector[], terms: number, dimensions = 6
 		});
 		return out;
 	};
-	// Only the documents' side (n × k, the smaller) is orthonormalized at
-	// each iteration; the terms' side once, at the end.
+	// Only the documents' side (n × k) is orthonormalized at each
+	// iteration; the terms' side once, at the end.
 	for (let iteration = 0; iteration < 5; iteration++) {
 		const y = aTimes(z);
 		orthonormalize(y, n, k);
@@ -172,22 +188,30 @@ export async function lsa(vectors: SparseVector[], terms: number, dimensions = 6
 		await pause();
 	}
 	orthonormalize(z, terms, k);
-	await pause();
-	const projected = aTimes(z);
-	return vectors.map((v, i) => {
-		if (v.terms.length === 0) return null;
-		const out = new Float32Array(k);
-		let norm = 0;
-		for (let c = 0; c < k; c++) {
-			const x = projected[i * k + c] ?? 0;
-			out[c] = x;
-			norm += x * x;
-		}
-		norm = Math.sqrt(norm);
-		if (norm === 0) return null;
-		for (let c = 0; c < k; c++) out[c] = (out[c] ?? 0) / norm;
-		return out;
-	});
+	return { basis: z, k };
+}
+
+/** The vector of meaning of a document: its TF-IDF vector on the main directions, of length 1; null without any kept word. */
+export function project(vector: SparseVector, { basis, k }: MeaningBasis): Float32Array | null {
+	if (vector.terms.length === 0) return null;
+	const out = new Float32Array(k);
+	for (let e = 0; e < vector.terms.length; e++) {
+		const t = vector.terms[e] ?? 0;
+		const w = vector.weights[e] ?? 0;
+		for (let c = 0; c < k; c++) out[c] = (out[c] ?? 0) + w * (basis[t * k + c] ?? 0);
+	}
+	let norm = 0;
+	for (let c = 0; c < k; c++) norm += (out[c] ?? 0) ** 2;
+	norm = Math.sqrt(norm);
+	if (norm === 0) return null;
+	for (let c = 0; c < k; c++) out[c] = (out[c] ?? 0) / norm;
+	return out;
+}
+
+/** The vectors of meaning of a corpus, from its own main directions (see `meaningBasis` and `project`). */
+export async function lsa(vectors: SparseVector[], terms: number, dimensions = 64, pause?: () => Promise<void>): Promise<(Float32Array | null)[]> {
+	const basis = await meaningBasis(vectors, terms, dimensions, pause);
+	return vectors.map((v) => project(v, basis));
 }
 
 /** Cosine similarity of two vectors of meaning (both of length 1). */
@@ -197,15 +221,22 @@ export function similarity(a: Float32Array, b: Float32Array): number {
 	return s;
 }
 
+/** A plane of meaning: the mean of the vectors, their two main directions, and the spread along each. */
+export interface Plane {
+	mean: Float64Array;
+	axes: Float64Array[];
+	spreads: number[];
+}
+
 /**
- * Places of the vectors in a plane: their two main directions (principal
+ * The plane of a set of vectors: their two main directions (principal
  * components), each axis in units of its own spread, so the places are
- * relative to the diversity of the vectors given. Null vectors stay null.
+ * relative to the diversity of the vectors given. Null without two vectors.
  */
-export function planeOf(vectors: (Float32Array | null)[]): ([number, number] | null)[] {
+export function fitPlane(vectors: (Float32Array | null)[]): Plane | null {
 	const present = vectors.filter((v): v is Float32Array => v !== null);
 	const d = present[0]?.length ?? 0;
-	if (present.length < 2 || d === 0) return vectors.map((v) => (v ? [0, 0] : null));
+	if (present.length < 2 || d === 0) return null;
 	const mean = new Float64Array(d);
 	for (const v of present) for (let j = 0; j < d; j++) mean[j] = (mean[j] ?? 0) + (v[j] ?? 0) / present.length;
 	// Covariance (d × d, small), then its two main eigenvectors by power iteration.
@@ -241,14 +272,53 @@ export function planeOf(vectors: (Float32Array | null)[]): ([number, number] | n
 		if ((axis[largest] ?? 0) < 0) axis = axis.map((x) => -x);
 		axes.push(axis);
 	}
-	const coordinates = vectors.map((v) => {
-		if (!v) return null;
-		return axes.map((axis) => {
-			let s = 0;
-			for (let j = 0; j < d; j++) s += ((v[j] ?? 0) - (mean[j] ?? 0)) * (axis[j] ?? 0);
-			return s;
-		});
+	const plane: Plane = { mean, axes, spreads: [1, 1] };
+	const coordinates = present.map((v) => placeIn(plane, v));
+	plane.spreads = [0, 1].map((c) => Math.sqrt(coordinates.reduce((s, p) => s + (p[c] ?? 0) ** 2, 0) / present.length) || 1);
+	return plane;
+}
+
+/** The place of a vector in a plane. */
+export function placeIn(plane: Plane, v: Float32Array): [number, number] {
+	const d = plane.mean.length;
+	const [a, b] = plane.axes.map((axis) => {
+		let s = 0;
+		for (let j = 0; j < d; j++) s += ((v[j] ?? 0) - (plane.mean[j] ?? 0)) * (axis[j] ?? 0);
+		return s;
 	});
-	const spreads = [0, 1].map((c) => Math.sqrt(coordinates.reduce((s, p) => s + (p ? (p[c] ?? 0) ** 2 : 0), 0) / present.length) || 1);
-	return coordinates.map((p) => (p ? [(p[0] ?? 0) / (spreads[0] ?? 1), (p[1] ?? 0) / (spreads[1] ?? 1)] : null));
+	return [(a ?? 0) / (plane.spreads[0] ?? 1), (b ?? 0) / (plane.spreads[1] ?? 1)];
+}
+
+/** Places of the vectors in their own plane (see `fitPlane`); null vectors stay null. */
+export function planeOf(vectors: (Float32Array | null)[]): ([number, number] | null)[] {
+	const plane = fitPlane(vectors);
+	return vectors.map((v) => (v ? (plane ? placeIn(plane, v) : [0, 0]) : null));
+}
+
+/**
+ * The `k` nearest neighbors in meaning of each vector, with their similarity
+ * (most similar first; only positive similarities). `pause` is awaited now
+ * and then: with n vectors, this takes n² products.
+ */
+export async function nearestNeighbors(vectors: (Float32Array | null)[], k: number, pause: () => Promise<void> = () => Promise.resolve()): Promise<[number, number][][]> {
+	const out: [number, number][][] = vectors.map(() => []);
+	for (let i = 0; i < vectors.length; i++) {
+		const a = vectors[i];
+		if (a) {
+			const best: [number, number][] = [];
+			for (let j = 0; j < vectors.length; j++) {
+				const b = vectors[j];
+				if (j === i || !b) continue;
+				const s = similarity(a, b);
+				if (s <= 0 || (best.length === k && s <= (best[k - 1]?.[1] ?? 0))) continue;
+				let at = best.length;
+				while (at > 0 && (best[at - 1]?.[1] ?? 0) < s) at--;
+				best.splice(at, 0, [j, s]);
+				if (best.length > k) best.pop();
+			}
+			out[i] = best;
+		}
+		if (i % 250 === 249) await pause();
+	}
+	return out;
 }
