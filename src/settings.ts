@@ -252,6 +252,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'slider', key: 'graphLinkDistance', min: 20, max: 200, step: 10 },
 					},
 					{
+						name: 'Point size',
+						desc: 'Size of the works in the graph, times their usual size. Also in the graph's panel; kept for every graph.',
+						control: { type: 'slider', key: 'graphPointScale', min: 0.25, max: 3, step: 0.05 },
+					},
+					{
 						name: 'Center force',
 						desc: 'How strongly every work is pulled toward the middle: higher for a tighter, rounder graph, lower to spread it. Can be changed in the graph for the time it stays open.',
 						control: { type: 'slider', key: 'graphCenter', min: 0, max: 0.2, step: 0.005 },
