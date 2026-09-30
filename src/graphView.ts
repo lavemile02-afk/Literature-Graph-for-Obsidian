@@ -307,6 +307,8 @@ export class LiteratureGraphView extends ItemView {
 	/** Year of publication of each node, by index. */
 	private years: (number | null)[] = [];
 	private yearSlider: SliderComponent | null = null;
+	/** True while the code moves the year slider: its change is not the user's. */
+	private movingYearSlider = false;
 	private timelineDesc: HTMLElement | null = null;
 	private timelineTimer: number | null = null;
 	private frameId: number | null = null;
@@ -1115,8 +1117,18 @@ export class LiteratureGraphView extends ItemView {
 		const min = Math.min(...known);
 		const max = Math.max(...known);
 		slider.setLimits(min, max, 1);
-		slider.setValue(this.yearLimit ?? max);
+		this.showYearOnSlider(this.yearLimit ?? max);
 		this.describeTimeline();
+	}
+
+	/** Moves the year slider without it counting as the user's choice (which stops the timeline). */
+	private showYearOnSlider(year: number): void {
+		this.movingYearSlider = true;
+		try {
+			this.yearSlider?.setValue(year);
+		} finally {
+			this.movingYearSlider = false;
+		}
 	}
 
 	/** Shows the works published up to a year (null: all of them). */
@@ -1131,24 +1143,27 @@ export class LiteratureGraphView extends ItemView {
 		this.timelineDesc?.setText(this.yearLimit === null ? 'All years.' : `Published up to ${this.yearLimit}: ${shown} works.`);
 	}
 
-	/** Plays the timeline: the literature grows year by year, up to today. */
+	/**
+	 * Plays the timeline: the literature grows year by year, up to today. Years
+	 * in which no work shown was published are skipped.
+	 */
 	private playTimeline(): void {
 		this.stopTimeline();
-		const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
-		if (known.length === 0) return;
-		const max = Math.max(...known);
-		let year = Math.min(...known);
-		this.setYearLimit(year);
+		const years = [...new Set(this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000))].sort(
+			(a, b) => a - b,
+		);
+		if (years.length === 0) return;
+		let step = 0;
+		const show = () => {
+			this.showYearOnSlider(years[step]!);
+			this.setYearLimit(step === years.length - 1 ? null : years[step]!);
+		};
+		show();
+		if (years.length === 1) return;
 		this.timelineTimer = window.setInterval(() => {
-			year++;
-			if (year >= max) {
-				this.stopTimeline();
-				this.setYearLimit(null);
-				this.yearSlider?.setValue(max);
-				return;
-			}
-			this.yearSlider?.setValue(year);
-			this.setYearLimit(year);
+			step++;
+			show();
+			if (step >= years.length - 1) this.stopTimeline();
 		}, TIMELINE_YEAR_MS);
 	}
 
@@ -1452,6 +1467,7 @@ export class LiteratureGraphView extends ItemView {
 				this.yearSlider = slider;
 				slider.setLimits(1900, 2030, 1).setValue(2030);
 				slider.onChange((value) => {
+					if (this.movingYearSlider) return;
 					this.stopTimeline();
 					const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
 					this.setYearLimit(known.length > 0 && value >= Math.max(...known) ? null : value);
