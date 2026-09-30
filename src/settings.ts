@@ -253,7 +253,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Point size',
-						desc: 'Size of the works in the graph, times their usual size. Also in the graph's panel; kept for every graph.',
+						desc: 'Size of the works in the graph, times their usual size. Also in the graph\'s panel; kept for every graph.',
 						control: { type: 'slider', key: 'graphPointScale', min: 0.25, max: 3, step: 0.05 },
 					},
 					{
