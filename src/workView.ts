@@ -126,8 +126,9 @@ export class WorkView extends ItemView {
 				keywords: s.keywordsProperty.trim() || 'keywords',
 			});
 		this.split(this.ghosts.get(this.ghost) ?? fillTemplate(template, this.values));
-		// The tab's title follows the work.
+		// The tab's title and the view's header follow the work.
 		(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
+		this.containerEl.querySelector('.view-header-title')?.setText(this.getDisplayText());
 		this.render();
 	}
 
