@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import type { GraphEdge, GraphNode, LiteratureGraph } from '../src/graphData';
 import { explainSuggestion, rankSuggestions, WorkInfo } from '../src/relevance';
 
-const node = (id: string, generation: 0 | 1 | 2, openAlexId: string | null = null): GraphNode => ({
+const node = (id: string, depth: 0 | 1 | 2, openAlexId: string | null = null): GraphNode => ({
 	id,
-	generation,
+	depth,
 	file: null,
 	doi: null,
 	openAlexId,
@@ -34,7 +34,7 @@ test('ranks first the works most cited by the vault', () => {
 		['X', 'Y', 'Z', 'W', 'V'],
 	);
 	// Only works outside the vault are suggested.
-	assert.ok(ranked.every((s) => s.node.generation !== 0));
+	assert.ok(ranked.every((s) => s.node.depth !== 0));
 });
 
 test('counts each signal of a suggestion', () => {

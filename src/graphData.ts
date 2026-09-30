@@ -9,14 +9,14 @@ import type { LiteratureGraphSettings } from './settings';
 export type EdgeSource = 'link' | 'bibliography' | 'openalex';
 
 /**
- * A work of the graph. Generation 0: a note of the literature folder;
- * generation 1: a work outside the vault cited by notes of the vault;
- * generation 2: a work cited by generation-1 works.
+ * A work of the graph. Depth 0: a note of the literature folder;
+ * depth 1: a work outside the vault cited by notes of the vault;
+ * depth 2: a work cited by depth-1 works.
  */
 export interface GraphNode {
 	/** The note's path, or "W…" (OpenAlex id), or "doi:…". */
 	id: string;
-	generation: 0 | 1 | 2;
+	depth: 0 | 1 | 2;
 	file: TFile | null;
 	doi: string | null;
 	openAlexId: string | null;
@@ -46,7 +46,7 @@ export interface LiteratureGraph {
 
 export interface GraphOptions {
 	/** 0, 1 or 2. */
-	generations: number;
+	depth: number;
 	/** A work outside the vault is shown only if at least this many works of the graph cite it. */
 	minCitations: number;
 	/** At most this many nodes; the most cited works outside the vault are kept. */
@@ -88,7 +88,7 @@ const SAME_TITLE = 0.8;
 /** Label of a work outside the vault that OpenAlex has not described (yet). */
 const UNKNOWN_WORK = 'Unknown work';
 
-/** Progress messages and intermediate graphs, generation by generation. */
+/** Progress messages and intermediate graphs, depth by depth. */
 export interface GraphProgress {
 	onStage: (graph: LiteratureGraph) => void;
 	onStatus: (message: string) => void;
@@ -125,7 +125,7 @@ function mostCited(counts: Map<string, number>, min: number, limit: number): { k
 }
 
 /**
- * Builds the literature graph, generation by generation (each stage is passed
+ * Builds the literature graph, depth by depth (each stage is passed
  * to `progress.onStage` as soon as it is ready).
  */
 export async function buildGraph(
@@ -140,7 +140,7 @@ export async function buildGraph(
 	const g = new GraphBuilder(allowed);
 	const language = settings.citationLanguage;
 
-	// ----- Generation 0: the notes of the literature folder -----
+	// ----- Depth 0: the notes of the literature folder -----
 	const files = app.vault.getMarkdownFiles().filter((f) => index.isLiterature(f));
 	// With "all notes": the other notes that cite with citation links, and the
 	// other notes they cite that way.
@@ -161,7 +161,7 @@ export async function buildGraph(
 		const title: unknown = app.metadataCache.getFileCache(file)?.frontmatter?.[settings.titleProperty];
 		g.nodes.set(file.path, {
 			id: file.path,
-			generation: 0,
+			depth: 0,
 			file,
 			doi: index.doiForFile(file),
 			openAlexId: null,
@@ -207,12 +207,12 @@ export async function buildGraph(
 		console.error('Literature Graph: OpenAlex request failed; the graph uses local data only', error);
 	}
 	progress.onStage(g.snapshot());
-	if (options.generations < 1) return g.snapshot();
+	if (options.depth < 1) return g.snapshot();
 	if (openAlex.isRateLimited) {
 		progress.onStatus('OpenAlex refuses requests for now: works outside the vault come from the cache only');
 	}
 
-	// ----- Generation 1: works outside the vault cited by the vault's works -----
+	// ----- Depth 1: works outside the vault cited by the vault's works -----
 	const counts1 = new Map<string, number>();
 	/** Cited work → citing work → where the citation was found. */
 	const citers1 = new Map<string, Map<string, EdgeSource>>();
@@ -311,28 +311,28 @@ export async function buildGraph(
 			}
 		}
 	}
-	// With two generations, generation 1 gets half of the remaining nodes.
+	// At depth 2, depth 1 gets half of the remaining nodes.
 	const remaining = options.maxNodes - g.nodes.size;
-	const budget1 = options.generations >= 2 ? Math.floor(remaining / 2) : remaining;
-	const gen1 = mostCited(counts1, options.minCitations, budget1);
-	g.leftOut += gen1.leftOut;
+	const budget1 = options.depth >= 2 ? Math.floor(remaining / 2) : remaining;
+	const atDepth1 = mostCited(counts1, options.minCitations, budget1);
+	g.leftOut += atDepth1.leftOut;
 
-	const ids1 = gen1.kept.filter((k) => !k.startsWith('doi:') && !k.startsWith('ref:'));
+	const ids1 = atDepth1.kept.filter((k) => !k.startsWith('doi:') && !k.startsWith('ref:'));
 	let works1: WorkSummary[] = [];
 	try {
 		works1 = await openAlex.worksByIds(ids1, (done, total) =>
-			progress.onStatus(`Loading works outside the vault (generation 1): ${done} of ${total}…`),
+			progress.onStatus(`Loading works outside the vault (depth 1): ${done} of ${total}…`),
 		);
 	} catch (error) {
 		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	const byId1 = new Map(works1.map((w) => [w.id, w]));
-	for (const key of gen1.kept) {
+	for (const key of atDepth1.kept) {
 		const local = localWorks.get(key);
 		if (local) {
 			g.nodes.set(key, {
 				id: key,
-				generation: 1,
+				depth: 1,
 				file: null,
 				doi: null,
 				openAlexId: null,
@@ -350,7 +350,7 @@ export async function buildGraph(
 		const doi = key.startsWith('doi:') ? key.slice(4) : (work?.doi ?? null);
 		g.nodes.set(key, {
 			id: key,
-			generation: 1,
+			depth: 1,
 			file: null,
 			doi,
 			openAlexId: work?.id ?? (key.startsWith('doi:') ? null : key),
@@ -362,9 +362,9 @@ export async function buildGraph(
 		for (const [from, source] of citers1.get(key) ?? []) g.addEdge(from, key, source);
 	}
 	progress.onStage(g.snapshot());
-	if (options.generations < 2) return g.snapshot();
+	if (options.depth < 2) return g.snapshot();
 
-	// ----- Generation 2: works cited by generation-1 works -----
+	// ----- Depth 2: works cited by depth-1 works -----
 	const counts2 = new Map<string, number>();
 	const citers2 = new Map<string, Map<string, EdgeSource>>();
 	for (const work of works1) {
@@ -375,23 +375,23 @@ export async function buildGraph(
 		}
 	}
 	const budget2 = options.maxNodes - g.nodes.size;
-	const gen2 = mostCited(counts2, options.minCitations, budget2);
-	g.leftOut += gen2.leftOut;
+	const atDepth2 = mostCited(counts2, options.minCitations, budget2);
+	g.leftOut += atDepth2.leftOut;
 	let works2: WorkSummary[] = [];
 	try {
-		works2 = await openAlex.worksByIds(gen2.kept, (done, total) =>
-			progress.onStatus(`Loading works outside the vault (generation 2): ${done} of ${total}…`),
+		works2 = await openAlex.worksByIds(atDepth2.kept, (done, total) =>
+			progress.onStatus(`Loading works outside the vault (depth 2): ${done} of ${total}…`),
 		);
 	} catch (error) {
 		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	const byId2 = new Map(works2.map((w) => [w.id, w]));
-	for (const key of gen2.kept) {
+	for (const key of atDepth2.kept) {
 		if (openAlex.isMissing(key)) continue;
 		const work = byId2.get(key);
 		g.nodes.set(key, {
 			id: key,
-			generation: 2,
+			depth: 2,
 			file: null,
 			doi: work?.doi ?? null,
 			openAlexId: key,

@@ -62,7 +62,7 @@ export function rankSuggestions(
 ): Suggestion[] {
 	const byId = new Map(graph.nodes.map((n) => [n.id, n]));
 	const vaultByOpenAlexId = new Map<string, GraphNode>();
-	for (const n of graph.nodes) if (n.generation === 0 && n.openAlexId) vaultByOpenAlexId.set(n.openAlexId, n);
+	for (const n of graph.nodes) if (n.depth === 0 && n.openAlexId) vaultByOpenAlexId.set(n.openAlexId, n);
 
 	const vaultCiters = new Map<string, Set<GraphNode>>();
 	const citesVault = new Map<string, Set<GraphNode>>();
@@ -75,15 +75,15 @@ export function rankSuggestions(
 	for (const edge of graph.edges) {
 		const from = byId.get(edge.source);
 		const to = byId.get(edge.target);
-		if (!from || !to || (to.generation === 0 && from.generation === 0)) continue;
-		if (to.generation !== 0 && from.generation === 0) add(vaultCiters, to.id, from);
-		else if (to.generation !== 0) outsideCiters.set(to.id, (outsideCiters.get(to.id) ?? 0) + 1);
+		if (!from || !to || (to.depth === 0 && from.depth === 0)) continue;
+		if (to.depth !== 0 && from.depth === 0) add(vaultCiters, to.id, from);
+		else if (to.depth !== 0) outsideCiters.set(to.id, (outsideCiters.get(to.id) ?? 0) + 1);
 		else add(citesVault, from.id, to);
 	}
-	const outside = graph.nodes.filter((n) => n.generation !== 0);
+	const outside = graph.nodes.filter((n) => n.depth !== 0);
 	const infos = new Map(outside.map((n) => [n.id, info(n)]));
 	// The references of a work outside the vault may name works of the vault
-	// that the graph does not link to it (generation 2 not loaded).
+	// that the graph does not link to it (depth 2 not loaded).
 	for (const n of outside) {
 		for (const ref of infos.get(n.id)?.references ?? []) {
 			const cited = vaultByOpenAlexId.get(ref);

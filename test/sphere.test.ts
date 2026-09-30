@@ -46,12 +46,12 @@ test('turning the sphere half a turn brings the back to the front', () => {
 
 test('shows the works of the vault first, then the others oldest first', () => {
 	const rank = appearanceOrder([
-		{ generation: 1, year: 2010, citedBy: 3 },
-		{ generation: 0, year: 2020, citedBy: 1 },
-		{ generation: 1, year: 1990, citedBy: 1 },
-		{ generation: 0, year: 2001, citedBy: 9 },
-		{ generation: 2, year: 1950, citedBy: 1 },
-		{ generation: 1, year: null, citedBy: 5 },
+		{ depth: 1, year: 2010, citedBy: 3 },
+		{ depth: 0, year: 2020, citedBy: 1 },
+		{ depth: 1, year: 1990, citedBy: 1 },
+		{ depth: 0, year: 2001, citedBy: 9 },
+		{ depth: 2, year: 1950, citedBy: 1 },
+		{ depth: 1, year: null, citedBy: 5 },
 	]);
 	assert.deepEqual(rank, [3, 1, 2, 0, 5, 4]);
 });

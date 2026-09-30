@@ -1,7 +1,7 @@
 /**
  * The "atoms" of the literature graph: each work of the vault is a nucleus,
  * alone at the center of a circle of the works outside the vault that it
- * cites (generation 1), with the works that those cite (generation 2) on a
+ * cites (depth 1), with the works that those cite (depth 2) on a
  * larger circle. A work cited by several atoms belongs to the one with the
  * fewest electrons (so atoms stay balanced); the arrows of the other atoms
  * still reach it. A work that no atom cites is free.
@@ -15,7 +15,7 @@ export const ELECTRON = 1;
 export const FREE = 2;
 
 export interface AtomNode {
-	generation: number;
+	depth: number;
 	radius: number;
 }
 
@@ -43,7 +43,7 @@ const INNER_GAP = 8;
 
 /**
  * Roles and places. Electrons stand on circles around their nucleus (the
- * nucleus alone inside): generation 1 on one, generation 2 on a larger one.
+ * nucleus alone inside): depth 1 on one, depth 2 on a larger one.
  * `spacing` is the distance between neighbors on a circle, so a circle's
  * radius grows with its number of electrons.
  */
@@ -56,10 +56,10 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 	const cloud = new Float32Array(n);
 	const citers: number[][] = nodes.map(() => []);
 	for (const l of links) if (l.source !== l.target) citers[l.target]?.push(l.source);
-	const gen = (i: number) => nodes[i]?.generation ?? 0;
+	const depthOf = (i: number) => nodes[i]?.depth ?? 0;
 
 	nodes.forEach((node, i) => {
-		if (node.generation === 0) role[i] = NUCLEUS;
+		if (node.depth === 0) role[i] = NUCLEUS;
 	});
 	/** Electrons of each atom so far, to give a shared work to the smallest. */
 	const size = new Map<number, number>();
@@ -74,18 +74,18 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 		shared[i] = candidates.length > 1 ? 1 : 0;
 		size.set(smallest, (size.get(smallest) ?? 0) + 1);
 	};
-	// Generation 1: works of the vault citing it. Those cited by one atom
+	// Depth 1: works of the vault citing it. Those cited by one atom
 	// first, so that shared works then go to the smallest clouds.
-	const gen1 = nodes.map((_, i) => i).filter((i) => gen(i) === 1);
-	const vaultCiters = (i: number) => new Set((citers[i] ?? []).filter((c) => gen(c) === 0));
-	for (const i of gen1) if (vaultCiters(i).size === 1) join(i, vaultCiters(i));
-	for (const i of gen1) if (vaultCiters(i).size > 1) join(i, vaultCiters(i));
-	// Generation 2: the atoms of the works citing it.
+	const atDepth1 = nodes.map((_, i) => i).filter((i) => depthOf(i) === 1);
+	const vaultCiters = (i: number) => new Set((citers[i] ?? []).filter((c) => depthOf(c) === 0));
+	for (const i of atDepth1) if (vaultCiters(i).size === 1) join(i, vaultCiters(i));
+	for (const i of atDepth1) if (vaultCiters(i).size > 1) join(i, vaultCiters(i));
+	// Depth 2: the atoms of the works citing it.
 	const atomsOfCiters = (i: number) =>
 		new Set((citers[i] ?? []).map((c) => (role[c] === ELECTRON ? (nucleus[c] ?? -1) : role[c] === NUCLEUS ? c : -1)));
-	const gen2 = nodes.map((_, i) => i).filter((i) => gen(i) === 2);
-	for (const i of gen2) if (atomsOfCiters(i).size === 1) join(i, atomsOfCiters(i));
-	for (const i of gen2) if (atomsOfCiters(i).size > 1) join(i, atomsOfCiters(i));
+	const atDepth2 = nodes.map((_, i) => i).filter((i) => depthOf(i) === 2);
+	for (const i of atDepth2) if (atomsOfCiters(i).size === 1) join(i, atomsOfCiters(i));
+	for (const i of atDepth2) if (atomsOfCiters(i).size > 1) join(i, atomsOfCiters(i));
 
 	// Places on each circle: the works of this atom only, then the shared ones,
 	// the larger (more cited) first. Each atom is turned by its own angle.
@@ -100,16 +100,16 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 	for (const [center, electrons] of electronsOf) {
 		electrons.sort(
 			(a, b) =>
-				gen(a) - gen(b) || (shared[a] ?? 0) - (shared[b] ?? 0) || (nodes[b]?.radius ?? 0) - (nodes[a]?.radius ?? 0) || a - b,
+				depthOf(a) - depthOf(b) || (shared[a] ?? 0) - (shared[b] ?? 0) || (nodes[b]?.radius ?? 0) - (nodes[a]?.radius ?? 0) || a - b,
 		);
-		// Each generation on its own circle, the nucleus alone inside: the
+		// Each depth on its own circle, the nucleus alone inside: the
 		// circle is as long as its electrons need, one `spacing` apart.
 		const minimum = (nodes[center]?.radius ?? 0) + MIN_RING;
 		const turn = center * 2.1;
 		let ring = 0;
 		let outer = minimum;
-		for (const generation of [1, 2]) {
-			const onRing = electrons.filter((e) => gen(e) === generation);
+		for (const depth of [1, 2]) {
+			const onRing = electrons.filter((e) => depthOf(e) === depth);
 			if (onRing.length === 0) continue;
 			const radius = Math.max(ring === 0 ? minimum : ring + RING_GAP, (onRing.length * spacing) / (2 * Math.PI));
 			onRing.forEach((e, k) => {
@@ -127,5 +127,5 @@ export function buildAtoms(nodes: readonly AtomNode[], links: readonly AtomLink[
 
 /** Smallest distance between a nucleus and its circle of electrons. */
 const MIN_RING = 30;
-/** Distance between the circles of generation 1 and generation 2. */
+/** Distance between the circles of depth 1 and depth 2. */
 const RING_GAP = 24;

@@ -32,9 +32,9 @@ const start = (graph: number): LayoutMessage => ({
 	type: 'start',
 	graph,
 	nodes: [
-		{ generation: 0, radius: 5 },
-		{ generation: 0, radius: 5 },
-		{ generation: 1, radius: 3 },
+		{ depth: 0, radius: 5 },
+		{ depth: 0, radius: 5 },
+		{ depth: 1, radius: 3 },
 	],
 	links: [
 		{ source: 0, target: 1, inVault: true },

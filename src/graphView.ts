@@ -72,7 +72,7 @@ interface ThemeColor {
 
 interface Theme {
 	node: ThemeColor;
-	/** Works outside the vault (generation 1), and those of generation 2. */
+	/** Works outside the vault (depth 1), and those of depth 2. */
 	outside: ThemeColor;
 	outside2: ThemeColor;
 	focused: ThemeColor;
@@ -166,8 +166,8 @@ const CAMERA_STEP = 0.14;
 const ZOOM_STEP = 0.3;
 /** How far the color of works outside the vault goes toward the background (0: the notes' color, 1: the background). */
 const OUTSIDE_BLEND = 0.5;
-/** And those of generation 2, further from generation 1's color. */
-const GENERATION_2_BLEND = 0.3;
+/** And those of depth 2, further from depth 1's color. */
+const DEPTH_2_BLEND = 0.3;
 /** Alpha of the edges that do not touch the hovered node. */
 const DIMMED_EDGE_ALPHA = 0.08;
 /** Width of lines on screen (pixels), and of the hovered work's arrows. */
@@ -182,7 +182,7 @@ const ARROW_SIZE = 4;
 const ARROW_MIN_SCALE = 0.5;
 
 function radiusOf(node: GraphNode): number {
-	const r = node.generation === 0 ? 4 + Math.sqrt(node.citedBy) * 2.2 : 2 + Math.sqrt(node.citedBy) * 1.2;
+	const r = node.depth === 0 ? 4 + Math.sqrt(node.citedBy) * 2.2 : 2 + Math.sqrt(node.citedBy) * 1.2;
 	return Math.min(MAX_NODE_RADIUS, r);
 }
 
@@ -242,7 +242,7 @@ class EdgeMesh {
 /**
  * A graph view of the literature: the notes of the literature folder, the
  * citations between them (never wikilinks) and, optionally, the works outside
- * the vault that they cite (generation 1) and that those cite (generation 2),
+ * the vault that they cite (depth 1) and that those cite (depth 2),
  * drawn like Obsidian's graph view with its colors, with PixiJS and a d3-force
  * simulation.
  *
@@ -310,9 +310,9 @@ export class LiteratureGraphView extends ItemView {
 		rank: [] as number[],
 		anchor: [] as (SimNode | null)[],
 		appear: [] as number[],
-		/** Depth of each work on the sphere (1: in front), and its size from the perspective. */
+		/** How far in front each work is drawn (1: in front, 0: at the back), and its size from the perspective. */
 		front: [] as number[],
-		depthScale: [] as number[],
+		perspectiveScale: [] as number[],
 		/** The camera before the animation, to go back to. */
 		returnTo: null as Camera | null,
 		/** Started from the panel's button: input is ignored until then, so that the click does not stop it. */
@@ -354,9 +354,9 @@ export class LiteratureGraphView extends ItemView {
 	/** Options of this view; start from the settings, changed only for this view. */
 	options: GraphOptions;
 	private loading = 0;
-	/** Local mode: only the works around the active note, up to `depth` citations away. */
+	/** Local mode: only the works around the active note, up to `localDepth` citations away. */
 	private local = false;
-	private depth = 1;
+	private localDepth = 1;
 	/** Style of layout, from the settings, changed in the panel for as long as the view is open. */
 	private layoutStyle: LayoutStyle = 'default';
 	/** Local mode: follow the citations of the center ("out"), the works citing it ("in"), or both. */
@@ -389,7 +389,7 @@ export class LiteratureGraphView extends ItemView {
 		const s = settings();
 		// The dropdown setting stores a string.
 		this.options = {
-			generations: Number(s.graphGenerations) || 0,
+			depth: Number(s.graphDepth) || 0,
 			minCitations: Math.max(1, Number(s.graphMinCitations) || 1),
 			maxNodes: maxNodesOf(s.graphMaxNodes),
 			localWorks: true,
@@ -418,14 +418,14 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { local: this.local, depth: this.depth, direction: this.direction };
+		return { local: this.local, depth: this.localDepth, direction: this.direction };
 	}
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		const s = (state ?? {}) as { local?: boolean; depth?: number; direction?: string };
 		const wasLocal = this.local;
 		this.local = s.local === true;
-		this.depth = Math.min(3, Math.max(1, Number(s.depth) || 1));
+		this.localDepth = Math.min(3, Math.max(1, Number(s.depth) || 1));
 		if (s.direction && s.direction in DIRECTIONS) this.direction = s.direction as Direction;
 		await super.setState(state, result);
 		for (const sync of this.syncControls) sync();
@@ -564,7 +564,7 @@ export class LiteratureGraphView extends ItemView {
 		this.theme = {
 			node,
 			outside,
-			outside2: { color: mixColor(outside.color, background.color, GENERATION_2_BLEND), alpha: outside.alpha },
+			outside2: { color: mixColor(outside.color, background.color, DEPTH_2_BLEND), alpha: outside.alpha },
 			focused: parseCssColor(v('--graph-node-focused'), '#7f6df2'),
 			incoming: parseCssColor(s.graphIncomingColor.trim() || v('--color-orange'), '#e0913a'),
 			line: parseCssColor(v('--graph-line'), '#555555'),
@@ -582,7 +582,7 @@ export class LiteratureGraphView extends ItemView {
 		this.statusEl?.setText(message);
 	}
 
-	/** Builds the graph, generation by generation, and shows each stage. */
+	/** Builds the graph, depth by depth, and shows each stage. */
 	async loadData(): Promise<void> {
 		const run = ++this.loading;
 		await buildGraph(this.app, this.index, this.openAlex, this.settings(), this.options, {
@@ -625,7 +625,7 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
-	 * The works at most `depth` citations away from the center, following
+	 * The works at most `localDepth` citations away from the center, following
 	 * citations in the chosen direction: the works it cites (and those they
 	 * cite...), the works citing it (and those citing them...), or both. A center that is not a literature note (a draft that cites
 	 * works, for example) is added with the works its citation links cite.
@@ -639,7 +639,7 @@ export class LiteratureGraphView extends ItemView {
 			if (!(file instanceof TFile)) return { nodes: [], edges: [], leftOut: 0 };
 			nodes.set(center, {
 				id: center,
-				generation: 0,
+				depth: 0,
 				file,
 				doi: null,
 				openAlexId: null,
@@ -654,7 +654,7 @@ export class LiteratureGraphView extends ItemView {
 				if (!nodes.has(target) && work.kind === 'doi') {
 					nodes.set(target, {
 						id: target,
-						generation: 1,
+						depth: 1,
 						file: null,
 						doi: work.doi,
 						openAlexId: null,
@@ -675,7 +675,7 @@ export class LiteratureGraphView extends ItemView {
 		}
 		const kept = new Set([center]);
 		let frontier = [center];
-		for (let d = 0; d < this.depth; d++) {
+		for (let d = 0; d < this.localDepth; d++) {
 			const next: string[] = [];
 			for (const id of frontier) {
 				for (const other of adjacent.get(id) ?? []) {
@@ -765,7 +765,7 @@ export class LiteratureGraphView extends ItemView {
 		this.dragged = null;
 		if (!this.shownFocus) this.focusLevel = 0;
 
-		const outside = (l: SimLink) => l.source.data.generation > 0 || l.target.data.generation > 0;
+		const outside = (l: SimLink) => l.source.data.depth > 0 || l.target.data.depth > 0;
 		this.vaultEdges.setLinks(this.links.filter((l) => !outside(l)));
 		this.outsideEdges.setLinks(this.links.filter(outside));
 		this.updateFocusEdges();
@@ -773,13 +773,13 @@ export class LiteratureGraphView extends ItemView {
 		this.applyColorGroups();
 		if (this.local && this.nodes.length <= MAX_FILTER_LABELS) for (const node of this.nodes) this.ensureLabel(node);
 		// Labels of the vault's works; others get one on hover.
-		for (const node of this.nodes) if (node.data.generation === 0) this.ensureLabel(node);
+		for (const node of this.nodes) if (node.data.depth === 0) this.ensureLabel(node);
 		this.labelMatches();
 
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
-			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, generation: n.data.generation, radius: n.radius })),
+			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius })),
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
 			// From saved places, a short settling (about 2 to 4 s) is enough.
@@ -788,10 +788,10 @@ export class LiteratureGraphView extends ItemView {
 		});
 
 		const counts = [0, 0, 0];
-		for (const n of this.nodes) counts[n.data.generation] = (counts[n.data.generation] ?? 0) + 1;
+		for (const n of this.nodes) counts[n.data.depth] = (counts[n.data.depth] ?? 0) + 1;
 		const parts = [`${counts[0]} works of the vault`];
 		if ((counts[1] ?? 0) > 0) parts.push(`${counts[1]} cited works outside it`);
-		if ((counts[2] ?? 0) > 0) parts.push(`${counts[2]} of generation 2`);
+		if ((counts[2] ?? 0) > 0) parts.push(`${counts[2]} at depth 2`);
 		parts.push(`${this.links.length} citations`);
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
@@ -973,7 +973,7 @@ export class LiteratureGraphView extends ItemView {
 			const work = n.data.openAlexId ? this.openAlex.cachedWork(n.data.openAlexId) : null;
 			return work?.year ?? (n.data.entry?.year ? Number.parseInt(n.data.entry.year, 10) || null : null);
 		};
-		const rank = appearanceOrder(this.nodes.map((n) => ({ generation: n.data.generation, year: year(n), citedBy: n.data.citedBy })));
+		const rank = appearanceOrder(this.nodes.map((n) => ({ depth: n.data.depth, year: year(n), citedBy: n.data.citedBy })));
 		// Each work grows out of its neighbor that appears first, if it appears before it.
 		const anchor = this.nodes.map((n) => {
 			let best: SimNode | null = null;
@@ -991,8 +991,8 @@ export class LiteratureGraphView extends ItemView {
 			sphere,
 			(i) => {
 				const node = this.nodes[i];
-				if (!node || node.data.generation === 0) return i;
-				for (const m of node.neighbors) if (m.data.generation === 0) return m.index;
+				if (!node || node.data.depth === 0) return i;
+				for (const m of node.neighbors) if (m.data.depth === 0) return m.index;
 				return i;
 			},
 		);
@@ -1008,7 +1008,7 @@ export class LiteratureGraphView extends ItemView {
 			anchor,
 			appear: this.nodes.map(() => 1),
 			front: this.nodes.map(() => 1),
-			depthScale: this.nodes.map(() => 1),
+			perspectiveScale: this.nodes.map(() => 1),
 			returnTo: this.idle.level > 0 ? this.idle.returnTo : this.getCamera(),
 			graceUntil: performance.now() + grace,
 		};
@@ -1088,7 +1088,7 @@ export class LiteratureGraphView extends ItemView {
 				: own;
 			shown.set(node, p);
 			idle.front[node.index] = own.front;
-			idle.depthScale[node.index] = own.scale;
+			idle.perspectiveScale[node.index] = own.scale;
 			node.x = x + (p.x - x) * level;
 			node.y = y + (p.y - y) * level;
 		}
@@ -1148,11 +1148,11 @@ export class LiteratureGraphView extends ItemView {
 			const x = saved[node.index * 2] ?? 0;
 			const y = saved[node.index * 2 + 1] ?? 0;
 			const front = idle.front[node.index] ?? 1;
-			const depthScale = idle.depthScale[node.index] ?? 1;
+			const perspectiveScale = idle.perspectiveScale[node.index] ?? 1;
 			const appear = idle.appear[node.index] ?? 1;
 			const factor = 1 + ((BACK_ALPHA + (1 - BACK_ALPHA) * front) * appear - 1) * level;
 			node.sprite.alpha *= factor;
-			node.sprite.scale.set((node.radius / CIRCLE_TEXTURE_RADIUS) * (1 + (depthScale * Math.max(0.05, appear) - 1) * level));
+			node.sprite.scale.set((node.radius / CIRCLE_TEXTURE_RADIUS) * (1 + (perspectiveScale * Math.max(0.05, appear) - 1) * level));
 			if (node.label?.visible) {
 				node.label.alpha *= factor;
 				if (appear < 1) node.label.visible = false;
@@ -1340,7 +1340,7 @@ export class LiteratureGraphView extends ItemView {
 				cls: 'literature-graph-suggestions-empty',
 				text: this.suggestionsMissing
 					? 'Every work outside your vault in this graph is on OpenAlex.'
-					: 'No works outside your vault in this graph. Show generation 1 or 2 in the graph settings.',
+					: 'No works outside your vault in this graph. Show depth 1 or 2 in the graph settings.',
 			});
 			return;
 		}
@@ -1454,17 +1454,17 @@ export class LiteratureGraphView extends ItemView {
 			}),
 		);
 		new Setting(body)
-			.setName('Depth')
+			.setName('Local depth')
 			.setDesc('Local graph: how many citations away from the active note.')
 			.setClass('literature-graph-local-only')
 			.addSlider((slider) => {
-				slider.setLimits(1, 3, 1).setValue(this.depth).onChange((value) => {
-					this.depth = value;
+				slider.setLimits(1, 3, 1).setValue(this.localDepth).onChange((value) => {
+					this.localDepth = value;
 					this.showCurrent();
 					void this.app.workspace.requestSaveLayout();
 				});
 				this.syncControls.push(() => {
-					slider.setValue(this.depth);
+					slider.setValue(this.localDepth);
 				});
 			});
 		new Setting(body)
@@ -1500,20 +1500,20 @@ export class LiteratureGraphView extends ItemView {
 					}),
 			);
 		new Setting(body)
-			.setName('Generations')
+			.setName('Depth')
 			.setDesc('Works outside the vault cited by it (1), and by those (2).')
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOptions({ '0': '0', '1': '1', '2': '2' })
-					.setValue(String(this.options.generations))
+					.setValue(String(this.options.depth))
 					.onChange((value) => {
-						this.options.generations = Number(value);
+						this.options.depth = Number(value);
 						reloadSoon();
 					}),
 			);
 		new Setting(body)
 			.setName('Works without a DOI')
-			.setDesc('Works of the reference lists that have no DOI, known only from your notes (generation 1).')
+			.setDesc('Works of the reference lists that have no DOI, known only from your notes (depth 1).')
 			.addToggle((toggle) =>
 				toggle.setValue(this.options.localWorks !== false).onChange((value) => {
 					this.options.localWorks = value;
@@ -1873,9 +1873,9 @@ export class LiteratureGraphView extends ItemView {
 			const base =
 				(node === focus && level > 0.5) || (this.local && node.data.id === this.center)
 					? theme.focused
-					: node.data.generation === 0
+					: node.data.depth === 0
 						? (node.groupColor ?? theme.node)
-						: node.data.generation === 1
+						: node.data.depth === 1
 							? theme.outside
 							: theme.outside2;
 			const sprite = node.sprite;
@@ -1916,14 +1916,14 @@ export class LiteratureGraphView extends ItemView {
 					: 0
 				: this.local
 					? 1
-					: node.data.generation === 0
+					: node.data.depth === 0
 						? fade
 						: 0;
 			let alpha = normal;
-			let tier = node.data.generation === 0 ? 1 : 0;
+			let tier = node.data.depth === 0 ? 1 : 0;
 			if (focus) {
 				const near = node === focus || focus.neighbors.has(node);
-				alpha = lerp(normal, near ? 1 : node.data.generation === 0 ? 0.1 * fade : 0);
+				alpha = lerp(normal, near ? 1 : node.data.depth === 0 ? 0.1 * fade : 0);
 				if (node === focus) tier = 4;
 				else if (near) tier += 2;
 			}
@@ -1969,7 +1969,7 @@ export class LiteratureGraphView extends ItemView {
 			this.ensureLabel(node);
 			let shown = 0;
 			for (const n of node.neighbors) {
-				if (n.data.generation === 0 || shown++ < MAX_NEIGHBOR_LABELS) this.ensureLabel(n);
+				if (n.data.depth === 0 || shown++ < MAX_NEIGHBOR_LABELS) this.ensureLabel(n);
 			}
 			this.updateFocusEdges();
 		}

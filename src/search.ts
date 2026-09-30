@@ -24,7 +24,7 @@ export function searchWorks(query: string, nodes: GraphNode[], limit = 30): Grap
 	found.sort(
 		(a, b) =>
 			Number(b.label.startsWith(start)) - Number(a.label.startsWith(start)) ||
-			Number(a.node.generation !== 0) - Number(b.node.generation !== 0) ||
+			Number(a.node.depth !== 0) - Number(b.node.depth !== 0) ||
 			b.node.citedBy - a.node.citedBy ||
 			a.node.label.localeCompare(b.node.label),
 	);

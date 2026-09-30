@@ -27,8 +27,8 @@ export interface LiteratureGraphSettings {
 	openAlexEmail: string;
 	/** Name of the secret (Obsidian's secret storage) that holds an OpenAlex API key. */
 	openAlexKeySecret: string;
-	/** Generations shown by default in the literature graph: 0, 1 or 2. */
-	graphGenerations: number;
+	/** Depth shown by default in the literature graph: 0, 1 or 2. */
+	graphDepth: number;
 	/** A work outside the vault is shown if at least this many works of the graph cite it. */
 	graphMinCitations: number;
 	/** Most nodes in the literature graph; 0: no limit. */
@@ -79,7 +79,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	openAlexEnabled: true,
 	openAlexEmail: '',
 	openAlexKeySecret: '',
-	graphGenerations: 0,
+	graphDepth: 0,
 	graphMinCitations: 1,
 	graphMaxNodes: 3000,
 	graphRepel: 90,
@@ -185,9 +185,9 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'dropdown', key: 'graphLayout', options: { ...LAYOUT_STYLES } },
 					},
 					{
-						name: 'Generations',
+						name: 'Depth',
 						desc: '0: the works of the literature folder. 1: also the works outside the vault that they cite (from OpenAlex). 2: also the works those cite. Can be changed in the graph for the time it stays open.',
-						control: { type: 'dropdown', key: 'graphGenerations', options: { '0': '0', '1': '1', '2': '2' } },
+						control: { type: 'dropdown', key: 'graphDepth', options: { '0': '0', '1': '1', '2': '2' } },
 					},
 					{
 						name: 'Minimum citations for works outside the vault',
@@ -245,7 +245,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Color of works outside the vault',
-						desc: 'Any CSS color. Empty: the color of the notes blended with the background, so the works you have stand out; works of generation 2 are blended further.',
+						desc: 'Any CSS color. Empty: the color of the notes blended with the background, so the works you have stand out; works at depth 2 are blended further.',
 						control: { type: 'text', key: 'graphOutsideColor', placeholder: 'Theme color' },
 					},
 					{

@@ -25,7 +25,7 @@ import {
 import { createAtomSimulation, setAtomSimulationForces } from './atomLayout';
 
 export interface LayoutNode extends SimulationNodeDatum {
-	generation: number;
+	depth: number;
 	radius: number;
 	/** Number of links of the node (set by `createSimulation`). */
 	degree?: number;
@@ -60,7 +60,7 @@ export type LayoutMessage =
 			type: 'start';
 			/** Number of this graph, sent back with its positions. */
 			graph: number;
-			nodes: { x?: number; y?: number; vx?: number; vy?: number; generation: number; radius: number }[];
+			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number }[];
 			/** Indices into `nodes`. */
 			links: { source: number; target: number; inVault: boolean }[];
 			forces: Forces;

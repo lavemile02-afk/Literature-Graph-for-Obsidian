@@ -9,10 +9,10 @@ import { LayoutLoop, LayoutMessage, LayoutUpdate } from '../src/layout';
  * three more (free works).
  */
 function graph() {
-	const nodes: { generation: number; radius: number }[] = [
-		{ generation: 0, radius: 8 },
-		{ generation: 0, radius: 6 },
-		{ generation: 0, radius: 5 },
+	const nodes: { depth: number; radius: number }[] = [
+		{ depth: 0, radius: 8 },
+		{ depth: 0, radius: 6 },
+		{ depth: 0, radius: 5 },
 	];
 	const links: { source: number; target: number; inVault: boolean }[] = [
 		{ source: 0, target: 1, inVault: true },
@@ -21,7 +21,7 @@ function graph() {
 	];
 	const own = (citer: number, count: number) => {
 		for (let k = 0; k < count; k++) {
-			nodes.push({ generation: 1, radius: 2 + (k % 3) });
+			nodes.push({ depth: 1, radius: 2 + (k % 3) });
 			links.push({ source: citer, target: nodes.length - 1, inVault: false });
 		}
 	};
@@ -29,7 +29,7 @@ function graph() {
 	own(1, 25);
 	own(2, 10);
 	for (let k = 0; k < 3; k++) {
-		nodes.push({ generation: 1, radius: 3 });
+		nodes.push({ depth: 1, radius: 3 });
 		links.push({ source: 0, target: nodes.length - 1, inVault: false });
 		links.push({ source: 1, target: nodes.length - 1, inVault: false });
 	}

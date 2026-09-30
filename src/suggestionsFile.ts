@@ -62,7 +62,7 @@ function record(s: Suggestion, rank: number, openAlex: OpenAlexClient): Record<s
 }
 
 /**
- * Builds the graph of the vault's works and the works they cite (generation
+ * Builds the graph of the vault's works and the works they cite (depth
  * 1, without node limit), ranks the works outside the vault, and writes the
  * most relevant to `path` (a path in the vault). Returns how many were written.
  */
@@ -79,7 +79,7 @@ export async function writeSuggestionsFile(
 		index,
 		openAlex,
 		settings,
-		{ generations: 1, minCitations: 1, maxNodes: Infinity, localWorks: true },
+		{ depth: 1, minCitations: 1, maxNodes: Infinity, localWorks: true },
 		{ onStage: () => {}, onStatus },
 	);
 	const ranked = rankSuggestions(graph, cachedInfo(openAlex));
@@ -89,7 +89,7 @@ export async function writeSuggestionsFile(
 		generated_at: new Date().toISOString(),
 		generator: 'Literature Graph (Obsidian plugin), command "Export reading suggestions"',
 		literature_folder: settings.literatureFolder,
-		vault_works: graph.nodes.filter((n) => n.generation === 0).length,
+		vault_works: graph.nodes.filter((n) => n.depth === 0).length,
 		works_ranked: ranked.length,
 		works_written: Math.min(ranked.length, MAX_SUGGESTIONS_WRITTEN),
 		openalex_limited: openAlex.isRateLimited,

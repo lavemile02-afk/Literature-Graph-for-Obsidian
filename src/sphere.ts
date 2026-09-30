@@ -108,18 +108,18 @@ export function projectOnSphere(x: number, y: number, sphere: Sphere, angle: num
 
 /**
  * The order in which the works appear one by one: the works of the vault
- * first (most cited first), then the works outside it, generation by
- * generation, oldest first (the literature building up). Returns each work's
+ * first (most cited first), then the works outside it, depth by
+ * depth, oldest first (the literature building up). Returns each work's
  * rank, by index.
  */
-export function appearanceOrder(works: { generation: number; year: number | null; citedBy: number }[]): number[] {
+export function appearanceOrder(works: { depth: number; year: number | null; citedBy: number }[]): number[] {
 	const indices = works.map((_, i) => i);
 	indices.sort((a, b) => {
 		const wa = works[a];
 		const wb = works[b];
 		if (!wa || !wb) return 0;
-		if (wa.generation !== wb.generation) return wa.generation - wb.generation;
-		if (wa.generation === 0) return wb.citedBy - wa.citedBy;
+		if (wa.depth !== wb.depth) return wa.depth - wb.depth;
+		if (wa.depth === 0) return wb.citedBy - wa.citedBy;
 		return (wa.year ?? Infinity) - (wb.year ?? Infinity) || wb.citedBy - wa.citedBy;
 	});
 	const rank = new Array<number>(works.length).fill(0);
