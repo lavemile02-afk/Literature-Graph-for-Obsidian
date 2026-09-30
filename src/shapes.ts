@@ -8,9 +8,9 @@
  *   depth, like the rings of a tree;
  * - "circle": the works of the vault on a circle, by year, their citations
  *   as chords, and the other works around;
- * - "topics": each work drawn to its place in the plane of meaning of its
- *   topics (see `topics.ts`), so works on related topics make clouds, and
- *   the further apart their topics, the further apart the clouds.
+ * - "meaning": each work drawn to its place in the plane of meaning (see
+ *   `meaning.ts`), so works on related subjects make clouds, and the further
+ *   apart their subjects, the further apart the clouds.
  *
  * Like `layout.ts`, nothing here knows about Obsidian or PixiJS: it runs in
  * the layout's web worker.
@@ -329,12 +329,12 @@ export function createCircleSimulation(nodes: LayoutNode[], links: LayoutLink[],
 		.stop();
 }
 
-// ----- Topics -----
+// ----- Meaning -----
 
-export function createTopicsSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
+export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
 	countDegrees(nodes, links);
 	const placed = (n: LayoutNode) => Array.isArray(n.anchor);
-	// Citations between placed works barely pull (the topics place them); a
+	// Citations between placed works barely pull (their meaning places them); a
 	// work without topics follows the works it is linked to.
 	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
 	return forceSimulation<LayoutNode, LayoutLink>(nodes)

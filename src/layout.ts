@@ -28,7 +28,7 @@ import {
 	createCircleSimulation,
 	createIslandsSimulation,
 	createLayersSimulation,
-	createTopicsSimulation,
+	createMeaningSimulation,
 } from './shapes';
 
 export interface LayoutNode extends SimulationNodeDatum {
@@ -38,7 +38,7 @@ export interface LayoutNode extends SimulationNodeDatum {
 	degree?: number;
 	/** Year of publication, if known (the chronological and circle layouts). */
 	year?: number | null;
-	/** Place given by the work's topics (the topics layout), or null. */
+	/** Place given by the work's meaning (the Meaning layout), or null. */
 	anchor?: [number, number] | null;
 }
 
@@ -60,7 +60,7 @@ export interface Forces {
  * circle of the works it cites, see `atoms.ts`), and the shapes of
  * `shapes.ts`: "chronological", "islands", "layers" and "circle".
  */
-export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'topics';
+export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'meaning';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	default: 'Default graph',
 	atom: 'Atom graph',
@@ -68,7 +68,7 @@ export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	islands: 'Islands',
 	layers: 'Layers',
 	circle: 'Circle',
-	topics: 'Topics',
+	meaning: 'Meaning',
 };
 
 export function isLayoutStyle(value: unknown): value is LayoutStyle {
@@ -88,8 +88,8 @@ function createStyleSimulation(style: LayoutStyle, nodes: LayoutNode[], links: L
 			return createLayersSimulation(nodes, links, forces);
 		case 'circle':
 			return createCircleSimulation(nodes, links, forces);
-		case 'topics':
-			return createTopicsSimulation(nodes, links, forces);
+		case 'meaning':
+			return createMeaningSimulation(nodes, links, forces);
 		default:
 			return createSimulation(nodes, links, forces);
 	}

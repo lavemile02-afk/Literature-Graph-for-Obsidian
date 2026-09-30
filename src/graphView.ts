@@ -30,7 +30,8 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
-import { colorsFromSharedKeywords, mainTopics, meaningPlaces, topicColors, topicLegendColors, topicName, WorkTopics } from './topics';
+import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
+import { lsa, planeOf, tfidf, tokenize } from './meaning';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
@@ -164,6 +165,10 @@ const TOPIC_OUTSIDE_BLEND = 0.35;
 /** A year of publication that makes sense (the layouts ignore the others), or null. */
 const plausibleYear = (year: number | null | undefined): number | null =>
 	year !== null && year !== undefined && year > 1000 && year < 3000 ? year : null;
+/** Characters of a note read for its vector of meaning (the longest books are cut). */
+const MEANING_TEXT_LIMIT = 200_000;
+/** Dimensions of the vectors of meaning. */
+const MEANING_DIMENSIONS = 64;
 /** Topics listed in the panel's legend when coloring by topic. */
 const TOPIC_LEGEND = 12;
 /** Share of the view the sphere fills. */
@@ -285,7 +290,10 @@ export class LiteratureGraphView extends ItemView {
 	private topicLegend: { name: string; works: number; color: number }[] = [];
 	private topicLegendEl: HTMLElement | null = null;
 	private groupsEl: HTMLElement | null = null;
-	private topicsRequested: LiteratureGraph | null = null;
+	/** The places of the works in the plane of meaning (by work id), for the graph they were computed for. */
+	private meaningById = new Map<string, [number, number]>();
+	private meaningFor: LiteratureGraph | null = null;
+	private meaningRun = 0;
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
 	/** The layout, run in a web worker. */
@@ -547,9 +555,9 @@ export class LiteratureGraphView extends ItemView {
 		// Topics edited in a note: colors again, and the topics layout places its works again.
 		const topicsEdited = debounce(
 			() => {
-				if (!this.byTopic() && this.layoutStyle !== 'topics') return;
+				if (!this.byMeaning() && this.layoutStyle !== 'meaning') return;
+				this.meaningFor = null;
 				this.applyColorGroups();
-				if (this.layoutStyle === 'topics') this.showCurrent();
 			},
 			1000,
 			true,
@@ -870,7 +878,7 @@ export class LiteratureGraphView extends ItemView {
 		// Years first: the chronological and circle layouts place the works by them.
 		this.readYears();
 		this.buildTimeAxis();
-		const anchors = this.layoutStyle === 'topics' ? this.topicAnchors() : null;
+		const anchors = this.layoutStyle === 'meaning' ? this.meaningAnchors() : null;
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
@@ -903,9 +911,9 @@ export class LiteratureGraphView extends ItemView {
 		this.applyColorGroups();
 	}
 
-	/** Coloring by topic (see `topics.ts`) rather than by color groups. */
-	private byTopic(): boolean {
-		return this.settings().graphColorBy === 'topic';
+	/** Coloring by meaning (see `meaning.ts`) rather than by color groups. */
+	private byMeaning(): boolean {
+		return this.settings().graphColorBy === 'meaning';
 	}
 
 	/** Lightness of the topic colors: light on a dark theme, deeper on a light one. */
@@ -925,68 +933,141 @@ export class LiteratureGraphView extends ItemView {
 		return node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined;
 	}
 
-	/** Places of the works for the topics layout: their place in the plane of meaning, scaled to the graph. */
-	private topicAnchors(): ([number, number] | null)[] {
-		const places = meaningPlaces(this.nodes.map((n) => this.workTopics(n)), (id) => this.openAlex.topicInfo(id));
+	/** Words of the notes of the vault, kept while a note does not change (reading a long note costs). */
+	private readonly noteWords = new Map<string, { mtime: number; words: string[] }>();
+
+	/**
+	 * The words of a work, for its vector of meaning: its whole note (with its
+	 * title and keywords, without its other properties); or what OpenAlex says
+	 * of it: title, topics, keywords and abstract; or its reference.
+	 */
+	private async workWords(node: SimNode): Promise<string[]> {
+		const file = node.data.file;
+		if (file) {
+			const cached = this.noteWords.get(file.path);
+			if (cached && cached.mtime === file.stat.mtime) return cached.words;
+			const text = (await this.app.vault.cachedRead(file)).slice(0, MEANING_TEXT_LIMIT);
+			const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '');
+			const keywords = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
+			const words = tokenize([node.data.title || file.basename, ...keywords, body].join('\n'));
+			this.noteWords.set(file.path, { mtime: file.stat.mtime, words });
+			return words;
+		}
+		const id = node.data.openAlexId;
+		if (id) {
+			const work = this.openAlex.cachedWork(id);
+			const topics = (work?.topics ?? []).map(([topic]) => this.openAlex.topicInfo(topic)?.name ?? '');
+			const keywords = (work?.keywords ?? []).map(([keyword]) => keyword);
+			return tokenize([work?.title ?? node.data.title, ...topics, ...keywords, this.openAlex.cachedAbstract(id) ?? ''].join('\n'));
+		}
+		return tokenize(`${node.data.title} ${node.data.entry?.text ?? ''}`);
+	}
+
+	/**
+	 * Computes the vectors of meaning of the works shown (see `meaning.ts`)
+	 * and their places in the plane of meaning, once per graph: fetches the
+	 * keywords and abstracts OpenAlex has for the works outside the vault
+	 * (once), reads the notes, then colors the works and places them (in the
+	 * Meaning layout).
+	 */
+	private async computeMeaning(): Promise<void> {
+		const graph = this.shownGraph;
+		if (!graph || this.meaningFor === graph) return;
+		this.meaningFor = graph;
+		const run = ++this.meaningRun;
+		const nodes = this.nodes.slice();
+		const ids = nodes.flatMap((n) => (n.data.openAlexId ? [n.data.openAlexId] : []));
+		try {
+			await this.openAlex.loadExtras(
+				ids,
+				(done, total) => this.setStatus(`${this.summary} · Loading the keywords and abstracts of the works: ${done} of ${total}…`),
+				{ abstracts: true },
+			);
+		} catch (error) {
+			console.error('Literature Graph: OpenAlex request failed', error);
+		}
+		if (run !== this.meaningRun) return;
+		this.setStatus(`${this.summary} · Computing the meaning of the works…`);
+		const words: string[][] = [];
+		for (const node of nodes) words.push(await this.workWords(node));
+		const { vectors, terms } = tfidf(words);
+		// A message, not a timer: timers are slowed down to once a second or
+		// less while Obsidian's window is in the background.
+		const pause = () =>
+			new Promise<void>((resolve) => {
+				const channel = new MessageChannel();
+				channel.port1.onmessage = () => {
+					channel.port1.close();
+					resolve();
+				};
+				channel.port2.postMessage(null);
+			});
+		const meaning = await lsa(vectors, terms, MEANING_DIMENSIONS, pause);
+		if (run !== this.meaningRun) return;
+		const places = planeOf(meaning);
+		this.meaningById = new Map(nodes.flatMap((n, i) => {
+			const place = places[i];
+			return place ? [[n.data.id, place] as [string, [number, number]]] : [];
+		}));
+		this.setStatus(this.summary);
+		this.applyTopicColors();
+		// The Meaning layout places the works by their meaning, now known.
+		if (this.layoutStyle === 'meaning') this.showCurrent();
+	}
+
+	/** Places of the works for the Meaning layout: their place in the plane of meaning, scaled to the graph. */
+	private meaningAnchors(): ([number, number] | null)[] {
 		const scale = Math.max(300, 45 * Math.sqrt(this.nodes.length));
-		return places.map((p) => (p ? [p[0] * scale, p[1] * scale] : null));
+		return this.nodes.map((n) => {
+			const place = this.meaningById.get(n.data.id);
+			return place ? [place[0] * scale, place[1] * scale] : null;
+		});
 	}
 
 	private applyTopicColors(): void {
-		// Topics serve the colors and the topics layout.
-		if (!this.byTopic() && this.layoutStyle !== 'topics') {
+		// Meaning serves the colors and the Meaning layout.
+		if (!this.byMeaning() && this.layoutStyle !== 'meaning') {
 			for (const node of this.nodes) node.topicColor = null;
 			this.topicLegend = [];
 			this.renderTopicLegend();
 			return;
 		}
-		const topicsOf = (node: SimNode) => this.workTopics(node);
-		const ids = this.nodes.flatMap((n) => (n.data.openAlexId && topicsOf(n) === undefined ? [n.data.openAlexId] : []));
-		if (ids.length > 0 && this.topicsRequested !== this.shownGraph) {
-			this.topicsRequested = this.shownGraph;
-			void this.openAlex
-				.loadExtras(ids, (done, total) => this.setStatus(`${this.summary} · Loading the topics of the works: ${done} of ${total}…`))
-				.catch((error) => console.error('Literature Graph: OpenAlex request failed', error))
-				.finally(() => {
-					this.setStatus(this.summary);
-					this.applyTopicColors();
-					// The topics layout places the works by their topics, now known.
-					if (this.layoutStyle === 'topics') this.showCurrent();
-				});
-		}
-		if (!this.byTopic()) {
+		// (After the graph is set as shown.)
+		void Promise.resolve().then(() => this.computeMeaning());
+		if (!this.byMeaning()) {
 			for (const node of this.nodes) node.topicColor = null;
 			this.topicLegend = [];
 			this.renderTopicLegend();
 			return;
 		}
-		// Colors relative to the diversity of the works of this graph (see `topics.ts`).
-		const info = (id: string) => this.openAlex.topicInfo(id);
+		// Colors relative to the diversity of the works of this graph: the hue is the angle in the plane of meaning.
 		const s = this.settings();
 		const lightness = Math.min(0.9, Math.max(0.15, this.topicLightness() + (Number(s.graphTopicBrightness) || 0) / 100));
 		const intensity = Math.max(0.1, (Number(s.graphTopicIntensity) || 100) / 100);
-		const topics = this.nodes.map(topicsOf);
-		const colors = topicColors(topics, info, lightness, intensity);
 		const colored = new Map<SimNode, number>();
-		this.nodes.forEach((node, i) => {
-			const color = colors[i] ?? null;
-			node.topicColor = color;
-			if (color !== null && node.data.file) colored.set(node, color);
-		});
-		// Works of the vault without topics: from the notes sharing their links.
+		for (const node of this.nodes) {
+			const place = this.meaningById.get(node.data.id);
+			node.topicColor = place ? colorOfPlace(place, lightness, intensity) : null;
+			if (node.topicColor !== null && node.data.file) colored.set(node, node.topicColor);
+		}
+		// Works of the vault without any words: from the notes sharing their links.
 		const links = this.app.metadataCache.resolvedLinks;
 		const keywords = new Map<SimNode, Set<string>>();
 		for (const node of this.nodes) {
 			if (node.data.file) keywords.set(node, new Set(Object.keys(links[node.data.file.path] ?? {})));
 		}
 		for (const [node, color] of colorsFromSharedKeywords(keywords, colored)) node.topicColor = color;
-		const main = mainTopics(topics, TOPIC_LEGEND);
-		const legend = topicLegendColors(main.map((t) => t.id), topics, info, lightness, intensity);
-		this.topicLegend = main.map(({ id, works }) => ({
-			name: topicName(id, info),
-			works,
-			color: legend.get(id) ?? 0x888888,
-		}));
+		// Legend: OpenAlex's main topics of the graph, each in the color of the middle of its works.
+		const info = (id: string) => this.openAlex.topicInfo(id);
+		const topics = this.nodes.map((n) => this.workTopics(n));
+		this.topicLegend = mainTopics(topics, TOPIC_LEGEND).map(({ id, works }) => {
+			const places = this.nodes.flatMap((n, i) => {
+				const place = topics[i]?.[0]?.[0] === id ? this.meaningById.get(n.data.id) : undefined;
+				return place ? [place] : [];
+			});
+			const middle: [number, number] = [places.reduce((a, p) => a + p[0], 0) / (places.length || 1), places.reduce((a, p) => a + p[1], 0) / (places.length || 1)];
+			return { name: topicName(id, info), works, color: places.length > 0 ? colorOfPlace(middle, lightness, intensity) : 0x888888 };
+		});
 		this.renderTopicLegend();
 		this.invalidate();
 	}
@@ -996,14 +1077,14 @@ export class LiteratureGraphView extends ItemView {
 		const el = this.topicLegendEl;
 		if (!el) return;
 		el.empty();
-		el.toggle(this.byTopic());
+		el.toggle(this.byMeaning());
 		for (const topic of this.topicLegend) {
 			const row = el.createDiv({ cls: 'literature-graph-topic' });
 			row.createSpan({ cls: 'literature-graph-topic-swatch' }).setCssProps({ '--literature-graph-topic': hexColor(topic.color) });
 			row.createSpan({ cls: 'literature-graph-topic-name', text: topic.name });
 			row.createSpan({ cls: 'literature-graph-topic-count', text: String(topic.works) });
 		}
-		this.groupsEl?.toggle(!this.byTopic());
+		this.groupsEl?.toggle(!this.byMeaning());
 	}
 
 	/** Gives each note of the vault the color of its color group (settings). */
@@ -1951,7 +2032,7 @@ export class LiteratureGraphView extends ItemView {
 	private buildDisplay(body: HTMLElement, close: () => void): void {
 		new Setting(body)
 			.setName('Layout')
-			.setDesc('For as long as the view is open; the default is in the plugin settings. Topics: works on related topics gather in clouds.')
+			.setDesc('For as long as the view is open; the default is in the plugin settings. Meaning: works on related subjects gather in clouds.')
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOptions({ ...LAYOUT_STYLES })
@@ -1997,14 +2078,14 @@ export class LiteratureGraphView extends ItemView {
 	private buildColors(body: HTMLElement): void {
 		new Setting(body)
 			.setName('Color by')
-			.setDesc('Color groups, or the topics of the works on OpenAlex: the more two works differ, compared with all the works of the graph, the further apart their hues.')
+			.setDesc('Color groups, or the meaning of the works (their words): the more two works differ, compared with all the works of the graph, the further apart their hues.')
 			.addDropdown((dropdown) => {
 				dropdown
-					.addOptions({ groups: 'Color groups', topic: 'Topic' })
-					.setValue(this.byTopic() ? 'topic' : 'groups')
+					.addOptions({ groups: 'Color groups', meaning: 'Meaning' })
+					.setValue(this.byMeaning() ? 'meaning' : 'groups')
 					.onChange((value) => void this.saveSettings({ graphColorBy: value }));
 				this.syncControls.push(() => {
-					dropdown.setValue(this.byTopic() ? 'topic' : 'groups');
+					dropdown.setValue(this.byMeaning() ? 'meaning' : 'groups');
 				});
 			});
 		this.topicLegendEl = body.createDiv({ cls: 'literature-graph-topics' });

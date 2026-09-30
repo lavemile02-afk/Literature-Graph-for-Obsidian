@@ -41,7 +41,7 @@ export interface LiteratureGraphSettings {
 	graphCenter: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
-	/** How the works are colored: "groups" (color groups) or "topic" (OpenAlex topics, see `topics.ts`). */
+	/** How the works are colored: "groups" (color groups) or "meaning" (their words, see `meaning.ts`). */
 	graphColorBy: string;
 	/** Size of the points of the graph, times their usual size (0.25 to 3). */
 	graphPointScale: number;
@@ -269,17 +269,17 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 				items: [
 					{
 						name: 'Color by',
-						desc: 'Color groups, or topic: each work takes a color from its topics on OpenAlex, all around the color wheel; the more two works differ, compared with all the works of the graph, the further apart their hues. Works OpenAlex does not know take the colors of the notes sharing their links. Also chosen in the graph\'s settings panel.',
-						control: { type: 'dropdown', key: 'graphColorBy', options: { groups: 'Color groups', topic: 'Topic' } },
+						desc: 'Color groups, or topic: each work takes a color from its meaning (the words of its note, or its title, topics, keywords and abstract on OpenAlex), all around the color wheel; the more two works differ, compared with all the works of the graph, the further apart their hues. Also chosen in the graph\'s settings panel.',
+						control: { type: 'dropdown', key: 'graphColorBy', options: { groups: 'Color groups', meaning: 'Meaning' } },
 					},
 					{
-						name: 'Topic brightness',
-						desc: 'Coloring by topic: darker (left) or lighter (right) than the brightness chosen for your theme.',
+						name: 'Meaning brightness',
+						desc: 'Coloring by meaning: darker (left) or lighter (right) than the brightness chosen for your theme.',
 						control: { type: 'slider', key: 'graphTopicBrightness', min: -20, max: 20, step: 1 },
 					},
 					{
-						name: 'Topic intensity',
-						desc: 'Coloring by topic: how vivid the colors are, in percent (lower for softer colors).',
+						name: 'Meaning intensity',
+						desc: 'Coloring by meaning: how vivid the colors are, in percent (lower for softer colors).',
 						control: { type: 'slider', key: 'graphTopicIntensity', min: 20, max: 130, step: 5 },
 					},
 					{
@@ -293,7 +293,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Color of works outside the vault',
-						desc: 'Coloring by color groups: any CSS color. Empty: the color of the notes blended with the background, so the works you have stand out; works at depth 2 are blended further. (By topic, works outside the vault keep their topic\'s color, darker.)',
+						desc: 'Coloring by color groups: any CSS color. Empty: the color of the notes blended with the background, so the works you have stand out; works at depth 2 are blended further. (By meaning, works outside the vault keep their color, darker.)',
 						control: { type: 'text', key: 'graphOutsideColor', placeholder: 'Theme color' },
 					},
 					{

@@ -1,17 +1,11 @@
 /**
- * Colors by topic. OpenAlex files every work under up to three topics, each
- * with a score, in a hierarchy: domain → field → subfield → topic (for
- * example Physical Sciences → Environmental Science → Ecology → "Peatlands and
- * Wetlands Ecology").
+ * Colors of the works and OpenAlex's topics.
  *
- * Each work becomes a vector of meaning: its topics and their subfields,
- * fields and domains, weighted by score. The two directions in which the
- * works of the graph differ most (principal component analysis), each scaled
- * to its own spread, make a plane; a work's hue is its angle in that plane,
- * all around the color wheel. The colors are thus relative to the diversity
- * of the graph: works on neighboring topics get neighboring hues, and a few
- * works from another domain altogether take the opposite hues, while the
- * nuances within one domain get the whole wheel when it is alone.
+ * A work's color comes from its place in the plane of meaning (see
+ * `meaning.ts`): the hue is the angle of the place, all around the color
+ * wheel, so the colors are relative to the diversity of the works shown.
+ * OpenAlex files every work under up to three topics, in a hierarchy
+ * (domain → field → subfield → topic); the topics serve the legend.
  *
  * No Obsidian or Pixi here: colors are numbers (0xrrggbb).
  */
@@ -29,131 +23,9 @@ export interface TopicInfo {
 /** The topics of a work: OpenAlex topic id ("T12091") and score (0 to 1). */
 export type WorkTopics = [string, number][];
 
-/** OpenAlex's four domains, by field: 1 Life, 2 Social, 3 Physical, 4 Health Sciences. */
-const DOMAIN_OF_FIELD: Record<number, number> = {
-	11: 1, 13: 1, 24: 1, 28: 1, 30: 1,
-	12: 2, 14: 2, 18: 2, 20: 2, 32: 2, 33: 2,
-	15: 3, 16: 3, 17: 3, 19: 3, 21: 3, 22: 3, 23: 3, 25: 3, 26: 3, 31: 3,
-	27: 4, 29: 4, 34: 4, 35: 4, 36: 4,
-};
-
-/**
- * Weight of each level of the hierarchy in the vector of meaning: two works
- * of different domains differ at every level, two works on neighboring
- * topics only at the last ones.
- */
-const LEVEL_WEIGHTS = { domain: 2, field: 1.5, subfield: 1, topic: 0.7 };
-
 /** The name to show for a topic id. */
 export function topicName(id: string, info: (id: string) => TopicInfo | undefined): string {
 	return info(id)?.name ?? id;
-}
-
-/** The number in an OpenAlex id ("fields/23" → 23), or NaN. */
-function idNumber(id: string): number {
-	const match = /(\d+)$/.exec(id);
-	return match ? Number(match[1]) : NaN;
-}
-
-/** A work's vector of meaning: feature ("T12091", "subfields/2303", "fields/23", "domains/3") → weight, of length 1. */
-export function topicVector(topics: WorkTopics | undefined, info: (id: string) => TopicInfo | undefined): Map<string, number> {
-	const vector = new Map<string, number>();
-	const add = (feature: string, weight: number) => {
-		if (feature) vector.set(feature, (vector.get(feature) ?? 0) + weight);
-	};
-	for (const [id, score] of topics ?? []) {
-		const place = info(id);
-		add(id, LEVEL_WEIGHTS.topic * score);
-		if (!place) continue;
-		add(place.subfield, LEVEL_WEIGHTS.subfield * score);
-		add(place.field, LEVEL_WEIGHTS.field * score);
-		const domain = DOMAIN_OF_FIELD[idNumber(place.field)];
-		if (domain) add(`domains/${domain}`, LEVEL_WEIGHTS.domain * score);
-	}
-	const length = Math.sqrt([...vector.values()].reduce((sum, w) => sum + w * w, 0));
-	if (length > 0) for (const [k, w] of vector) vector.set(k, w / length);
-	return vector;
-}
-
-/**
- * The plane of meaning of a set of vectors: their mean and the two
- * directions in which they differ most (principal components, by power
- * iteration), each with its spread. Deterministic: the sign of each
- * direction is chosen so that the most common feature leans positive.
- */
-export interface MeaningPlane {
-	features: string[];
-	mean: Float64Array;
-	axes: [Float64Array, Float64Array];
-	spreads: [number, number];
-}
-
-export function meaningPlane(vectors: Map<string, number>[]): MeaningPlane | null {
-	const index = new Map<string, number>();
-	for (const v of vectors) for (const k of v.keys()) if (!index.has(k)) index.set(k, index.size);
-	const d = index.size;
-	const n = vectors.length;
-	if (n < 2 || d === 0) return null;
-	// Sparse rows (a work has a dozen features at most); the centering by the
-	// mean m is done in the products: Xc·v = X·v − (m·v), Xcᵀ·u = Xᵀ·u − m·Σu.
-	const rows = vectors.map((v) => [...v].map(([k, w]) => [index.get(k) ?? 0, w] as const));
-	const mean = new Float64Array(d);
-	for (const row of rows) for (const [j, w] of row) mean[j] = (mean[j] ?? 0) + w / n;
-	const dot = (a: Float64Array, b: Float64Array) => {
-		let s = 0;
-		for (let j = 0; j < d; j++) s += (a[j] ?? 0) * (b[j] ?? 0);
-		return s;
-	};
-	/** The centered works projected on an axis. */
-	const scores = (axis: Float64Array) => {
-		const shift = dot(mean, axis);
-		return rows.map((row) => row.reduce((s, [j, w]) => s + w * (axis[j] ?? 0), 0) - shift);
-	};
-	// Most common feature, to fix the signs.
-	let common = 0;
-	for (let j = 0; j < d; j++) if ((mean[j] ?? 0) > (mean[common] ?? 0)) common = j;
-	const axes: Float64Array[] = [];
-	const spreads: number[] = [];
-	for (let c = 0; c < 2; c++) {
-		let axis = Float64Array.from({ length: d }, (_, j) => 1 + ((j * 7919) % 13) / 13);
-		for (let iteration = 0; iteration < 80; iteration++) {
-			const u = scores(axis);
-			const next = new Float64Array(d);
-			let total = 0;
-			rows.forEach((row, i) => {
-				const ui = u[i] ?? 0;
-				total += ui;
-				for (const [j, w] of row) next[j] = (next[j] ?? 0) + w * ui;
-			});
-			for (let j = 0; j < d; j++) next[j] = (next[j] ?? 0) - (mean[j] ?? 0) * total;
-			// Deflation: remove the directions already found.
-			for (const found of axes) {
-				const overlap = dot(next, found);
-				for (let j = 0; j < d; j++) next[j] = (next[j] ?? 0) - overlap * (found[j] ?? 0);
-			}
-			const length = Math.sqrt(dot(next, next));
-			if (length === 0) break;
-			axis = next.map((x) => x / length);
-		}
-		if ((axis[common] ?? 0) < 0) axis = axis.map((x) => -x);
-		axes.push(axis);
-		spreads.push(Math.sqrt(scores(axis).reduce((s, x) => s + x * x, 0) / n));
-	}
-	return { features: [...index.keys()], mean, axes: [axes[0] ?? new Float64Array(d), axes[1] ?? new Float64Array(d)], spreads: [spreads[0] ?? 0, spreads[1] ?? 0] };
-}
-
-/** A vector's place in the plane, each axis in units of its spread. */
-export function placeInPlane(vector: Map<string, number>, plane: MeaningPlane): [number, number] {
-	const coordinate = (c: 0 | 1) => {
-		const axis = plane.axes[c];
-		let s = 0;
-		plane.features.forEach((feature, j) => {
-			s += ((vector.get(feature) ?? 0) - (plane.mean[j] ?? 0)) * (axis[j] ?? 0);
-		});
-		const spread = plane.spreads[c];
-		return spread > 1e-9 ? s / spread : 0;
-	};
-	return [coordinate(0), coordinate(1)];
 }
 
 /** A color from hue (degrees), saturation and lightness (0 to 1). */
@@ -175,33 +47,6 @@ export function colorOfPlace([x, y]: [number, number], lightness: number, intens
 	const hue = (Math.atan2(y, x) * 180) / Math.PI;
 	const saturation = (0.35 + 0.5 * Math.min(1, Math.hypot(x, y) / 1.5)) * intensity;
 	return hslColor(hue, Math.min(1, saturation), lightness);
-}
-
-/**
- * Colors of the works by topic, relative to the works given (the graph):
- * `topics[i]` → color, or null for a work without topics.
- */
-export function topicColors(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6, intensity = 1): (number | null)[] {
-	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
-	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
-	return vectors.map((v) => (v === null ? null : plane ? colorOfPlace(placeInPlane(v, plane), lightness, intensity) : hslColor(210, 0.6 * intensity, lightness)));
-}
-
-/**
- * The place of each work in the plane of meaning of the works given (in
- * units of the spread of each axis), or null for a work without topics: the
- * targets of the "topics" layout.
- */
-export function meaningPlaces(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined): ([number, number] | null)[] {
-	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
-	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
-	return vectors.map((v) => (v && plane ? placeInPlane(v, plane) : null));
-}
-
-/** The color a single topic gets in the same plane (for the legend). */
-export function topicLegendColors(ids: string[], works: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6, intensity = 1): Map<string, number> {
-	const plane = meaningPlane(works.filter((t) => t && t.length > 0).map((t) => topicVector(t, info)));
-	return new Map(ids.map((id) => [id, plane ? colorOfPlace(placeInPlane(topicVector([[id, 1]], info), plane), lightness, intensity) : hslColor(210, 0.6 * intensity, lightness)]));
 }
 
 /** Colors mixed by weight (their average in RGB); null without any weight. */
