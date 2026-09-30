@@ -369,6 +369,8 @@ export class LiteratureGraphView extends ItemView {
 	private lastEdgeScale = 0;
 	private statusEl: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
+	/** The message shown when there is nothing to show. */
+	private emptyEl: HTMLElement | null = null;
 	/** The column of buttons along the right edge, and the display panel. */
 	private toolbarEl: HTMLElement | null = null;
 	private displayEl: HTMLElement | null = null;
@@ -495,6 +497,7 @@ export class LiteratureGraphView extends ItemView {
 		container.empty();
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
+		this.emptyEl = container.createDiv({ cls: 'literature-graph-empty is-hidden' });
 		this.hintEl = container.createDiv({ cls: 'literature-graph-view-hint is-hidden' });
 		this.buildSearch(container);
 		this.buildSuggestions(container);
@@ -631,6 +634,38 @@ export class LiteratureGraphView extends ItemView {
 			node.label.style.fill = this.theme.text.color;
 			node.label.style.fontFamily = this.theme.fontFamily;
 		}
+	}
+
+	/**
+	 * A message in the middle of the view when there is nothing to show, and
+	 * why: no literature notes where the settings look for them, or a local
+	 * graph around a note that no citation links to any work.
+	 */
+	private showEmptyState(vaultWorks: number): void {
+		const el = this.emptyEl;
+		if (!el) return;
+		el.empty();
+		let message: string | null = null;
+		if (!this.local && vaultWorks === 0) {
+			const folder = this.settings().literatureFolder.trim();
+			message = folder
+				? `No literature notes in the folder “${folder}”. Set the folder of your literature notes in the plugin settings (Literature folder).`
+				: 'No literature notes found. Set the folder of your literature notes in the plugin settings (Literature folder).';
+			el.createDiv({ cls: 'literature-graph-empty-text', text: message });
+			const button = el.createEl('button', { text: 'Open settings' });
+			button.addEventListener('click', () => {
+				const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
+				setting?.open();
+				setting?.openTabById('literature-graph');
+			});
+		} else if (this.local && this.nodes.length <= 1) {
+			const name = this.center ? (this.center.split('/').pop() ?? this.center).replace(/\.md$/, '') : null;
+			message = name
+				? `No citations around “${name}” yet: no citation link, reference list or OpenAlex reference connects it to another work.`
+				: 'Open a note to see the works around it.';
+			el.createDiv({ cls: 'literature-graph-empty-text', text: message });
+		}
+		el.toggleClass('is-hidden', message === null);
 	}
 
 	private setStatus(message: string): void {
@@ -856,6 +891,7 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
+		this.showEmptyState(counts[0] ?? 0);
 		this.shownGraph = graph;
 		this.renderSuggestions();
 		this.invalidate();
