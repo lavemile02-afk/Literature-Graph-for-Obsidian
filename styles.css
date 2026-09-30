@@ -436,3 +436,39 @@
 	gap: var(--size-2-1);
 	font-size: var(--font-ui-smaller);
 }
+
+/* Coloring by topic: the main topics of the graph and their colors, in the panel. */
+.literature-graph-topics {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	padding-bottom: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+}
+
+.literature-graph-topic {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+.literature-graph-topic-swatch {
+	flex: none;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background-color: var(--literature-graph-topic);
+}
+
+.literature-graph-topic-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.literature-graph-topic-count {
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}

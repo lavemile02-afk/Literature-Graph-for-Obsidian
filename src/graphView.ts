@@ -27,6 +27,7 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
+import { colorsFromSharedKeywords, GRADIENTS, mainTopics, topicPalette, workColor } from './topics';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -53,6 +54,8 @@ interface SimNode {
 	sprite: Sprite;
 	/** Color of the node's color group, if any. */
 	groupColor: ThemeColor | null;
+	/** Color of its topics (coloring by topic), before it is darkened for works outside the vault. */
+	topicColor: number | null;
 	label: Text | null;
 	radius: number;
 	neighbors: Set<SimNode>;
@@ -80,6 +83,7 @@ interface Theme {
 	incoming: ThemeColor;
 	line: ThemeColor;
 	text: ThemeColor;
+	background: ThemeColor;
 	fontFamily: string;
 }
 
@@ -151,6 +155,10 @@ const NORMAL_SPEED = 5;
 /** Signals running along the citations in the constellation, and their radius on screen (pixels). */
 const SIGNALS = 40;
 const SIGNAL_RADIUS = 3;
+/** Works outside the vault colored by topic: darker than the vault's, but less than usual, to keep their hue. */
+const TOPIC_OUTSIDE_BLEND = 0.35;
+/** Topics listed in the panel's legend when coloring by topic. */
+const TOPIC_LEGEND = 12;
 /** Share of the view the sphere fills. */
 const SPHERE_FILL = 0.8;
 /** Alpha of the works at the back of the sphere. */
@@ -262,6 +270,11 @@ export class LiteratureGraphView extends ItemView {
 	/** Bright signals running along the citations (the constellation animation). */
 	private readonly signalsLayer = new Container();
 	private signalSprites: Sprite[] = [];
+	/** Coloring by topic: the main topics of the graph (legend), and the graph whose topics were fetched. */
+	private topicLegend: { name: string; works: number; color: number }[] = [];
+	private topicLegendEl: HTMLElement | null = null;
+	private groupsEl: HTMLElement | null = null;
+	private topicsRequested: LiteratureGraph | null = null;
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
 	/** The layout, run in a web worker. */
@@ -569,6 +582,7 @@ export class LiteratureGraphView extends ItemView {
 			incoming: parseCssColor(s.graphIncomingColor.trim() || v('--color-orange'), '#e0913a'),
 			line: parseCssColor(v('--graph-line'), '#555555'),
 			text: parseCssColor(v('--graph-text'), '#dddddd'),
+			background,
 			fontFamily: v('--font-interface') || 'sans-serif',
 		};
 		for (const node of this.nodes) {
@@ -722,6 +736,7 @@ export class LiteratureGraphView extends ItemView {
 				y: old?.y,
 				sprite,
 				groupColor: null,
+				topicColor: null,
 				label: null,
 				radius,
 				neighbors: new Set(),
@@ -808,8 +823,90 @@ export class LiteratureGraphView extends ItemView {
 		this.applyColorGroups();
 	}
 
+	/** Coloring by topic (see `topics.ts`) rather than by color groups. */
+	private byTopic(): boolean {
+		return this.settings().graphColorBy === 'topic';
+	}
+
+	/** The colors of the topic gradient chosen in the settings. */
+	private topicStops(): number[] {
+		const s = this.settings();
+		if (s.graphTopicGradient === 'custom') {
+			const custom = s.graphTopicColors.split(',').map((c) => c.trim()).filter(Boolean);
+			if (custom.length >= 2) return custom.map((c) => parseCssColor(c, '#888888').color);
+		}
+		const gradient = GRADIENTS[s.graphTopicGradient] ?? GRADIENTS.spectrum;
+		return (gradient?.stops ?? []).map((c) => parseCssColor(c, '#888888').color);
+	}
+
+	/**
+	 * Gives each work the color of its topics on OpenAlex. Works of the vault
+	 * that OpenAlex does not know take the colors of the notes sharing their
+	 * links (their keywords); works outside the vault without topics keep the
+	 * usual color. Topics missing from the cache are fetched once, then the
+	 * graph is colored again.
+	 */
+	private applyTopicColors(): void {
+		if (!this.byTopic()) {
+			for (const node of this.nodes) node.topicColor = null;
+			this.topicLegend = [];
+			this.renderTopicLegend();
+			return;
+		}
+		const topicsOf = (node: SimNode) => (node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined);
+		const ids = this.nodes.flatMap((n) => (n.data.openAlexId && topicsOf(n) === undefined ? [n.data.openAlexId] : []));
+		if (ids.length > 0 && this.topicsRequested !== this.shownGraph) {
+			this.topicsRequested = this.shownGraph;
+			void this.openAlex
+				.loadTopics(ids, (done, total) => this.setStatus(`${this.summary} · Loading the topics of the works: ${done} of ${total}…`))
+				.catch((error) => console.error('Literature Graph: OpenAlex request failed', error))
+				.finally(() => {
+					this.setStatus(this.summary);
+					this.applyTopicColors();
+				});
+		}
+		const present = this.nodes.flatMap((n) => (topicsOf(n) ?? []).map(([id]) => id));
+		const palette = topicPalette(present, (id) => this.openAlex.topicInfo(id), this.topicStops());
+		const colored = new Map<SimNode, number>();
+		for (const node of this.nodes) {
+			const color = workColor(topicsOf(node), palette);
+			node.topicColor = color;
+			if (color !== null && node.data.file) colored.set(node, color);
+		}
+		// Works of the vault without topics: from the notes sharing their links.
+		const links = this.app.metadataCache.resolvedLinks;
+		const keywords = new Map<SimNode, Set<string>>();
+		for (const node of this.nodes) {
+			if (node.data.file) keywords.set(node, new Set(Object.keys(links[node.data.file.path] ?? {})));
+		}
+		for (const [node, color] of colorsFromSharedKeywords(keywords, colored)) node.topicColor = color;
+		this.topicLegend = mainTopics(this.nodes.map(topicsOf), TOPIC_LEGEND).map(({ id, works }) => ({
+			name: this.openAlex.topicInfo(id)?.name ?? id,
+			works,
+			color: palette.get(id) ?? 0x888888,
+		}));
+		this.renderTopicLegend();
+		this.invalidate();
+	}
+
+	/** The main topics of the graph and their colors, under "Color by" in the panel. */
+	private renderTopicLegend(): void {
+		const el = this.topicLegendEl;
+		if (!el) return;
+		el.empty();
+		el.toggle(this.byTopic());
+		for (const topic of this.topicLegend) {
+			const row = el.createDiv({ cls: 'literature-graph-topic' });
+			row.createSpan({ cls: 'literature-graph-topic-swatch' }).setCssProps({ '--literature-graph-topic': hexColor(topic.color) });
+			row.createSpan({ cls: 'literature-graph-topic-name', text: topic.name });
+			row.createSpan({ cls: 'literature-graph-topic-count', text: String(topic.works) });
+		}
+		this.groupsEl?.toggle(!this.byTopic());
+	}
+
 	/** Gives each note of the vault the color of its color group (settings). */
 	applyColorGroups(): void {
+		this.applyTopicColors();
 		for (const sync of this.syncControls) sync();
 		const s = this.settings();
 		const colorOf = colorFor(this.app, parseColorGroups(s.graphColorGroups), s.titleProperty);
@@ -1566,7 +1663,10 @@ export class LiteratureGraphView extends ItemView {
 					this.showCurrent();
 				}),
 			);
-		this.buildGroups(body);
+		this.buildColors(body);
+		this.groupsEl = body.createDiv();
+		this.buildGroups(this.groupsEl);
+		this.renderTopicLegend();
 		new Setting(body).setName('Repel force').addSlider((slider) =>
 			slider
 				.setLimits(10, 300, 10)
@@ -1617,7 +1717,7 @@ export class LiteratureGraphView extends ItemView {
 		this.register(() => this.stopTimeline());
 		new Setting(body)
 			.setName('Idle animation')
-			.setDesc('Plays by itself after a while without input (delay and speed in the plugin settings); a click in the graph stops it. Kept for every graph, also after closing it.')
+			.setDesc('Kept for every graph. A click in the graph stops it.')
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOptions({ ...IDLE_ANIMATIONS })
@@ -1650,6 +1750,34 @@ export class LiteratureGraphView extends ItemView {
 			cls: 'setting-item-description',
 			text: 'These changes last while this view is open; defaults are in the plugin settings.',
 		});
+	}
+
+	/** How the works are colored: by color groups or by topic, with the gradient and the legend of the topics. */
+	private buildColors(body: HTMLElement): void {
+		new Setting(body)
+			.setName('Color by')
+			.setDesc('Color groups, or the topics of the works on OpenAlex (related topics, related colors).')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({ groups: 'Color groups', topic: 'Topic' })
+					.setValue(this.byTopic() ? 'topic' : 'groups')
+					.onChange((value) => void this.saveSettings({ graphColorBy: value }));
+				this.syncControls.push(() => {
+					dropdown.setValue(this.byTopic() ? 'topic' : 'groups');
+				});
+			});
+		const gradient = new Setting(body).setName('Gradient').addDropdown((dropdown) => {
+			dropdown
+				.addOptions({ ...Object.fromEntries(Object.entries(GRADIENTS).map(([k, g]) => [k, g.name])), custom: 'Custom (settings)' })
+				.setValue(this.settings().graphTopicGradient)
+				.onChange((value) => void this.saveSettings({ graphTopicGradient: value }));
+			this.syncControls.push(() => {
+				dropdown.setValue(this.settings().graphTopicGradient);
+				gradient.settingEl.toggle(this.byTopic());
+			});
+		});
+		gradient.settingEl.toggle(this.byTopic());
+		this.topicLegendEl = body.createDiv({ cls: 'literature-graph-topics' });
 	}
 
 	/**
@@ -1870,14 +1998,17 @@ export class LiteratureGraphView extends ItemView {
 
 		for (const node of this.nodes) {
 			const near = !focus || node === focus || focus.neighbors.has(node);
+			const topic = node.topicColor;
 			const base =
 				(node === focus && level > 0.5) || (this.local && node.data.id === this.center)
 					? theme.focused
-					: node.data.depth === 0
-						? (node.groupColor ?? theme.node)
-						: node.data.depth === 1
-							? theme.outside
-							: theme.outside2;
+					: topic !== null
+						? this.topicShade(topic, node.data.depth, theme)
+						: node.data.depth === 0
+							? (node.groupColor ?? theme.node)
+							: node.data.depth === 1
+								? theme.outside
+								: theme.outside2;
 			const sprite = node.sprite;
 			sprite.position.set(node.x ?? 0, node.y ?? 0);
 			// Around the highlighted work, its neighbors take the color of their
@@ -1943,6 +2074,13 @@ export class LiteratureGraphView extends ItemView {
 		// Of labels that would cover one another, only the most important is shown.
 		const shown = placeLabels(candidates.map((c) => c.box));
 		candidates.forEach((c, i) => (c.label.visible = shown[i] ?? false));
+	}
+
+	/** A topic color as drawn: as is in the vault, darker (or paler) outside it, like the usual colors. */
+	private topicShade(color: number, depth: number, theme: Theme): ThemeColor {
+		if (depth === 0) return { color, alpha: theme.node.alpha };
+		const outside = mixColor(color, theme.background.color, TOPIC_OUTSIDE_BLEND);
+		return { color: depth === 1 ? outside : mixColor(outside, theme.background.color, DEPTH_2_BLEND), alpha: theme.outside.alpha };
 	}
 
 	/**

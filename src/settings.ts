@@ -1,5 +1,6 @@
 import { App, Plugin, PluginSettingTab, SecretComponent, SettingDefinitionItem } from 'obsidian';
 import { IDLE_ANIMATIONS } from './animations';
+import { GRADIENTS } from './topics';
 import { LAYOUT_STYLES } from './layout';
 
 export type CitationLanguage = 'en' | 'fr';
@@ -39,17 +40,23 @@ export interface LiteratureGraphSettings {
 	graphCenter: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
+	/** How the works are colored: "groups" (color groups) or "topic" (OpenAlex topics, see `topics.ts`). */
+	graphColorBy: string;
+	/** Gradient of the topic colors: a key of GRADIENTS, or "custom". */
+	graphTopicGradient: string;
+	/** Colors of the custom gradient, separated by commas (any CSS colors). */
+	graphTopicColors: string;
 	/** Style of layout of the graph: "default" or "atom". */
 	graphLayout: string;
 	/** Color of the works outside the vault (any CSS color); empty: from the theme. */
 	graphOutsideColor: string;
 	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
 	graphIncomingColor: string;
-	/** Animation after a while without input: "none" or "sphere". */
+	/** Animation after a while without input: a key of IDLE_ANIMATIONS. */
 	graphIdleAnimation: string;
 	/** Seconds without any input before the idle animation starts. */
 	graphIdleDelay: number;
-	/** Speed of the sphere's rotation, from 1 to 20. */
+	/** Speed of the idle animation, from 1 to 20 (5: its own pace). */
 	graphRotationSpeed: number;
 	/** In the idle animation, the works appear one by one. */
 	graphAppearOneByOne: boolean;
@@ -86,6 +93,9 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphLinkDistance: 60,
 	graphCenter: 0.02,
 	graphColorGroups: '',
+	graphColorBy: 'groups',
+	graphTopicGradient: 'spectrum',
+	graphTopicColors: '',
 	graphLayout: 'default',
 	graphOutsideColor: '',
 	graphIncomingColor: '',
@@ -233,6 +243,21 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Center force',
 						desc: 'How strongly every work is pulled toward the middle: higher for a tighter, rounder graph, lower to spread it. Can be changed in the graph for the time it stays open.',
 						control: { type: 'slider', key: 'graphCenter', min: 0, max: 0.2, step: 0.005 },
+					},
+					{
+						name: 'Color by',
+						desc: 'Color groups (below), or topic: each work takes the color of its topics on OpenAlex (a mix for several), along a gradient where related topics have related colors. Works OpenAlex does not know take the colors of the notes sharing their links. Also chosen in the graph\'s panel.',
+						control: { type: 'dropdown', key: 'graphColorBy', options: { groups: 'Color groups', topic: 'Topic' } },
+					},
+					{
+						name: 'Topic gradient',
+						desc: 'The colors of the topics, from one end of the research landscape (humanities, health, life sciences) to the other (environment, physical sciences, mathematics).',
+						control: { type: 'dropdown', key: 'graphTopicGradient', options: { ...Object.fromEntries(Object.entries(GRADIENTS).map(([k, g]) => [k, g.name])), custom: 'Custom' } },
+					},
+					{
+						name: 'Custom gradient',
+						desc: 'For the custom gradient: two colors or more, separated by commas (any CSS colors: #1a2a6c, rgb(…), teal).',
+						control: { type: 'text', key: 'graphTopicColors', placeholder: '#1a2a6c, #b21f1f, #fdbb2d' },
 					},
 					{
 						name: 'Color groups',

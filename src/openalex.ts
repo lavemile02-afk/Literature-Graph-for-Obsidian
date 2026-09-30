@@ -1,5 +1,6 @@
 import { App, requestUrl } from 'obsidian';
 import { normalizeDoi } from './citationIndex';
+import type { TopicInfo, WorkTopics } from './topics';
 
 /**
  * A small client for OpenAlex (https://openalex.org), a free and open index
@@ -12,7 +13,7 @@ const API = 'https://api.openalex.org';
 const MIN_INTERVAL_MS = 110;
 /** Ids or DOIs per request (OpenAlex accepts up to 50 values in a filter). */
 const BATCH_SIZE = 50;
-const SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,referenced_works,cited_by_count';
+const SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,referenced_works,cited_by_count,topics';
 const CACHE_VERSION = 1;
 
 /** What the plugin keeps about a work. */
@@ -28,6 +29,8 @@ export interface WorkSummary {
 	/** OpenAlex ids of the works it cites. */
 	references: string[];
 	citedByCount: number;
+	/** Its topics (see `topics.ts`), most relevant first; missing if fetched before topics were asked for. */
+	topics?: WorkTopics;
 }
 
 /**
@@ -72,6 +75,8 @@ interface CacheFile {
 	missingIds?: Record<string, true>;
 	/** Work id → the most cited works that cite it, and how many cite it in all. */
 	citedBy?: Record<string, { total: number; ids: string[] }>;
+	/** Topic id ("T12091") → its place in OpenAlex's hierarchy. */
+	topics?: Record<string, TopicInfo>;
 }
 
 /** Works citing a work: the most cited ones first, with the total count. */
@@ -89,7 +94,19 @@ interface RawWork {
 	primary_location?: { source?: { display_name?: string | null } | null } | null;
 	referenced_works?: string[];
 	cited_by_count?: number;
+	topics?: RawTopic[];
 }
+
+interface RawTopic {
+	id?: string;
+	display_name?: string;
+	score?: number;
+	subfield?: { id?: string; display_name?: string };
+	field?: { id?: string; display_name?: string };
+}
+
+/** "https://openalex.org/subfields/2303" → "subfields/2303". */
+const topicId = (id: string | undefined): string => (id ?? '').replace(/^https:\/\/openalex\.org\//, '');
 
 const shortId = (id: string): string => id.replace(/^https:\/\/openalex\.org\//, '');
 
@@ -156,6 +173,7 @@ function summarize(raw: RawWork): WorkSummary {
 		venue: raw.primary_location?.source?.display_name ?? null,
 		references: (raw.referenced_works ?? []).map(shortId),
 		citedByCount: raw.cited_by_count ?? 0,
+		...(raw.topics ? { topics: raw.topics.filter((t) => t.id).map((t): [string, number] => [topicId(t.id), t.score ?? 0]) } : {}),
 	};
 }
 
@@ -301,6 +319,7 @@ export class OpenAlexClient {
 				select: SELECT,
 			})) as { results?: RawWork[] } | null;
 			for (const raw of data?.results ?? []) {
+				this.keepTopics(raw);
 				const work = summarize(raw);
 				this.cache.works[work.id] = work;
 				if (work.doi) this.cache.doiToId[work.doi] = work.id;
@@ -317,6 +336,62 @@ export class OpenAlexClient {
 		}
 		onProgress?.(values.length, values.length);
 		return found;
+	}
+
+	/** Keeps where the topics of a work sit in OpenAlex's hierarchy (shared by every work). */
+	private keepTopics(raw: { topics?: RawTopic[] }): void {
+		for (const t of raw.topics ?? []) {
+			const id = topicId(t.id);
+			if (!id) continue;
+			(this.cache.topics ??= {})[id] = {
+				name: t.display_name ?? id,
+				subfield: topicId(t.subfield?.id),
+				subfieldName: t.subfield?.display_name ?? '',
+				field: topicId(t.field?.id),
+				fieldName: t.field?.display_name ?? '',
+			};
+		}
+	}
+
+	/** A topic's place in OpenAlex's hierarchy, if a work with it was fetched. */
+	topicInfo(id: string): TopicInfo | undefined {
+		return this.cache.topics?.[id];
+	}
+
+	/**
+	 * Fetches the topics of cached works that do not have them yet (cached
+	 * before topics were asked for), in batches of 50: only what is missing.
+	 */
+	async loadTopics(ids: string[], onProgress?: (done: number, total: number) => void): Promise<void> {
+		await this.load();
+		const missing = [...new Set(ids)].filter((id) => {
+			const work = this.cache.works[id];
+			return work !== undefined && work.topics === undefined;
+		});
+		if (missing.length === 0 || !this.options().enabled) return;
+		await this.tryFetch(async () => {
+			for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+				onProgress?.(i, missing.length);
+				const batch = missing.slice(i, i + BATCH_SIZE);
+				const data = (await this.request('/works', {
+					filter: `openalex_id:${batch.join('|')}`,
+					'per-page': String(BATCH_SIZE),
+					select: 'id,topics',
+				})) as { results?: { id?: string; topics?: RawTopic[] }[] } | null;
+				for (const raw of data?.results ?? []) {
+					this.keepTopics(raw);
+					const work = this.cache.works[shortId(raw.id ?? '')];
+					if (work) work.topics = (raw.topics ?? []).filter((t) => t.id).map((t): [string, number] => [topicId(t.id), t.score ?? 0]);
+				}
+				// Works OpenAlex returned nothing for: no topics, not asked again.
+				for (const id of batch) {
+					const work = this.cache.works[id];
+					if (work && work.topics === undefined) work.topics = [];
+				}
+				this.scheduleSave();
+			}
+			onProgress?.(missing.length, missing.length);
+		});
 	}
 
 	/**
@@ -388,7 +463,10 @@ export class OpenAlexClient {
 				'per-page': String(Math.min(limit, 200)),
 				select: SELECT,
 			})) as { meta?: { count?: number }; results?: RawWork[] } | null;
-			const works = (data?.results ?? []).map(summarize);
+			const works = (data?.results ?? []).map((raw) => {
+				this.keepTopics(raw);
+				return summarize(raw);
+			});
 			for (const work of works) {
 				this.cache.works[work.id] = work;
 				if (work.doi) this.cache.doiToId[work.doi] = work.id;
