@@ -46,8 +46,12 @@ export function timelineWidth(n: number): number {
 	return Math.max(1000, 60 * Math.sqrt(n));
 }
 
-/** In the chronological layout, the works are drawn this much bigger (it is wide, so seen from far). */
-export const CHRONOLOGICAL_POINT_SCALE = 3;
+/**
+ * In the chronological layout, the works are drawn this much bigger (it is
+ * wide, so seen from far): three times the radius they had before the radii
+ * were doubled for every layout.
+ */
+export const CHRONOLOGICAL_POINT_SCALE = 1.5;
 
 /**
  * The horizontal place of each year: by the rank of the year among the

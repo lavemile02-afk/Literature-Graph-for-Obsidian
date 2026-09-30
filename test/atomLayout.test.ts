@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildAtoms, ELECTRON, NUCLEUS } from '../src/atoms';
+import { ELECTRON_SPACING } from '../src/atomLayout';
 import { LayoutLoop, LayoutMessage, LayoutUpdate } from '../src/layout';
 
 /**
@@ -60,7 +61,7 @@ test('lays out atoms whose clouds keep their electrons and do not overlap', () =
 	assert.ok(p, 'positions');
 	assert.equal((last as LayoutUpdate | null)?.moving, false);
 
-	const atoms = buildAtoms(nodes, links, 16);
+	const atoms = buildAtoms(nodes, links, ELECTRON_SPACING);
 	const at = (i: number) => [p[i * 2] ?? 0, p[i * 2 + 1] ?? 0] as const;
 	const dist = (i: number, j: number) => Math.hypot(at(i)[0] - at(j)[0], at(i)[1] - at(j)[1]);
 	// Every electron is in its own cloud.

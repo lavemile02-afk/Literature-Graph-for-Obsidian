@@ -197,7 +197,8 @@ const ARROW_SIZE = 4;
 const ARROW_MIN_SCALE = 0.5;
 
 function radiusOf(node: GraphNode): number {
-	const r = node.depth === 0 ? 4 + Math.sqrt(node.citedBy) * 2.2 : 2 + Math.sqrt(node.citedBy) * 1.2;
+	// (Doubled on 2026-09-30, at the user's request: the works are seen better from far.)
+	const r = node.depth === 0 ? 8 + Math.sqrt(node.citedBy) * 4.4 : 4 + Math.sqrt(node.citedBy) * 2.4;
 	return Math.min(MAX_NODE_RADIUS, r);
 }
 
@@ -1844,6 +1845,22 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
+		new Setting(body)
+			.setName('Point size')
+			.setDesc('Kept for every graph.')
+			.addSlider((slider) => {
+				slider
+					.setLimits(0.25, 3, 0.05)
+					.setValue(Number(this.settings().graphPointScale) || 1)
+					.onChange((value) => {
+						this.invalidate();
+						this.requestFrame();
+						void this.saveSettings({ graphPointScale: value });
+					});
+				this.syncControls.push(() => {
+					slider.setValue(Number(this.settings().graphPointScale) || 1);
+				});
+			});
 		new Setting(body).setName('Center force').addSlider((slider) =>
 			slider
 				.setLimits(0, 0.2, 0.005)
@@ -2310,9 +2327,13 @@ export class LiteratureGraphView extends ItemView {
 		return points;
 	}
 
-	/** A work's radius as drawn: bigger in the chronological layout, which is seen from far. */
+	/**
+	 * A work's radius as drawn: bigger in the chronological layout, which is
+	 * seen from far, and times the "Point size" chosen in the panel.
+	 */
 	private drawnRadius(node: SimNode): number {
-		return this.layoutStyle === 'chronological' ? node.radius * CHRONOLOGICAL_POINT_SCALE : node.radius;
+		const size = Math.min(3, Math.max(0.25, Number(this.settings().graphPointScale) || 1));
+		return (this.layoutStyle === 'chronological' ? node.radius * CHRONOLOGICAL_POINT_SCALE : node.radius) * size;
 	}
 
 	/**

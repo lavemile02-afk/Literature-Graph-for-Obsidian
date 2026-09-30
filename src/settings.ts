@@ -43,6 +43,8 @@ export interface LiteratureGraphSettings {
 	graphColorGroups: string;
 	/** How the works are colored: "groups" (color groups) or "topic" (OpenAlex topics, see `topics.ts`). */
 	graphColorBy: string;
+	/** Size of the points of the graph, times their usual size (0.25 to 3). */
+	graphPointScale: number;
 	/** Topic colors: brightness, from -20 (darker) to 20 (lighter) around the theme's, and intensity (saturation), in percent. */
 	graphTopicBrightness: number;
 	graphTopicIntensity: number;
@@ -97,6 +99,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphCenter: 0.02,
 	graphColorGroups: '',
 	graphColorBy: 'groups',
+	graphPointScale: 1,
 	graphTopicBrightness: 0,
 	graphTopicIntensity: 100,
 	graphLayout: 'default',

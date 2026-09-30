@@ -15,7 +15,7 @@ import { Atoms, buildAtoms, ELECTRON, NUCLEUS } from './atoms';
 import type { Forces, LayoutLink, LayoutNode } from './layout';
 
 /** Distance between neighboring electrons in a cloud. */
-const ELECTRON_SPACING = 16;
+export const ELECTRON_SPACING = 32;
 /** How strongly an electron is pulled to its place, at each step (share of the distance). */
 const ORBIT_STRENGTH = 0.25;
 /** How much of an overlap between clouds is undone at each step. */
