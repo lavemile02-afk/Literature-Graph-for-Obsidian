@@ -260,13 +260,17 @@ export async function buildGraph(
 	}
 	for (const file of allFiles) {
 		for (const { doi, source } of citedDois.get(file.path) ?? []) {
+			// A DOI of a reference list that OpenAlex does not know is most often
+			// damaged by the conversion (doi.org would not find it either): the
+			// entry is then a work without a DOI (below), named from the entry.
+			if (source === 'bibliography' && openAlex.isUnknownDoi(doi)) continue;
 			const id = openAlex.cachedIdForDoi(doi);
 			const key = id ?? `doi:${doi}`;
 			if (!pathById.has(key)) cite(counts1, citers1, file.path, key, source);
 		}
 	}
-	// Works of the reference lists without a DOI, known only from the notes
-	// (no request). One work cited by several notes is one node; when OpenAlex
+	// Works of the reference lists without a DOI (or with one OpenAlex does not
+	// know), known only from the notes (no request). One work cited by several notes is one node; when OpenAlex
 	// already knows it (cited elsewhere with its DOI), it joins that node.
 	const localWorks = new Map<string, BibEntry>();
 	if (options.localWorks !== false && allowed('bibliography')) {
@@ -297,7 +301,7 @@ export async function buildGraph(
 		};
 		for (const file of files) {
 			for (const entry of index.bibliographyOf(file)) {
-				if (entry.doi || index.resolveEntry(entry, file.path)) continue;
+				if ((entry.doi && !openAlex.isUnknownDoi(entry.doi)) || index.resolveEntry(entry, file.path)) continue;
 				const key = entryKey(entry);
 				if (!key) continue;
 				const id = openAlexWork(entry);

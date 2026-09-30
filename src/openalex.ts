@@ -337,6 +337,14 @@ export class OpenAlexClient {
 		return this.cache.doiToId[normalizeDoi(doi)] ?? null;
 	}
 
+	/**
+	 * Whether OpenAlex was asked for this DOI and does not know it: often a DOI
+	 * damaged in a converted reference list (cut short, or glued to the next word).
+	 */
+	isUnknownDoi(doi: string): boolean {
+		return this.cache.doiToId[normalizeDoi(doi)] === null;
+	}
+
 	/** The work with this DOI, from the cache or OpenAlex; null if unknown or offline. */
 	async workByDoi(doi: string): Promise<WorkSummary | null> {
 		const [work] = await this.worksByDois([doi]);
