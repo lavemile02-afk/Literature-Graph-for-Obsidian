@@ -1,4 +1,5 @@
 import { App, debounce } from 'obsidian';
+import { writePluginFile } from './pluginFiles';
 
 /** Which work a ghost note shows (see `workView.ts`), as the store needs it. */
 export interface GhostWork {
@@ -93,7 +94,8 @@ export class GhostNoteStore {
 	async flush(): Promise<void> {
 		if (!this.dirty) return;
 		this.dirty = false;
-		await this.app.vault.adapter.write(this.path, JSON.stringify(this.notes));
+		// Not written: tried again at the next change.
+		if (!(await writePluginFile(this.app, this.path, JSON.stringify(this.notes)))) this.dirty = true;
 		for (const listener of this.listeners) listener();
 	}
 }

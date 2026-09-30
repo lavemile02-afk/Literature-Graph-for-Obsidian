@@ -1,4 +1,5 @@
 import { App, debounce } from 'obsidian';
+import { writePluginFile } from './pluginFiles';
 
 /** Positions of the works in the graph, by layout style, then by work id. */
 type SavedPositions = Record<string, Record<string, [number, number]>>;
@@ -48,7 +49,8 @@ export class PositionStore {
 	async flush(): Promise<void> {
 		if (!this.dirty) return;
 		this.dirty = false;
-		await this.app.vault.adapter.write(this.path, JSON.stringify(this.positions));
+		// Not written: tried again at the next change.
+		if (!(await writePluginFile(this.app, this.path, JSON.stringify(this.positions)))) this.dirty = true;
 	}
 
 	private dirty = false;

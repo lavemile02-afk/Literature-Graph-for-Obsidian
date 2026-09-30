@@ -1,4 +1,5 @@
 import { App, requestUrl } from 'obsidian';
+import { writePluginFile } from './pluginFiles';
 import { normalizeDoi } from './citationIndex';
 import type { TopicInfo, WorkTopics } from './topics';
 
@@ -235,7 +236,7 @@ export class OpenAlexClient {
 		if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
 		this.saveTimer = window.setTimeout(() => {
 			this.saveTimer = null;
-			void this.app.vault.adapter.write(this.cachePath, JSON.stringify(this.cache));
+			void writePluginFile(this.app, this.cachePath, JSON.stringify(this.cache));
 		}, 2000);
 	}
 
@@ -244,13 +245,13 @@ export class OpenAlexClient {
 		if (this.saveTimer === null) return;
 		window.clearTimeout(this.saveTimer);
 		this.saveTimer = null;
-		await this.app.vault.adapter.write(this.cachePath, JSON.stringify(this.cache));
+		await writePluginFile(this.app, this.cachePath, JSON.stringify(this.cache));
 	}
 
 	/** Empties the cache. */
 	async clear(): Promise<void> {
 		this.cache = { version: CACHE_VERSION, works: {}, doiToId: {} };
-		await this.app.vault.adapter.write(this.cachePath, JSON.stringify(this.cache));
+		await writePluginFile(this.app, this.cachePath, JSON.stringify(this.cache));
 	}
 
 	/**
