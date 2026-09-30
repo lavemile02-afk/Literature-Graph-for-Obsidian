@@ -4,6 +4,22 @@ An Obsidian plugin for literature notes written in Markdown (for example, papers
 
 Explore how the works of your vault cite each other, and the works outside it that they cite, in a panel and a graph view of their own, built from the reference lists of your notes, from citation links and from OpenAlex.
 
+![The works of a vault and the works they cite, placed and colored by their meaning](images/meaning.png)
+
+*About 4,900 works: 112 literature notes and the works they cite, colored and placed by what they are about (the **Meaning** layout).*
+
+| Hover a work to see what it cites | Islands: communities of citations |
+|---|---|
+| ![A work of the vault highlighted with the works it cites](images/hover.png) | ![Communities of citations as islands](images/islands.png) |
+| **Atom graph**: each note with the works it cites around it | **Layers**: the vault in the middle, then each depth |
+| ![Atom graph](images/atom.png) | ![Layers](images/layers.png) |
+
+When you leave it alone, the graph turns into an animation:
+
+| Rotating sphere | Globe | Orbits | Braid |
+|---|---|---|---|
+| ![Rotating sphere](images/sphere.gif) | ![Globe](images/globe.gif) | ![Orbits](images/orbits.gif) | ![Braid](images/braid.gif) |
+
 ## Features
 
 - **Literature graph.** A graph view of the citations between your literature notes, and optionally the works outside your vault they cite (with or without a DOI), in the style of Obsidian's graph view; also as a local graph around the active note, following the works it cites, the works citing it, or both.
