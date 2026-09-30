@@ -28,7 +28,7 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
-import { colorsFromSharedKeywords, GRADIENTS, mainTopics, topicPalette, workColor } from './topics';
+import { colorsFromSharedKeywords, mainTopics, topicColors, topicLegendColors } from './topics';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -273,6 +273,7 @@ export class LiteratureGraphView extends ItemView {
 	private readonly nodesLayer = new Container();
 	/** Chronological layout: the decades above the graph, and faint lines down through it. */
 	private readonly axisLayer = new Container();
+	private axisParts: { top: Container; grid: Graphics; margin: number } | null = null;
 	/** Bright signals running along the citations (the constellation animation). */
 	private readonly signalsLayer = new Container();
 	private signalSprites: Sprite[] = [];
@@ -360,6 +361,9 @@ export class LiteratureGraphView extends ItemView {
 	private lastEdgeScale = 0;
 	private statusEl: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
+	/** The column of buttons along the right edge, and the display panel. */
+	private toolbarEl: HTMLElement | null = null;
+	private displayEl: HTMLElement | null = null;
 	private hintEl: HTMLElement | null = null;
 	/** The list of reading suggestions (works outside the vault, most relevant first), when open. */
 	private suggestionsEl: HTMLElement | null = null;
@@ -837,15 +841,9 @@ export class LiteratureGraphView extends ItemView {
 		return this.settings().graphColorBy === 'topic';
 	}
 
-	/** The colors of the topic gradient chosen in the settings. */
-	private topicStops(): number[] {
-		const s = this.settings();
-		if (s.graphTopicGradient === 'custom') {
-			const custom = s.graphTopicColors.split(',').map((c) => c.trim()).filter(Boolean);
-			if (custom.length >= 2) return custom.map((c) => parseCssColor(c, '#888888').color);
-		}
-		const gradient = GRADIENTS[s.graphTopicGradient] ?? GRADIENTS.spectrum;
-		return (gradient?.stops ?? []).map((c) => parseCssColor(c, '#888888').color);
+	/** Lightness of the topic colors: light on a dark theme, deeper on a light one. */
+	private topicLightness(): number {
+		return this.contentEl.doc.body.hasClass('theme-dark') ? 0.62 : 0.45;
 	}
 
 	/**
@@ -874,14 +872,17 @@ export class LiteratureGraphView extends ItemView {
 					this.applyTopicColors();
 				});
 		}
-		const present = this.nodes.flatMap((n) => (topicsOf(n) ?? []).map(([id]) => id));
-		const palette = topicPalette(present, (id) => this.openAlex.topicInfo(id), this.topicStops());
+		// Colors relative to the diversity of the works of this graph (see `topics.ts`).
+		const info = (id: string) => this.openAlex.topicInfo(id);
+		const lightness = this.topicLightness();
+		const topics = this.nodes.map(topicsOf);
+		const colors = topicColors(topics, info, lightness);
 		const colored = new Map<SimNode, number>();
-		for (const node of this.nodes) {
-			const color = workColor(topicsOf(node), palette);
+		this.nodes.forEach((node, i) => {
+			const color = colors[i] ?? null;
 			node.topicColor = color;
 			if (color !== null && node.data.file) colored.set(node, color);
-		}
+		});
 		// Works of the vault without topics: from the notes sharing their links.
 		const links = this.app.metadataCache.resolvedLinks;
 		const keywords = new Map<SimNode, Set<string>>();
@@ -889,10 +890,12 @@ export class LiteratureGraphView extends ItemView {
 			if (node.data.file) keywords.set(node, new Set(Object.keys(links[node.data.file.path] ?? {})));
 		}
 		for (const [node, color] of colorsFromSharedKeywords(keywords, colored)) node.topicColor = color;
-		this.topicLegend = mainTopics(this.nodes.map(topicsOf), TOPIC_LEGEND).map(({ id, works }) => ({
+		const main = mainTopics(topics, TOPIC_LEGEND);
+		const legend = topicLegendColors(main.map((t) => t.id), topics, info, lightness);
+		this.topicLegend = main.map(({ id, works }) => ({
 			name: this.openAlex.topicInfo(id)?.name ?? id,
 			works,
-			color: palette.get(id) ?? 0x888888,
+			color: legend.get(id) ?? 0x888888,
 		}));
 		this.renderTopicLegend();
 		this.invalidate();
@@ -948,9 +951,9 @@ export class LiteratureGraphView extends ItemView {
 			if (!screen) return null;
 			// The open control panel hides the right of the view, and the list of
 			// suggestions its left: fit the graph between them.
-			const panel = this.controlsEl;
-			const right =
-				panel && !panel.hasClass('is-collapsed') && panel.offsetWidth < screen.width / 2 ? panel.offsetWidth + 16 : 0;
+			const open = [this.controlsEl, this.displayEl].find((p) => p && !p.hasClass('is-collapsed'));
+			const bar = this.toolbarEl?.offsetWidth ?? 0;
+			const right = open && open.offsetWidth + bar < screen.width / 2 ? open.offsetWidth + bar + 16 : bar;
 			const list = this.suggestionsEl;
 			const left = list && !list.hasClass('is-hidden') && list.offsetWidth < screen.width / 2 ? list.offsetWidth + 16 : 0;
 			const width = screen.width - right - left;
@@ -1051,7 +1054,9 @@ export class LiteratureGraphView extends ItemView {
 			window.setInterval(() => {
 				const s = this.settings();
 				const delay = Math.max(3, Number(s.graphIdleDelay) || 10) * 1000;
-				if (!this.idle.running && this.idleAnimation() !== 'none' && Date.now() - this.lastActivity >= delay) this.startIdle();
+				// (An older "none" animation means off.)
+				const enabled = s.graphIdleEnabled && s.graphIdleAnimation !== 'none';
+				if (!this.idle.running && enabled && Date.now() - this.lastActivity >= delay) this.startIdle();
 			}, 1000),
 		);
 	}
@@ -1088,9 +1093,7 @@ export class LiteratureGraphView extends ItemView {
 			}
 			return best;
 		});
-		// "None" in the settings: the panel's Play button still shows the sphere.
-		const chosen = this.idleAnimation();
-		const animation = chosen === 'none' ? 'sphere' : chosen;
+		const animation = this.idleAnimation();
 		// The works cited by one work of the vault go together (on one orbit).
 		const setup = setUpAnimation(
 			this.nodes.map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })),
@@ -1320,7 +1323,7 @@ export class LiteratureGraphView extends ItemView {
 	 */
 	private buildTimeAxis(): void {
 		const layer = this.axisLayer;
-		for (const child of layer.removeChildren()) child.destroy();
+		for (const child of layer.removeChildren()) child.destroy({ children: true });
 		layer.visible = this.layoutStyle === 'chronological';
 		const theme = this.theme;
 		if (!layer.visible || !theme) return;
@@ -1328,26 +1331,59 @@ export class LiteratureGraphView extends ItemView {
 		if (known.length === 0) return;
 		const width = timelineWidth(this.nodes.length);
 		const x = yearScale(this.years.map(plausibleYear), width);
-		const height = Math.max(800, width * 0.6);
-		const lines = new Graphics();
+		// Sizes in world units: the axis grows and shrinks with the zoom, like the graph.
+		const fontSize = Math.max(48, width / 70);
+		const tick = fontSize * 0.4;
+		const stroke = Math.max(2, width / 1500);
+		// The top (axis, ticks, years) is drawn at y = 0, and the grid from 0
+		// to 1: `placeTimeAxis` moves them to the top of the works and stretches
+		// the grid down to their bottom.
+		const top = new Container();
+		const grid = new Graphics();
+		const axis = new Graphics();
 		const first = Math.ceil(Math.min(...known) / 10) * 10;
 		const last = Math.max(...known);
+		axis.moveTo(x(Math.min(...known)), 0).lineTo(x(last), 0);
 		let lastLabel = -Infinity;
 		const mark = (at: number, text: string) => {
-			lines.moveTo(at, -height / 2).lineTo(at, height / 2);
+			grid.moveTo(at, 0).lineTo(at, 1);
+			axis.moveTo(at, 0).lineTo(at, -tick);
 			// Decades crowded by the scale: only labels far enough apart.
-			if (at - lastLabel < 70) return;
+			if (at - lastLabel < fontSize * 2.6) return;
 			lastLabel = at;
-			const label = new Text({ text, style: { fontSize: 22, fill: theme.text.color, fontFamily: theme.fontFamily } });
+			const label = new Text({ text, style: { fontSize, fontWeight: '600', fill: theme.text.color, fontFamily: theme.fontFamily } });
 			label.anchor.set(0.5, 1);
-			label.alpha = 0.6;
-			label.position.set(at, -height / 2 - 8);
-			layer.addChild(label);
+			label.alpha = 0.85;
+			label.position.set(at, -tick - fontSize * 0.2);
+			top.addChild(label);
 		};
 		for (let decade = first; decade <= last; decade += 10) mark(x(decade), String(decade));
 		if (this.years.some((y) => plausibleYear(y) === null)) mark(unknownYearX(width), '?');
-		lines.stroke({ width: 1, color: theme.line.color, alpha: 0.35 });
-		layer.addChildAt(lines, 0);
+		grid.stroke({ width: stroke / 2, color: theme.line.color, alpha: 0.45 });
+		axis.stroke({ width: stroke, color: theme.text.color, alpha: 0.7 });
+		top.addChildAt(axis, 0);
+		layer.addChild(grid, top);
+		this.axisParts = { top, grid, margin: fontSize };
+	}
+
+	/** Keeps the time axis just above the works, and its grid down through them. */
+	private placeTimeAxis(): void {
+		const parts = this.axisParts;
+		if (!parts || !this.axisLayer.visible || this.nodes.length === 0) return;
+		// Hidden during the idle animation, where the works are elsewhere for a while.
+		this.axisLayer.alpha = 1 - this.idle.level;
+		if (this.idle.level > 0) return;
+		let min = Infinity;
+		let max = -Infinity;
+		for (const node of this.nodes) {
+			const y = node.y ?? 0;
+			if (y < min) min = y;
+			if (y > max) max = y;
+		}
+		const y = min - parts.margin;
+		parts.top.y = y;
+		parts.grid.y = y;
+		parts.grid.scale.y = Math.max(1, max - min + parts.margin * 2);
 	}
 
 	/** Moves the year slider without it counting as the user's choice (which stops the timeline). */
@@ -1549,45 +1585,68 @@ export class LiteratureGraphView extends ItemView {
 		});
 	}
 
-	/** The panel of the view, like the controls of Obsidian's graph view. */
+	/**
+	 * The buttons of the view, in a column along its right edge: the graph's
+	 * settings, its display (layout and idle animation), the reading
+	 * suggestions and fitting the graph to the view. The two panels open to
+	 * the left of the column, one at a time; the button of an open panel
+	 * becomes a cross.
+	 */
 	private buildControls(container: HTMLElement): void {
-		const panel = container.createDiv({ cls: 'literature-graph-controls is-collapsed' });
+		// The column of buttons, then the open panel to its left (see styles.css).
+		const side = container.createDiv({ cls: 'literature-graph-side' });
+		const toolbar = side.createDiv({ cls: 'literature-graph-toolbar' });
+		this.toolbarEl = toolbar;
+		const button = (icon: string, label: string) => {
+			const el = toolbar.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': label } });
+			setIcon(el, icon);
+			return el;
+		};
+		const settingsButton = button('settings', 'Open graph settings');
+		const displayButton = button('shapes', 'Open display: layout and idle animation');
+		button('list-ordered', 'Reading suggestions').addEventListener('click', () => this.toggleSuggestions());
+		button('maximize', 'Fit the graph to the view').addEventListener('click', () => this.fitToView());
+
+		const panel = side.createDiv({ cls: 'literature-graph-controls is-collapsed' });
 		this.controlsEl = panel;
-		const header = panel.createDiv({ cls: 'literature-graph-controls-header' });
-		const suggestions = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Reading suggestions' } });
-		setIcon(suggestions, 'list-ordered');
-		suggestions.addEventListener('click', () => this.toggleSuggestions());
-		const fit = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Fit the graph to the view' } });
-		setIcon(fit, 'maximize');
-		fit.addEventListener('click', () => this.fitToView());
-		const toggle = header.createDiv({ cls: 'clickable-icon' });
 		const body = panel.createDiv({ cls: 'literature-graph-controls-body' });
-		/** Opens or closes the panel; its button is a gear when closed and a cross when open. */
-		const setOpen = (open: boolean) => {
-			panel.toggleClass('is-collapsed', !open);
-			// Closed while scrolled down, the small panel would show only the
-			// scrolled-away part of its content, without its buttons.
-			if (!open) panel.scrollTop = 0;
-			setIcon(toggle, open ? 'x' : 'settings');
-			toggle.setAttribute('aria-label', open ? 'Close graph settings' : 'Open graph settings');
+		const displayPanel = side.createDiv({ cls: 'literature-graph-controls literature-graph-display is-collapsed' });
+		this.displayEl = displayPanel;
+		const display = displayPanel.createDiv({ cls: 'literature-graph-controls-body' });
+		const panels = [
+			{ panel, button: settingsButton, icon: 'settings', open: 'Open graph settings', close: 'Close graph settings' },
+			{ panel: displayPanel, button: displayButton, icon: 'shapes', open: 'Open display: layout and idle animation', close: 'Close display' },
+		];
+		/** Opens one panel (closing the other), or closes them all (null). */
+		const setOpen = (which: HTMLElement | null) => {
+			for (const p of panels) {
+				const open = p.panel === which;
+				p.panel.toggleClass('is-collapsed', !open);
+				if (!open) p.panel.scrollTop = 0;
+				setIcon(p.button, open ? 'x' : p.icon);
+				p.button.setAttribute('aria-label', open ? p.close : p.open);
+				p.button.toggleClass('is-active', open);
+			}
 			// The room left for the graph changed.
 			if (this.cameraMode === 'fit') this.requestFrame();
 		};
-		setOpen(false);
-		toggle.addEventListener('click', () => setOpen(panel.hasClass('is-collapsed')));
-		// A click anywhere in the view outside the open panel closes it (and still
-		// does what it does). The listener is on the view, not on its document,
-		// so that it follows the view into a pop-out window.
+		setOpen(null);
+		for (const p of panels) p.button.addEventListener('click', () => setOpen(p.panel.hasClass('is-collapsed') ? p.panel : null));
+		// A click anywhere in the view outside the open panel and the buttons
+		// closes it (and still does what it does). The listener is on the view,
+		// not on its document, so that it follows the view into a pop-out window.
 		this.registerDomEvent(
 			container,
 			'pointerdown',
 			(e: PointerEvent) => {
 				// (No `instanceof Node`: in a pop-out window, nodes belong to another realm.)
 				const target = e.target as Node | null;
-				if (!panel.hasClass('is-collapsed') && target && !panel.contains(target)) setOpen(false);
+				if (!target || toolbar.contains(target)) return;
+				if (panels.some((p) => !p.panel.hasClass('is-collapsed') && !p.panel.contains(target))) setOpen(null);
 			},
 			{ capture: true },
 		);
+		this.buildDisplay(display, () => setOpen(null));
 
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
 		new Setting(body).setName('Filter').addSearch((search) =>
@@ -1628,21 +1687,6 @@ export class LiteratureGraphView extends ItemView {
 					dropdown.setValue(this.direction);
 				});
 			});
-		new Setting(body)
-			.setName('Layout')
-			.setDesc('Default graph; atoms (each work of the vault with a circle of the works it cites); chronological (by year, left to right); islands (communities of citations); layers (a ring per depth); circle (the vault on a circle by year, citations as chords).')
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOptions({ ...LAYOUT_STYLES })
-					.setValue(this.layoutStyle)
-					.onChange((value) => {
-						this.layoutStyle = value as LayoutStyle;
-						// A new layout from the positions shown: the works move to their new places.
-						this.showCurrent();
-						this.layout?.send({ type: 'reheat', alpha: 1 });
-						if (!this.local) this.cameraMode = 'fit';
-					}),
-			);
 		new Setting(body)
 			.setName('Depth')
 			.setDesc('Works outside the vault cited by it (1), and by those (2).')
@@ -1762,30 +1806,6 @@ export class LiteratureGraphView extends ItemView {
 			);
 		this.describeTimeline();
 		this.register(() => this.stopTimeline());
-		new Setting(body)
-			.setName('Idle animation')
-			.setDesc('Kept for every graph. A click in the graph stops it.')
-			.addDropdown((dropdown) => {
-				dropdown
-					.addOptions({ ...IDLE_ANIMATIONS })
-					.setValue(this.idleAnimation())
-					.onChange((value) => void this.saveSettings({ graphIdleAnimation: value }));
-				this.syncControls.push(() => {
-					dropdown.setValue(this.idleAnimation());
-				});
-			})
-			.addButton((button) =>
-				button.setButtonText('Play').onClick(() => {
-					setOpen(false);
-					this.startIdle(1500);
-				}),
-			);
-		new Setting(body).addButton((button) =>
-			button
-				.setButtonText('Reset layout')
-				.setTooltip('Forget the saved places of the works and lay the graph out from scratch')
-				.onClick(() => this.resetLayout()),
-		);
 		new Setting(body).addButton((button) =>
 			button.setButtonText('Restart layout').onClick(() => {
 				this.layout?.send({ type: 'reheat', alpha: 1 });
@@ -1799,11 +1819,61 @@ export class LiteratureGraphView extends ItemView {
 		});
 	}
 
+	/**
+	 * The display panel: the style of layout (for as long as the view is
+	 * open; its default is in the settings) and the idle animation (kept for
+	 * every graph), with the buttons to lay the graph out again.
+	 */
+	private buildDisplay(body: HTMLElement, close: () => void): void {
+		new Setting(body)
+			.setName('Layout')
+			.setDesc('Default graph; atoms (each work of the vault with a circle of the works it cites); chronological (by year, left to right); islands (communities of citations); layers (a ring per depth); circle (the vault on a circle by year, citations as chords).')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({ ...LAYOUT_STYLES })
+					.setValue(this.layoutStyle)
+					.onChange((value) => {
+						this.layoutStyle = isLayoutStyle(value) ? value : 'default';
+						// A new layout from the positions shown: the works move to their new places.
+						this.showCurrent();
+						this.layout?.send({ type: 'reheat', alpha: 1 });
+						if (!this.local) this.cameraMode = 'fit';
+					});
+				this.syncControls.push(() => {
+					dropdown.setValue(this.layoutStyle);
+				});
+			});
+		new Setting(body).addButton((button) =>
+			button
+				.setButtonText('Reset layout')
+				.setTooltip('Forget the saved places of the works and lay the graph out from scratch')
+				.onClick(() => this.resetLayout()),
+		);
+		new Setting(body)
+			.setName('Idle animation')
+			.setDesc('After a while without input (switch and delay in the plugin settings). Kept for every graph; a click in the graph stops it.')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({ ...IDLE_ANIMATIONS })
+					.setValue(this.idleAnimation())
+					.onChange((value) => void this.saveSettings({ graphIdleAnimation: value }));
+				this.syncControls.push(() => {
+					dropdown.setValue(this.idleAnimation());
+				});
+			})
+			.addButton((button) =>
+				button.setButtonText('Play').onClick(() => {
+					close();
+					this.startIdle(1500);
+				}),
+			);
+	}
+
 	/** How the works are colored: by color groups or by topic, with the gradient and the legend of the topics. */
 	private buildColors(body: HTMLElement): void {
 		new Setting(body)
 			.setName('Color by')
-			.setDesc('Color groups, or the topics of the works on OpenAlex (related topics, related colors).')
+			.setDesc('Color groups, or the topics of the works on OpenAlex: the more two works differ, compared with all the works of the graph, the further apart their hues.')
 			.addDropdown((dropdown) => {
 				dropdown
 					.addOptions({ groups: 'Color groups', topic: 'Topic' })
@@ -1813,17 +1883,6 @@ export class LiteratureGraphView extends ItemView {
 					dropdown.setValue(this.byTopic() ? 'topic' : 'groups');
 				});
 			});
-		const gradient = new Setting(body).setName('Gradient').addDropdown((dropdown) => {
-			dropdown
-				.addOptions({ ...Object.fromEntries(Object.entries(GRADIENTS).map(([k, g]) => [k, g.name])), custom: 'Custom (settings)' })
-				.setValue(this.settings().graphTopicGradient)
-				.onChange((value) => void this.saveSettings({ graphTopicGradient: value }));
-			this.syncControls.push(() => {
-				dropdown.setValue(this.settings().graphTopicGradient);
-				gradient.settingEl.toggle(this.byTopic());
-			});
-		});
-		gradient.settingEl.toggle(this.byTopic());
 		this.topicLegendEl = body.createDiv({ cls: 'literature-graph-topics' });
 	}
 
@@ -2002,6 +2061,7 @@ export class LiteratureGraphView extends ItemView {
 		if (this.world.scale.x !== this.lastEdgeScale) this.edgesDirty = true;
 
 		const saved = this.idle.level > 0 ? this.projectIdle(now) : null;
+		this.placeTimeAxis();
 		this.draw(theme);
 		this.drawSignals(now, theme);
 		if (saved) this.finishIdle(saved);
@@ -2037,9 +2097,11 @@ export class LiteratureGraphView extends ItemView {
 		// hovered work's arrows do not. Most idle animations fade them out too,
 		// so that every work moves freely.
 		const idleFade = this.idle.level > 0 && !keepsEdges(this.idle.animation) ? 1 - this.idle.level : 1;
+		// The chronological layout shows only the lines of the highlighted work (decision of the user).
+		const styleFade = this.layoutStyle === 'chronological' ? 0 : 1;
 		const zoomFade = idleFade * Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
-		this.vaultEdges.style(theme.line, lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
-		this.outsideEdges.style(theme.line, lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
+		this.vaultEdges.style(theme.line, styleFade * lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
+		this.outsideEdges.style(theme.line, styleFade * lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.focusOutEdges.style(theme.focused, theme.focused.alpha * level);
 		this.focusInEdges.style(theme.incoming, theme.incoming.alpha * level);
 

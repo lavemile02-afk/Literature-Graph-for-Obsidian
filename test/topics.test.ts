@@ -1,48 +1,85 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blendColors, colorsFromSharedKeywords, mainTopics, orderTopics, sampleGradient, TopicInfo, topicPalette, workColor } from '../src/topics';
+import { blendColors, colorsFromSharedKeywords, hslColor, mainTopics, TopicInfo, topicColors, topicVector, WorkTopics } from '../src/topics';
 
+const place = (subfield: string, field: string): Omit<TopicInfo, 'name'> => ({ subfield, subfieldName: '', field, fieldName: '' });
 const info: Record<string, TopicInfo> = {
-	T1: { name: 'Peatlands', subfield: 'subfields/2303', subfieldName: 'Ecology', field: 'fields/23', fieldName: 'Environmental Science' },
-	T2: { name: 'Wetland hydrology', subfield: 'subfields/2312', subfieldName: 'Water Science', field: 'fields/23', fieldName: 'Environmental Science' },
-	T3: { name: 'Soil carbon', subfield: 'subfields/1111', subfieldName: 'Soil Science', field: 'fields/11', fieldName: 'Agricultural and Biological Sciences' },
-	T4: { name: 'Algebra', subfield: 'subfields/2602', subfieldName: 'Algebra', field: 'fields/26', fieldName: 'Mathematics' },
-	T5: { name: 'Sociology', subfield: 'subfields/3312', subfieldName: 'Sociology', field: 'fields/33', fieldName: 'Social Sciences' },
+	// Hydrology of peatlands and of mountains: same field and subfield.
+	TP: { name: 'Peatland hydrology', ...place('subfields/2312', 'fields/23') },
+	TM: { name: 'Mountain hydrology', ...place('subfields/2312', 'fields/23') },
+	TE: { name: 'Wetland ecology', ...place('subfields/2303', 'fields/23') },
+	// Psychology: another domain.
+	TC: { name: 'Cognition', ...place('subfields/3205', 'fields/32') },
+	TD: { name: 'Development', ...place('subfields/3204', 'fields/32') },
 };
 const lookup = (id: string) => info[id];
 
-test('orders topics so that related ones follow each other', () => {
-	// Social sciences, then life sciences, the environment, and mathematics last.
-	assert.deepEqual(orderTopics(['T4', 'T2', 'T5', 'T1', 'T3'], lookup), ['T5', 'T3', 'T1', 'T2', 'T4']);
-	// A topic without known place goes last.
-	assert.deepEqual(orderTopics(['T9', 'T1'], lookup), ['T1', 'T9']);
+/** Hue (degrees) of a color. */
+function hue(color: number): number {
+	const r = ((color >> 16) & 255) / 255;
+	const g = ((color >> 8) & 255) / 255;
+	const b = (color & 255) / 255;
+	const max = Math.max(r, g, b);
+	const min = Math.min(r, g, b);
+	if (max === min) return 0;
+	const d = max - min;
+	const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+	return (h * 60 + 360) % 360;
+}
+const hueGap = (a: number, b: number) => {
+	const d = Math.abs(hue(a) - hue(b)) % 360;
+	return Math.min(d, 360 - d);
+};
+
+test('builds a vector of meaning over the whole hierarchy', () => {
+	const v = topicVector([['TP', 1]], lookup);
+	assert.deepEqual([...v.keys()].sort(), ['TP', 'domains/3', 'fields/23', 'subfields/2312']);
+	assert.ok(Math.abs([...v.values()].reduce((s, w) => s + w * w, 0) - 1) < 1e-9);
+	// Two topics of one subfield share most of their vector.
+	assert.equal(topicVector([['TM', 1]], lookup).get('fields/23'), v.get('fields/23'));
 });
 
-test('samples a gradient from end to end', () => {
-	assert.equal(sampleGradient([0x000000, 0xffffff], 0), 0x000000);
-	assert.equal(sampleGradient([0x000000, 0xffffff], 1), 0xffffff);
-	assert.equal(sampleGradient([0x000000, 0xff0000, 0x00ff00], 0.5), 0xff0000);
-	assert.equal(sampleGradient([0x123456], 0.7), 0x123456);
+const hydrology: WorkTopics[] = [
+	...Array.from({ length: 5 }, (): WorkTopics => [['TP', 1]]),
+	...Array.from({ length: 5 }, (): WorkTopics => [['TM', 1]]),
+];
+
+test('with only hydrology, small differences give very different colors', () => {
+	const colors = topicColors(hydrology, lookup);
+	assert.ok(hueGap(colors[0]!, colors[9]!) > 120, `${hueGap(colors[0]!, colors[9]!)}°`);
+	// Works on the same topic: the same color.
+	assert.equal(colors[0], colors[4]);
 });
 
-test('spreads the topics present over the whole gradient', () => {
-	const even = topicPalette(['T1', 'T2', 'T4'], lookup, [0x000000, 0xffffff]);
-	// Three topics with one work each: at 1/6, 1/2 and 5/6 of the gradient, in order.
-	assert.deepEqual(['T1', 'T2', 'T4'].map((id) => (even.get(id) ?? 0) & 0xff), [0x2b, 0x80, 0xd5]);
-	// A topic with four works gets twice the stretch of one with one work: 0 to 1/2, then 1/2 to 3/4, and 3/4 to 1.
-	const weighted = topicPalette(['T1', 'T1', 'T1', 'T1', 'T2', 'T4'], lookup, [0x000000, 0xffffff]);
-	assert.deepEqual(['T1', 'T2', 'T4'].map((id) => (weighted.get(id) ?? 0) & 0xff), [0x40, 0x9f, 0xdf]);
+test('with another domain, hydrology draws together and the other domain stands apart', () => {
+	const psychology: WorkTopics[] = Array.from({ length: 10 }, (_, i): WorkTopics => [[i % 2 ? 'TC' : 'TD', 1]]);
+	const colors = topicColors([...hydrology, ...psychology], lookup);
+	const peat = colors[0]!;
+	const mountain = colors[9]!;
+	const mind = colors[10]!;
+	assert.ok(hueGap(peat, mountain) < hueGap(peat, mind), `${hueGap(peat, mountain)}° < ${hueGap(peat, mind)}°`);
+	assert.ok(hueGap(peat, mind) > 90, `${hueGap(peat, mind)}°`);
+	// Less than when hydrology was alone.
+	const alone = topicColors(hydrology, lookup);
+	assert.ok(hueGap(peat, mountain) < hueGap(alone[0]!, alone[9]!));
 });
 
-test('mixes the colors of a work by the scores of its topics', () => {
-	const palette = new Map([
-		['T1', 0xff0000],
-		['T2', 0x0000ff],
-	]);
-	assert.equal(workColor([['T1', 1]], palette), 0xff0000);
-	assert.equal(workColor([['T1', 0.5], ['T2', 0.5]], palette), 0x800080);
-	assert.equal(workColor([['T9', 1]], palette), null);
-	assert.equal(workColor(undefined, palette), null);
+test('leaves works without topics uncolored', () => {
+	const colors = topicColors([[['TP', 1]], undefined, [], [['TM', 1]]], lookup);
+	assert.equal(colors[1], null);
+	assert.equal(colors[2], null);
+	assert.notEqual(colors[0], null);
+});
+
+test('makes colors from hue, saturation and lightness', () => {
+	assert.equal(hslColor(0, 1, 0.5), 0xff0000);
+	assert.equal(hslColor(120, 1, 0.5), 0x00ff00);
+	assert.equal(hslColor(240, 1, 0.5), 0x0000ff);
+	assert.equal(hslColor(0, 0, 0.5), 0x808080);
+});
+
+test('mixes colors by weight', () => {
+	assert.equal(blendColors([{ color: 0xff0000, weight: 1 }, { color: 0x0000ff, weight: 1 }]), 0x800080);
 	assert.equal(blendColors([]), null);
 });
 
@@ -51,7 +88,6 @@ test('colors works without topics from the works sharing their keywords', () => 
 		['a', new Set(['Tourbe', 'Hydrologie'])],
 		['b', new Set(['Tourbe'])],
 		['c', new Set(['Hydrologie'])],
-		['d', new Set(['Tourbe', 'Hydrologie'])],
 		['e', new Set(['Chimie'])],
 	]);
 	const colored = new Map([
@@ -60,16 +96,15 @@ test('colors works without topics from the works sharing their keywords', () => 
 	]);
 	const result = colorsFromSharedKeywords(keywords, colored);
 	assert.equal(result.get('a'), 0x800080);
-	assert.equal(result.get('d'), 0x800080);
 	// No shared keyword: no color guessed.
 	assert.equal(result.has('e'), false);
 	assert.equal(result.has('b'), false);
 });
 
 test('lists the main topics of the graph, most frequent first', () => {
-	const legend = mainTopics([[['T1', 0.9], ['T2', 0.5]], [['T1', 1]], [['T3', 1]], undefined], 2);
+	const legend = mainTopics([[['TP', 0.9], ['TM', 0.5]], [['TP', 1]], [['TE', 1]], undefined], 2);
 	assert.deepEqual(legend, [
-		{ id: 'T1', works: 2 },
-		{ id: 'T3', works: 1 },
+		{ id: 'TP', works: 2 },
+		{ id: 'TE', works: 1 },
 	]);
 });

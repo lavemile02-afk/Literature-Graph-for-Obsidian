@@ -14,7 +14,6 @@
 import { projectOnSphere, Sphere, sphereDirection } from './sphere';
 
 export type IdleAnimation =
-	| 'none'
 	| 'sphere'
 	| 'drift'
 	| 'globe'
@@ -36,7 +35,6 @@ export const IDLE_ANIMATIONS: Record<IdleAnimation, string> = {
 	braid: 'Braid',
 	ribbon: 'Ribbon',
 	constellation: 'Constellation',
-	none: 'None',
 };
 
 export function isIdleAnimation(value: unknown): value is IdleAnimation {
@@ -58,7 +56,7 @@ export function hasSignals(animation: IdleAnimation): boolean {
 
 /** Whether the camera frames the shape (all but the free drift, which stays where the graph is). */
 export function framesShape(animation: IdleAnimation): boolean {
-	return animation !== 'drift' && animation !== 'none';
+	return animation !== 'drift';
 }
 
 /** Where a work is drawn: position (world units), size factor and depth (1: in front, 0: at the back). */
@@ -289,7 +287,6 @@ export function placeWork(animation: IdleAnimation, setup: AnimationSetup, i: nu
 			return { ...p, scale: p.scale * (1 + 0.25 * Math.sin(t * 1.4 + i * 2.7)) };
 		}
 		case 'sphere':
-		case 'none':
 		default: {
 			const p = projectOnSphere(x, y, sphere, t * 0.2);
 			return p;

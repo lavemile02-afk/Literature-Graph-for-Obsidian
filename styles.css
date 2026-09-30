@@ -105,12 +105,47 @@
 	font-weight: var(--font-semibold);
 }
 
-.literature-graph-controls {
+/*
+ * The buttons of the graph in a column along its right edge, and the open
+ * panel to their left. The row lets clicks through where it is empty.
+ */
+.literature-graph-side {
 	position: absolute;
 	top: var(--size-4-2);
 	right: var(--size-4-2);
+	height: calc(100% - var(--size-4-4));
+	display: flex;
+	flex-direction: row-reverse;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+	pointer-events: none;
+}
+
+.literature-graph-side > * {
+	pointer-events: auto;
+}
+
+.literature-graph-toolbar {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	padding: var(--size-2-1);
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+}
+
+.literature-graph-toolbar .clickable-icon.is-active {
+	color: var(--text-accent);
+}
+
+/* The settings and display panels, to the left of the buttons. */
+.literature-graph-controls {
+	flex: none;
 	width: 280px;
-	max-height: calc(100% - var(--size-4-8));
+	max-height: 100%;
 	overflow-y: auto;
 	background-color: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
@@ -120,22 +155,7 @@
 }
 
 .literature-graph-controls.is-collapsed {
-	width: auto;
-	padding: var(--size-4-1);
-}
-
-.literature-graph-controls.is-collapsed .literature-graph-controls-body {
 	display: none;
-}
-
-/* The buttons stay at the top of the panel while its settings scroll. */
-.literature-graph-controls-header {
-	position: sticky;
-	top: 0;
-	z-index: 1;
-	display: flex;
-	justify-content: flex-end;
-	background-color: var(--background-primary);
 }
 
 .literature-graph-controls .setting-item {

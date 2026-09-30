@@ -2,15 +2,19 @@
  * Colors by topic. OpenAlex files every work under up to three topics, each
  * with a score, in a hierarchy: domain → field → subfield → topic (for
  * example Physical Sciences → Environmental Science → Ecology → "Peatlands and
- * Wetlands Ecology"). The topics present in the graph are put in an order
- * where related ones follow each other (by field, then subfield), then laid
- * along a color gradient: works on related topics get related hues, and a
- * work on several topics gets their colors mixed by score.
+ * Wetlands Ecology").
+ *
+ * Each work becomes a vector of meaning: its topics and their subfields,
+ * fields and domains, weighted by score. The two directions in which the
+ * works of the graph differ most (principal component analysis), each scaled
+ * to its own spread, make a plane; a work's hue is its angle in that plane,
+ * all around the color wheel. The colors are thus relative to the diversity
+ * of the graph: works on neighboring topics get neighboring hues, and a few
+ * works from another domain altogether take the opposite hues, while the
+ * nuances within one domain get the whole wheel when it is alone.
  *
  * No Obsidian or Pixi here: colors are numbers (0xrrggbb).
  */
-
-import { mixColor } from './colors';
 
 /** A topic's place in OpenAlex's hierarchy. */
 export interface TopicInfo {
@@ -25,72 +29,163 @@ export interface TopicInfo {
 /** The topics of a work: OpenAlex topic id ("T12091") and score (0 to 1). */
 export type WorkTopics = [string, number][];
 
-/**
- * OpenAlex's 26 fields, in an order where neighbors are related: social
- * sciences and humanities, health, life sciences, the environment and the
- * Earth, then the physical sciences, engineering and mathematics.
- */
-export const FIELD_ORDER = [12, 33, 32, 20, 14, 18, 36, 29, 35, 27, 28, 34, 30, 24, 13, 11, 23, 19, 21, 15, 16, 25, 31, 22, 17, 26];
-
-/** The gradients offered, as lists of colors ("custom": the user's colors). */
-export const GRADIENTS: Record<string, { name: string; stops: string[] }> = {
-	spectrum: { name: 'Soft spectrum', stops: ['#e15759', '#f28e2b', '#edc948', '#59a14f', '#76b7b2', '#4e79a7', '#b07aa1'] },
-	viridis: { name: 'Viridis', stops: ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'] },
-	earth: { name: 'Earth', stops: ['#8c510a', '#bf812d', '#dfc27d', '#80cdc1', '#35978f', '#01665e'] },
-	sunset: { name: 'Sunset', stops: ['#5c2a9d', '#9c3587', '#e53f71', '#f89c5b', '#f9e07f'] },
-	ocean: { name: 'Ocean', stops: ['#1a2a6c', '#2166ac', '#4393c3', '#92c5de', '#a6dba0', '#5aae61'] },
+/** OpenAlex's four domains, by field: 1 Life, 2 Social, 3 Physical, 4 Health Sciences. */
+const DOMAIN_OF_FIELD: Record<number, number> = {
+	11: 1, 13: 1, 24: 1, 28: 1, 30: 1,
+	12: 2, 14: 2, 18: 2, 20: 2, 32: 2, 33: 2,
+	15: 3, 16: 3, 17: 3, 19: 3, 21: 3, 22: 3, 23: 3, 25: 3, 26: 3, 31: 3,
+	27: 4, 29: 4, 34: 4, 35: 4, 36: 4,
 };
 
-/** The number in an OpenAlex id ("fields/23" → 23), or Infinity. */
+/**
+ * Weight of each level of the hierarchy in the vector of meaning: two works
+ * of different domains differ at every level, two works on neighboring
+ * topics only at the last ones.
+ */
+const LEVEL_WEIGHTS = { domain: 2, field: 1.5, subfield: 1, topic: 0.7 };
+
+/** The number in an OpenAlex id ("fields/23" → 23), or NaN. */
 function idNumber(id: string): number {
 	const match = /(\d+)$/.exec(id);
-	return match ? Number(match[1]) : Infinity;
+	return match ? Number(match[1]) : NaN;
 }
 
-/** Topics in an order where related ones follow each other: by field (see FIELD_ORDER), subfield, then id. */
-export function orderTopics(ids: string[], info: (id: string) => TopicInfo | undefined): string[] {
-	const fieldRank = (id: string) => {
-		const field = info(id)?.field;
-		const rank = field ? FIELD_ORDER.indexOf(idNumber(field)) : -1;
-		return rank === -1 ? FIELD_ORDER.length : rank;
+/** A work's vector of meaning: feature ("T12091", "subfields/2303", "fields/23", "domains/3") → weight, of length 1. */
+export function topicVector(topics: WorkTopics | undefined, info: (id: string) => TopicInfo | undefined): Map<string, number> {
+	const vector = new Map<string, number>();
+	const add = (feature: string, weight: number) => {
+		if (feature) vector.set(feature, (vector.get(feature) ?? 0) + weight);
 	};
-	const key = (id: string): [number, number, number] => [fieldRank(id), idNumber(info(id)?.subfield ?? ''), idNumber(id)];
-	return [...ids].sort((a, b) => {
-		const ka = key(a);
-		const kb = key(b);
-		return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2] || a.localeCompare(b);
-	});
-}
-
-/** The color at `t` (0 to 1) along a gradient of colors. */
-export function sampleGradient(stops: number[], t: number): number {
-	if (stops.length === 0) return 0x888888;
-	if (stops.length === 1) return stops[0] ?? 0x888888;
-	const x = Math.min(1, Math.max(0, t)) * (stops.length - 1);
-	const i = Math.min(stops.length - 2, Math.floor(x));
-	return mixColor(stops[i] ?? 0, stops[i + 1] ?? 0, x - i);
+	for (const [id, score] of topics ?? []) {
+		const place = info(id);
+		add(id, LEVEL_WEIGHTS.topic * score);
+		if (!place) continue;
+		add(place.subfield, LEVEL_WEIGHTS.subfield * score);
+		add(place.field, LEVEL_WEIGHTS.field * score);
+		const domain = DOMAIN_OF_FIELD[idNumber(place.field)];
+		if (domain) add(`domains/${domain}`, LEVEL_WEIGHTS.domain * score);
+	}
+	const length = Math.sqrt([...vector.values()].reduce((sum, w) => sum + w * w, 0));
+	if (length > 0) for (const [k, w] of vector) vector.set(k, w / length);
+	return vector;
 }
 
 /**
- * A color for each topic present (`topics`: one entry per work having it).
- * The topics, in order, share the whole gradient, whatever the topics: each
- * gets a stretch that grows with the square root of its number of works, so
- * that the topics of a field of research are told apart rather than crowded
- * into one hue, and rare topics still get their own color.
+ * The plane of meaning of a set of vectors: their mean and the two
+ * directions in which they differ most (principal components, by power
+ * iteration), each with its spread. Deterministic: the sign of each
+ * direction is chosen so that the most common feature leans positive.
  */
-export function topicPalette(topics: Iterable<string>, info: (id: string) => TopicInfo | undefined, stops: number[]): Map<string, number> {
-	const counts = new Map<string, number>();
-	for (const id of topics) counts.set(id, (counts.get(id) ?? 0) + 1);
-	const ordered = orderTopics([...counts.keys()], info);
-	const weight = (id: string) => Math.sqrt(counts.get(id) ?? 1);
-	const total = ordered.reduce((sum, id) => sum + weight(id), 0);
-	let before = 0;
-	const palette = new Map<string, number>();
-	for (const id of ordered) {
-		palette.set(id, sampleGradient(stops, (before + weight(id) / 2) / total));
-		before += weight(id);
+export interface MeaningPlane {
+	features: string[];
+	mean: Float64Array;
+	axes: [Float64Array, Float64Array];
+	spreads: [number, number];
+}
+
+export function meaningPlane(vectors: Map<string, number>[]): MeaningPlane | null {
+	const index = new Map<string, number>();
+	for (const v of vectors) for (const k of v.keys()) if (!index.has(k)) index.set(k, index.size);
+	const d = index.size;
+	const n = vectors.length;
+	if (n < 2 || d === 0) return null;
+	// Sparse rows (a work has a dozen features at most); the centering by the
+	// mean m is done in the products: Xc·v = X·v − (m·v), Xcᵀ·u = Xᵀ·u − m·Σu.
+	const rows = vectors.map((v) => [...v].map(([k, w]) => [index.get(k) ?? 0, w] as const));
+	const mean = new Float64Array(d);
+	for (const row of rows) for (const [j, w] of row) mean[j] = (mean[j] ?? 0) + w / n;
+	const dot = (a: Float64Array, b: Float64Array) => {
+		let s = 0;
+		for (let j = 0; j < d; j++) s += (a[j] ?? 0) * (b[j] ?? 0);
+		return s;
+	};
+	/** The centered works projected on an axis. */
+	const scores = (axis: Float64Array) => {
+		const shift = dot(mean, axis);
+		return rows.map((row) => row.reduce((s, [j, w]) => s + w * (axis[j] ?? 0), 0) - shift);
+	};
+	// Most common feature, to fix the signs.
+	let common = 0;
+	for (let j = 0; j < d; j++) if ((mean[j] ?? 0) > (mean[common] ?? 0)) common = j;
+	const axes: Float64Array[] = [];
+	const spreads: number[] = [];
+	for (let c = 0; c < 2; c++) {
+		let axis = Float64Array.from({ length: d }, (_, j) => 1 + ((j * 7919) % 13) / 13);
+		for (let iteration = 0; iteration < 80; iteration++) {
+			const u = scores(axis);
+			const next = new Float64Array(d);
+			let total = 0;
+			rows.forEach((row, i) => {
+				const ui = u[i] ?? 0;
+				total += ui;
+				for (const [j, w] of row) next[j] = (next[j] ?? 0) + w * ui;
+			});
+			for (let j = 0; j < d; j++) next[j] = (next[j] ?? 0) - (mean[j] ?? 0) * total;
+			// Deflation: remove the directions already found.
+			for (const found of axes) {
+				const overlap = dot(next, found);
+				for (let j = 0; j < d; j++) next[j] = (next[j] ?? 0) - overlap * (found[j] ?? 0);
+			}
+			const length = Math.sqrt(dot(next, next));
+			if (length === 0) break;
+			axis = next.map((x) => x / length);
+		}
+		if ((axis[common] ?? 0) < 0) axis = axis.map((x) => -x);
+		axes.push(axis);
+		spreads.push(Math.sqrt(scores(axis).reduce((s, x) => s + x * x, 0) / n));
 	}
-	return palette;
+	return { features: [...index.keys()], mean, axes: [axes[0] ?? new Float64Array(d), axes[1] ?? new Float64Array(d)], spreads: [spreads[0] ?? 0, spreads[1] ?? 0] };
+}
+
+/** A vector's place in the plane, each axis in units of its spread. */
+export function placeInPlane(vector: Map<string, number>, plane: MeaningPlane): [number, number] {
+	const coordinate = (c: 0 | 1) => {
+		const axis = plane.axes[c];
+		let s = 0;
+		plane.features.forEach((feature, j) => {
+			s += ((vector.get(feature) ?? 0) - (plane.mean[j] ?? 0)) * (axis[j] ?? 0);
+		});
+		const spread = plane.spreads[c];
+		return spread > 1e-9 ? s / spread : 0;
+	};
+	return [coordinate(0), coordinate(1)];
+}
+
+/** A color from hue (degrees), saturation and lightness (0 to 1). */
+export function hslColor(hue: number, saturation: number, lightness: number): number {
+	const h = (((hue % 360) + 360) % 360) / 60;
+	const c = (1 - Math.abs(2 * lightness - 1)) * saturation;
+	const x = c * (1 - Math.abs((h % 2) - 1));
+	const [r, g, b] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x];
+	const m = lightness - c / 2;
+	const to = (v: number) => Math.round((v + m) * 255);
+	return (to(r) << 16) | (to(g) << 8) | to(b);
+}
+
+/**
+ * The color of a place in the plane: its angle gives the hue, all around
+ * the wheel; works near the middle (a mix of everything) are paler.
+ */
+export function colorOfPlace([x, y]: [number, number], lightness: number): number {
+	const hue = (Math.atan2(y, x) * 180) / Math.PI;
+	const saturation = 0.35 + 0.5 * Math.min(1, Math.hypot(x, y) / 1.5);
+	return hslColor(hue, saturation, lightness);
+}
+
+/**
+ * Colors of the works by topic, relative to the works given (the graph):
+ * `topics[i]` → color, or null for a work without topics.
+ */
+export function topicColors(topics: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6): (number | null)[] {
+	const vectors = topics.map((t) => (t && t.length > 0 ? topicVector(t, info) : null));
+	const plane = meaningPlane(vectors.filter((v): v is Map<string, number> => v !== null));
+	return vectors.map((v) => (v === null ? null : plane ? colorOfPlace(placeInPlane(v, plane), lightness) : hslColor(210, 0.6, lightness)));
+}
+
+/** The color a single topic gets in the same plane (for the legend). */
+export function topicLegendColors(ids: string[], works: (WorkTopics | undefined)[], info: (id: string) => TopicInfo | undefined, lightness = 0.6): Map<string, number> {
+	const plane = meaningPlane(works.filter((t) => t && t.length > 0).map((t) => topicVector(t, info)));
+	return new Map(ids.map((id) => [id, plane ? colorOfPlace(placeInPlane(topicVector([[id, 1]], info), plane), lightness) : hslColor(210, 0.6, lightness)]));
 }
 
 /** Colors mixed by weight (their average in RGB); null without any weight. */
@@ -108,15 +203,6 @@ export function blendColors(colors: { color: number; weight: number }[]): number
 	}
 	if (total === 0) return null;
 	return (Math.round(r / total) << 16) | (Math.round(g / total) << 8) | Math.round(b / total);
-}
-
-/** A work's color: the colors of its topics mixed by score; null if none is in the palette. */
-export function workColor(topics: WorkTopics | undefined, palette: Map<string, number>): number | null {
-	if (!topics) return null;
-	return blendColors(topics.flatMap(([id, score]) => {
-		const color = palette.get(id);
-		return color === undefined ? [] : [{ color, weight: score }];
-	}));
 }
 
 /**

@@ -1,6 +1,5 @@
 import { App, Plugin, PluginSettingTab, SecretComponent, SettingDefinitionItem } from 'obsidian';
 import { IDLE_ANIMATIONS } from './animations';
-import { GRADIENTS } from './topics';
 import { LAYOUT_STYLES } from './layout';
 
 export type CitationLanguage = 'en' | 'fr';
@@ -42,16 +41,14 @@ export interface LiteratureGraphSettings {
 	graphColorGroups: string;
 	/** How the works are colored: "groups" (color groups) or "topic" (OpenAlex topics, see `topics.ts`). */
 	graphColorBy: string;
-	/** Gradient of the topic colors: a key of GRADIENTS, or "custom". */
-	graphTopicGradient: string;
-	/** Colors of the custom gradient, separated by commas (any CSS colors). */
-	graphTopicColors: string;
 	/** Style of layout of the graph: "default" or "atom". */
 	graphLayout: string;
 	/** Color of the works outside the vault (any CSS color); empty: from the theme. */
 	graphOutsideColor: string;
 	/** Color of the citations of a hovered work by others (any CSS color); empty: the theme's orange. */
 	graphIncomingColor: string;
+	/** Whether an animation plays after a while without input. */
+	graphIdleEnabled: boolean;
 	/** Animation after a while without input: a key of IDLE_ANIMATIONS. */
 	graphIdleAnimation: string;
 	/** Seconds without any input before the idle animation starts. */
@@ -94,11 +91,10 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphCenter: 0.02,
 	graphColorGroups: '',
 	graphColorBy: 'groups',
-	graphTopicGradient: 'spectrum',
-	graphTopicColors: '',
 	graphLayout: 'default',
 	graphOutsideColor: '',
 	graphIncomingColor: '',
+	graphIdleEnabled: true,
 	graphIdleAnimation: 'sphere',
 	graphIdleDelay: 10,
 	graphRotationSpeed: 5,
@@ -246,18 +242,8 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Color by',
-						desc: 'Color groups (below), or topic: each work takes the color of its topics on OpenAlex (a mix for several), along a gradient where related topics have related colors. Works OpenAlex does not know take the colors of the notes sharing their links. Also chosen in the graph\'s panel.',
+						desc: 'Color groups (below), or topic: each work takes a color from its topics on OpenAlex, all around the color wheel; the more two works differ, compared with all the works of the graph, the further apart their hues. Works OpenAlex does not know take the colors of the notes sharing their links. Also chosen in the graph\'s panel.',
 						control: { type: 'dropdown', key: 'graphColorBy', options: { groups: 'Color groups', topic: 'Topic' } },
-					},
-					{
-						name: 'Topic gradient',
-						desc: 'The colors of the topics, from one end of the research landscape (humanities, health, life sciences) to the other (environment, physical sciences, mathematics).',
-						control: { type: 'dropdown', key: 'graphTopicGradient', options: { ...Object.fromEntries(Object.entries(GRADIENTS).map(([k, g]) => [k, g.name])), custom: 'Custom' } },
-					},
-					{
-						name: 'Custom gradient',
-						desc: 'For the custom gradient: two colors or more, separated by commas (any CSS colors: #1a2a6c, rgb(…), teal).',
-						control: { type: 'text', key: 'graphTopicColors', placeholder: '#1a2a6c, #b21f1f, #fdbb2d' },
 					},
 					{
 						name: 'Color groups',
@@ -279,13 +265,18 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'text', key: 'graphIncomingColor', placeholder: 'Theme orange' },
 					},
 					{
+						name: 'Idle animations',
+						desc: 'Turn the graph into an animation after a while without touching Obsidian (mouse or keyboard); a click in the graph brings the flat graph back. Never when your system asks for reduced motion.',
+						control: { type: 'toggle', key: 'graphIdleEnabled' },
+					},
+					{
 						name: 'Idle animation',
-						desc: 'After a while without touching Obsidian (mouse or keyboard), the graph turns into an animation: a rotating sphere, works drifting freely, orbits, a wave, a braid... A click in the graph brings the flat graph back. Also chosen in the graph\'s panel. Never when your system asks for reduced motion.',
+						desc: 'Which animation: a rotating sphere, works drifting freely, orbits, a wave, a braid... Also chosen in the graph\'s display panel.',
 						control: { type: 'dropdown', key: 'graphIdleAnimation', options: { ...IDLE_ANIMATIONS } },
 					},
 					{
 						name: 'Idle delay',
-						desc: 'Seconds without any input before the idle animation starts.',
+						desc: 'When idle animations are on: seconds without any input before the animation starts (3 at least).',
 						control: { type: 'number', key: 'graphIdleDelay', min: 3 },
 					},
 					{
