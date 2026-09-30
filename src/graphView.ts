@@ -1,4 +1,4 @@
-import { debounce, ItemView, Keymap, MarkdownView, Setting, SliderComponent, TFile, ViewStateResult, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
+import { debounce, ItemView, Keymap, MarkdownView, Notice, Setting, SliderComponent, TFile, ViewStateResult, WorkspaceLeaf, setIcon, setTooltip } from 'obsidian';
 import { Application, Container, Graphics, Mesh, MeshGeometry, Sprite, Text, Texture } from 'pixi.js';
 import { approach, Camera, clampScale, fitCamera } from './camera';
 import type { CitationIndex } from './citationIndex';
@@ -325,6 +325,8 @@ export class LiteratureGraphView extends ItemView {
 	private suggestionsEl: HTMLElement | null = null;
 	/** How many suggestions the list shows; "Show more" adds SUGGESTIONS_PAGE. */
 	private suggestionsShown = SUGGESTIONS_PAGE;
+	/** The list shows all works outside the vault, or only those OpenAlex does not know. */
+	private suggestionsMissing = false;
 	/** The graph shown now (the local part of it, in local mode). */
 	private shownGraph: LiteratureGraph | null = null;
 	private summary = '';
@@ -1231,18 +1233,39 @@ export class LiteratureGraphView extends ItemView {
 		const close = header.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': 'Close' } });
 		setIcon(close, 'x');
 		close.addEventListener('click', () => this.toggleSuggestions(false));
+		const tabs = list.createDiv({ cls: 'literature-graph-suggestions-tabs' });
+		for (const [missing, name] of [
+			[false, 'All works'],
+			[true, 'Not on OpenAlex'],
+		] as const) {
+			const tab = tabs.createDiv({ cls: 'literature-graph-suggestions-tab', text: name });
+			tab.toggleClass('is-active', this.suggestionsMissing === missing);
+			tab.addEventListener('click', () => {
+				this.suggestionsMissing = missing;
+				this.suggestionsShown = SUGGESTIONS_PAGE;
+				list.scrollTop = 0;
+				this.renderSuggestions();
+			});
+		}
 		const graph = this.shownGraph;
-		const ranked = graph ? rankSuggestions(graph, cachedInfo(this.openAlex)) : [];
+		const all = graph ? rankSuggestions(graph, cachedInfo(this.openAlex)) : [];
+		// Works OpenAlex does not know: known only from a reference list (or by a
+		// DOI it does not have), to be found by hand.
+		const ranked = this.suggestionsMissing ? all.filter((s) => s.node.openAlexId === null) : all;
 		if (ranked.length === 0) {
 			list.createDiv({
 				cls: 'literature-graph-suggestions-empty',
-				text: 'No works outside your vault in this graph. Show generation 1 or 2 in the graph settings.',
+				text: this.suggestionsMissing
+					? 'Every work outside your vault in this graph is on OpenAlex.'
+					: 'No works outside your vault in this graph. Show generation 1 or 2 in the graph settings.',
 			});
 			return;
 		}
 		list.createDiv({
 			cls: 'literature-graph-suggestions-desc',
-			text: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
+			text: this.suggestionsMissing
+				? `${ranked.length} works cited in your notes that OpenAlex does not know, most relevant first, with their reference as written in your notes, to find them by hand.`
+				: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
 		});
 		const byId = new Map(this.nodes.map((n) => [n.data.id, n]));
 		ranked.slice(0, this.suggestionsShown).forEach((suggestion, i) => {
@@ -1252,7 +1275,15 @@ export class LiteratureGraphView extends ItemView {
 			row.createSpan({ cls: 'literature-graph-suggestion-rank', text: `${i + 1}` });
 			const text = row.createDiv({ cls: 'literature-graph-suggestion-text' });
 			text.createDiv({ cls: 'literature-graph-suggestion-label', text: suggestion.node.label });
-			if (suggestion.node.title) text.createDiv({ cls: 'literature-graph-suggestion-title', text: suggestion.node.title });
+			// (Without the emphasis marks of the converted notes: "*Title*", "**17:**".)
+			const reference =
+				suggestion.node.entry?.text.replace(/\*+/g, '') ?? (suggestion.node.doi ? `https://doi.org/${suggestion.node.doi}` : '');
+			if (this.suggestionsMissing && reference) {
+				text.createDiv({ cls: 'literature-graph-suggestion-reference', text: reference });
+				this.buildMissingActions(text, reference, suggestion.node.title || reference);
+			} else if (suggestion.node.title) {
+				text.createDiv({ cls: 'literature-graph-suggestion-title', text: suggestion.node.title });
+			}
 			row.createSpan({ cls: 'literature-graph-suggestion-score', text: suggestion.score.toFixed(1) });
 			setTooltip(row, [`Score ${suggestion.score}`, ...explainSuggestion(suggestion)].join('\n'), { placement: 'right' });
 			row.addEventListener('mouseenter', () => this.setHovered(node));
@@ -1269,6 +1300,26 @@ export class LiteratureGraphView extends ItemView {
 			});
 		}
 		list.scrollTop = scroll;
+	}
+
+	/** Buttons of a work OpenAlex does not know: copy its reference, or search for it on the web. */
+	private buildMissingActions(parent: HTMLElement, reference: string, query: string): void {
+		const actions = parent.createDiv({ cls: 'literature-graph-suggestion-actions' });
+		const action = (icon: string, label: string, run: () => void) => {
+			const button = actions.createDiv({ cls: 'clickable-icon', attr: { 'aria-label': label } });
+			setIcon(button, icon);
+			button.addEventListener('click', (e) => {
+				// Not the row's click, which opens the ghost note.
+				e.stopPropagation();
+				run();
+			});
+		};
+		action('copy', 'Copy the reference', () => {
+			void navigator.clipboard.writeText(reference).then(() => new Notice('Reference copied.'));
+		});
+		action('search', 'Search for it on Google Scholar', () => {
+			window.open(`https://scholar.google.com/scholar?q=${encodeURIComponent(query)}`);
+		});
 	}
 
 	/** The panel of the view, like the controls of Obsidian's graph view. */

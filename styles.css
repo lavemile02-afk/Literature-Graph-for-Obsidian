@@ -315,6 +315,43 @@
 	text-overflow: ellipsis;
 }
 
+/* Tabs of the list: all works, or those OpenAlex does not know. */
+.literature-graph-suggestions-tabs {
+	display: flex;
+	gap: var(--size-2-2);
+	margin-bottom: var(--size-4-2);
+}
+
+.literature-graph-suggestions-tab {
+	padding: var(--size-2-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.literature-graph-suggestions-tab:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.literature-graph-suggestions-tab.is-active {
+	background-color: var(--background-modifier-active-hover);
+	color: var(--text-normal);
+}
+
+/* The whole reference of a work OpenAlex does not know, to find it by hand. */
+.literature-graph-suggestion-reference {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	user-select: text;
+}
+
+.literature-graph-suggestion-actions {
+	display: flex;
+	gap: var(--size-2-1);
+	margin-top: var(--size-2-1);
+}
+
 .literature-graph-suggestion-score {
 	color: var(--text-accent);
 	font-variant-numeric: tabular-nums;
