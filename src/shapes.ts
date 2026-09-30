@@ -16,6 +16,7 @@
  * the layout's web worker.
  */
 import { forceCollide, forceLink, forceManyBody, forceRadial, forceSimulation, forceX, forceY, Simulation } from 'd3-force';
+import { collideRadius, repelFor } from './layout';
 import type { Forces, LayoutLink, LayoutNode } from './layout';
 
 type Sim = Simulation<LayoutNode, LayoutLink>;
@@ -36,8 +37,8 @@ function countDegrees(nodes: LayoutNode[], links: LayoutLink[]): void {
 
 const ends = (l: LayoutLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
 const weakestDegree = (l: LayoutLink) => Math.max(1, Math.min(ends(l)[0].degree ?? 1, ends(l)[1].degree ?? 1));
-const repel = (forces: Forces, share: number) => (n: LayoutNode) => -forces.repel * share * Math.min(4, 0.35 + n.radius / 6);
-const collide = () => forceCollide<LayoutNode>((n) => n.radius + 2).strength(0.7);
+const repel = (forces: Forces, share: number) => repelFor(forces, share);
+const collide = () => forceCollide<LayoutNode>(collideRadius).strength(0.7);
 
 // ----- Chronological -----
 
@@ -103,7 +104,7 @@ export function createChronologicalSimulation(nodes: LayoutNode[], links: Layout
 		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 0.5)))
 		.force('x', forceX<LayoutNode>(target).strength(0.6))
 		.force('y', forceY<LayoutNode>(0).strength(Math.max(0.01, forces.center)))
-		.force('collide', forceCollide<LayoutNode>((n) => n.radius * CHRONOLOGICAL_POINT_SCALE + 2).strength(0.7))
+		.force('collide', forceCollide<LayoutNode>((n) => collideRadius(n) * CHRONOLOGICAL_POINT_SCALE).strength(0.7))
 		.stop();
 }
 

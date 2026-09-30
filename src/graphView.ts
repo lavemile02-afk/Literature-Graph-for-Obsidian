@@ -839,7 +839,7 @@ export class LiteratureGraphView extends ItemView {
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
-			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius, year: plausibleYear(this.years[n.index]), anchor: anchors?.[n.index] ?? null })),
+			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius * this.pointSize(), year: plausibleYear(this.years[n.index]), anchor: anchors?.[n.index] ?? null })),
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
 			// From saved places, a short settling (about 2 to 4 s) is enough.
@@ -1718,6 +1718,14 @@ export class LiteratureGraphView extends ItemView {
 		this.buildDisplay(display, () => setOpen(null));
 
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
+		const relayoutSoon = debounce(
+			() => {
+				this.showCurrent();
+				this.layout?.send({ type: 'reheat', alpha: 0.6 });
+			},
+			500,
+			true,
+		);
 		new Setting(body).setName('Filter').addSearch((search) =>
 			search.setPlaceholder('Author, year or title').onChange((value) => {
 				this.filter = value.trim().toLowerCase();
@@ -1856,6 +1864,8 @@ export class LiteratureGraphView extends ItemView {
 						this.invalidate();
 						this.requestFrame();
 						void this.saveSettings({ graphPointScale: value });
+						// The spacing follows the size: the layout starts again, from where the works are.
+						relayoutSoon();
 					});
 				this.syncControls.push(() => {
 					slider.setValue(Number(this.settings().graphPointScale) || 1);
@@ -2332,8 +2342,12 @@ export class LiteratureGraphView extends ItemView {
 	 * seen from far, and times the "Point size" chosen in the panel.
 	 */
 	private drawnRadius(node: SimNode): number {
-		const size = Math.min(3, Math.max(0.25, Number(this.settings().graphPointScale) || 1));
-		return (this.layoutStyle === 'chronological' ? node.radius * CHRONOLOGICAL_POINT_SCALE : node.radius) * size;
+		return (this.layoutStyle === 'chronological' ? node.radius * CHRONOLOGICAL_POINT_SCALE : node.radius) * this.pointSize();
+	}
+
+	/** The "Point size" chosen (0.25 to 3). */
+	private pointSize(): number {
+		return Math.min(3, Math.max(0.25, Number(this.settings().graphPointScale) || 1));
 	}
 
 	/**

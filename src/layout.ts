@@ -158,8 +158,21 @@ const linkStrength = (l: LayoutLink) => {
 	return (l.inVault ? 1 : 0.7) / Math.max(1, Math.min(s.degree ?? 1, t.degree ?? 1));
 };
 
-/** Repulsion, larger for larger (more cited) works, which then get room around them. */
-const repel = (forces: Forces) => (n: LayoutNode) => -forces.repel * Math.min(4, 0.35 + n.radius / 6);
+/** Radius of a small work (outside the vault, rarely cited): the unit of the spacing. */
+export const REFERENCE_RADIUS = 4;
+
+/**
+ * Repulsion in proportion to a work's radius, so the space between works
+ * grows with their size: doubling the points doubles the room around them
+ * (a request of the user), and larger (more cited) works get more room.
+ */
+export const repelFor = (forces: Forces, share = 1) => (n: LayoutNode) =>
+	-forces.repel * share * Math.min(12, 1.36 * (n.radius / REFERENCE_RADIUS));
+
+/** Works never overlap: a gap in proportion to their size. */
+export const collideRadius = (n: LayoutNode) => n.radius * 1.25 + 1;
+
+const repel = (forces: Forces) => repelFor(forces);
 
 /**
  * A stopped simulation of the graph; `tick` advances it.
@@ -186,7 +199,7 @@ export function createSimulation(
 		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces)))
 		.force('x', forceX<LayoutNode>(0).strength(forces.center))
 		.force('y', forceY<LayoutNode>(0).strength(forces.center))
-		.force('collide', forceCollide<LayoutNode>((n) => n.radius + 2).strength(0.7))
+		.force('collide', forceCollide<LayoutNode>(collideRadius).strength(0.7))
 		.stop();
 }
 
