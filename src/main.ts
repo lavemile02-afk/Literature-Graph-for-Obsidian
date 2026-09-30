@@ -7,7 +7,7 @@ import { CITATIONS_VIEW, CitationsView } from './panel';
 import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
 import { writeSuggestionsFile } from './suggestionsFile';
-import { writeTopicsToNotes } from './topicNotes';
+import { writeKeywordsToNotes } from './keywordNotes';
 import { WORK_VIEW, WorkView } from './workView';
 import { DEFAULT_SETTINGS, LiteratureGraphSettings, LiteratureGraphSettingTab } from './settings';
 
@@ -91,29 +91,29 @@ export default class LiteratureGraphPlugin extends Plugin {
 			callback: () => void this.exportReadingSuggestions(),
 		});
 		this.addCommand({
-			id: 'write-topics-to-notes',
-			name: 'Write topics to notes',
-			callback: () => void this.writeTopics(),
+			id: 'write-keywords-to-notes',
+			name: 'Write keywords to notes',
+			callback: () => void this.writeKeywords(),
 		});
 	}
 
 	/**
-	 * Writes OpenAlex's topics into the topics property of the literature notes
-	 * where it is empty; topics already there (maybe edited) are kept.
+	 * Writes OpenAlex's keywords into the keywords property of the literature
+	 * notes where it is empty; keywords already there (maybe edited) are kept.
 	 */
-	async writeTopics() {
-		const notice = new Notice('Topics: starting…', 0);
+	async writeKeywords() {
+		const notice = new Notice('Keywords: starting…', 0);
 		try {
 			await this.indexReady;
-			const { written, kept, none } = await writeTopicsToNotes(this.app, this.index, this.openAlex, this.settings, (message) =>
-				notice.setMessage(`Topics: ${message}`),
+			const { written, kept, none } = await writeKeywordsToNotes(this.app, this.index, this.openAlex, this.settings, (message) =>
+				notice.setMessage(`Keywords: ${message}`),
 			);
 			notice.hide();
-			new Notice(`Topics written to ${written} notes; ${kept} already had topics (kept as they are); ${none} have none on OpenAlex.`);
+			new Notice(`Keywords written to ${written} notes; ${kept} already had keywords (kept as they are); ${none} have none on OpenAlex.`);
 			this.onSettingsChanged();
 		} catch (error) {
 			notice.hide();
-			new Notice(`The topics could not be written: ${error instanceof Error ? error.message : String(error)}`);
+			new Notice(`The keywords could not be written: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 

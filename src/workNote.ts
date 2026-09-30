@@ -34,6 +34,8 @@ export interface WorkValues {
 	abstract: string;
 	/** Its topics on OpenAlex, most relevant first (a list property; empty when unknown). */
 	topics: string[];
+	/** Its keywords on OpenAlex, most relevant first (a list property; empty when unknown). */
+	keywords: string[];
 	/** Name for the note's file: the in-text citation without parentheses. */
 	fileName: string;
 }
@@ -140,6 +142,7 @@ export function valuesFromDetails(work: WorkDetails, language: Language): WorkVa
 		language: work.language ?? '',
 		abstract: work.abstract ?? '',
 		topics: [],
+		keywords: [],
 		fileName: fileNameOf(citationText),
 	};
 }
@@ -167,6 +170,7 @@ export function valuesFromEntry(entry: { text: string; title: string; label: str
 		language: '',
 		abstract: '',
 		topics: [],
+		keywords: [],
 		fileName: fileNameOf(`(${entry.label})`),
 	};
 }
@@ -222,7 +226,7 @@ export function fillTemplate(template: string, values: WorkValues): string {
 }
 
 /** The default template, with the property names of the settings. */
-export function defaultTemplate(names: { title: string; citationText: string; authors: string; year: string; doi: string; topics: string }): string {
+export function defaultTemplate(names: { title: string; citationText: string; authors: string; year: string; doi: string; keywords: string }): string {
 	return [
 		'---',
 		`${names.title}: "{{title}}"`,
@@ -234,7 +238,7 @@ export function defaultTemplate(names: { title: string; citationText: string; au
 		'journal: "{{journal}}"',
 		`${names.doi}: "{{doi}}"`,
 		'url: "{{url}}"',
-		`${names.topics}: {{topics}}`,
+		`${names.keywords}: {{keywords}}`,
 		'---',
 		'',
 		'{{abstract}}',

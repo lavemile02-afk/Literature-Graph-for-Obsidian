@@ -21,8 +21,8 @@ export interface LiteratureGraphSettings {
 	useNoteNameAsCitation: boolean;
 	/** Property holding a work's DOI, used to recognize works cited by DOI. */
 	doiProperty: string;
-	/** Property of a literature note that lists its topics (written by "Write topics to notes", editable by the user). */
-	topicsProperty: string;
+	/** Property of a literature note that lists its keywords (written by "Write keywords to notes", editable by the user). */
+	keywordsProperty: string;
 	/** Look up bibliographic data on OpenAlex (network access). */
 	openAlexEnabled: boolean;
 	/** Contact email sent to OpenAlex (its "polite pool"); empty by default. */
@@ -87,7 +87,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	titleProperty: 'Titre',
 	useNoteNameAsCitation: false,
 	doiProperty: 'DOI',
-	topicsProperty: 'topics',
+	keywordsProperty: 'keywords',
 	openAlexEnabled: true,
 	openAlexEmail: '',
 	openAlexKeySecret: '',
@@ -191,9 +191,9 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
 					},
 					{
-						name: 'Topics property',
-						desc: 'Property that lists the topics of a work. The command "Write topics to notes" fills it from OpenAlex where it is empty; you can edit it (OpenAlex topic names or your own keywords), and the graph then uses your topics instead of OpenAlex\'s, for colors and the Topics layout.',
-						control: { type: 'text', key: 'topicsProperty', placeholder: 'topics' },
+						name: 'Keywords property',
+						desc: 'Property that lists the keywords of a work. The command "Write keywords to notes" fills it from OpenAlex where it is empty; you can edit it freely, and your keywords count in the work\'s meaning, for colors and the Meaning layout.',
+						control: { type: 'text', key: 'keywordsProperty', placeholder: 'keywords' },
 					},
 				],
 			},

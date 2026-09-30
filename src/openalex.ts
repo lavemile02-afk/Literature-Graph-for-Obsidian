@@ -13,7 +13,7 @@ const API = 'https://api.openalex.org';
 const MIN_INTERVAL_MS = 110;
 /** Ids or DOIs per request (OpenAlex accepts up to 50 values in a filter). */
 const BATCH_SIZE = 50;
-const SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,referenced_works,cited_by_count,topics';
+const SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,referenced_works,cited_by_count,topics,keywords';
 const CACHE_VERSION = 1;
 
 /** What the plugin keeps about a work. */
@@ -31,6 +31,8 @@ export interface WorkSummary {
 	citedByCount: number;
 	/** Its topics (see `topics.ts`), most relevant first; missing if fetched before topics were asked for. */
 	topics?: WorkTopics;
+	/** Its keywords on OpenAlex (name, score), most relevant first; missing if fetched before keywords were asked for. */
+	keywords?: [string, number][];
 }
 
 /**
@@ -77,6 +79,8 @@ interface CacheFile {
 	citedBy?: Record<string, { total: number; ids: string[] }>;
 	/** Topic id ("T12091") → its place in OpenAlex's hierarchy. */
 	topics?: Record<string, TopicInfo>;
+	/** Work id → its abstract (for its vector of meaning; "" when OpenAlex has none). */
+	abstracts?: Record<string, string>;
 }
 
 /** Works citing a work: the most cited ones first, with the total count. */
@@ -95,7 +99,17 @@ interface RawWork {
 	referenced_works?: string[];
 	cited_by_count?: number;
 	topics?: RawTopic[];
+	keywords?: RawKeyword[];
 }
+
+interface RawKeyword {
+	display_name?: string;
+	score?: number;
+}
+
+/** A work's keywords, as kept: (name, score), most relevant first. */
+const keywordsOf = (raw: RawKeyword[] | undefined): [string, number][] =>
+	(raw ?? []).filter((k) => k.display_name).map((k): [string, number] => [k.display_name ?? '', k.score ?? 0]);
 
 interface RawTopic {
 	id?: string;
@@ -174,6 +188,7 @@ function summarize(raw: RawWork): WorkSummary {
 		references: (raw.referenced_works ?? []).map(shortId),
 		citedByCount: raw.cited_by_count ?? 0,
 		...(raw.topics ? { topics: raw.topics.filter((t) => t.id).map((t): [string, number] => [topicId(t.id), t.score ?? 0]) } : {}),
+		...(raw.keywords ? { keywords: keywordsOf(raw.keywords) } : {}),
 	};
 }
 
@@ -353,30 +368,24 @@ export class OpenAlexClient {
 		}
 	}
 
-	/** OpenAlex's topic of this name (any case), among the topics of the cached works. */
-	topicIdByName(name: string): string | undefined {
-		const topics = this.cache.topics ?? {};
-		if (!this.topicNames || this.topicNames.size !== Object.keys(topics).length) {
-			this.topicNames = new Map(Object.entries(topics).map(([id, t]) => [t.name.trim().toLowerCase(), id]));
-		}
-		return this.topicNames.get(name.trim().toLowerCase());
-	}
-	private topicNames: Map<string, string> | null = null;
-
 	/** A topic's place in OpenAlex's hierarchy, if a work with it was fetched. */
 	topicInfo(id: string): TopicInfo | undefined {
 		return this.cache.topics?.[id];
 	}
 
 	/**
-	 * Fetches the topics of cached works that do not have them yet (cached
-	 * before topics were asked for), in batches of 50: only what is missing.
+	 * Completes cached works with what later versions of the plugin ask
+	 * for: their topics and keywords, and, with `abstracts`, their abstracts
+	 * (for their vectors of meaning). Only what is missing is fetched, once,
+	 * in batches of 50; a work OpenAlex returns nothing for is not asked again.
 	 */
-	async loadTopics(ids: string[], onProgress?: (done: number, total: number) => void): Promise<void> {
+	async loadExtras(ids: string[], onProgress?: (done: number, total: number) => void, options: { abstracts?: boolean } = {}): Promise<void> {
 		await this.load();
+		const abstracts = (this.cache.abstracts ??= {});
 		const missing = [...new Set(ids)].filter((id) => {
 			const work = this.cache.works[id];
-			return work !== undefined && work.topics === undefined;
+			if (!work) return false;
+			return work.topics === undefined || work.keywords === undefined || (options.abstracts === true && !(id in abstracts));
 		});
 		if (missing.length === 0 || !this.options().enabled) return;
 		await this.tryFetch(async () => {
@@ -386,22 +395,33 @@ export class OpenAlexClient {
 				const data = (await this.request('/works', {
 					filter: `openalex_id:${batch.join('|')}`,
 					'per-page': String(BATCH_SIZE),
-					select: 'id,topics',
-				})) as { results?: { id?: string; topics?: RawTopic[] }[] } | null;
+					select: `id,topics,keywords${options.abstracts ? ',abstract_inverted_index' : ''}`,
+				})) as { results?: { id?: string; topics?: RawTopic[]; keywords?: RawKeyword[]; abstract_inverted_index?: Record<string, number[]> | null }[] } | null;
 				for (const raw of data?.results ?? []) {
 					this.keepTopics(raw);
-					const work = this.cache.works[shortId(raw.id ?? '')];
-					if (work) work.topics = (raw.topics ?? []).filter((t) => t.id).map((t): [string, number] => [topicId(t.id), t.score ?? 0]);
+					const id = shortId(raw.id ?? '');
+					const work = this.cache.works[id];
+					if (!work) continue;
+					work.topics = (raw.topics ?? []).filter((t) => t.id).map((t): [string, number] => [topicId(t.id), t.score ?? 0]);
+					work.keywords = keywordsOf(raw.keywords);
+					if (options.abstracts) abstracts[id] = abstractFromIndex(raw.abstract_inverted_index) ?? '';
 				}
-				// Works OpenAlex returned nothing for: no topics, not asked again.
 				for (const id of batch) {
 					const work = this.cache.works[id];
-					if (work && work.topics === undefined) work.topics = [];
+					if (!work) continue;
+					work.topics ??= [];
+					work.keywords ??= [];
+					if (options.abstracts && !(id in abstracts)) abstracts[id] = '';
 				}
 				this.scheduleSave();
 			}
 			onProgress?.(missing.length, missing.length);
 		});
+	}
+
+	/** A work's abstract, if it was fetched (see `loadExtras`). */
+	cachedAbstract(id: string): string | undefined {
+		return this.cache.abstracts?.[id];
 	}
 
 	/**

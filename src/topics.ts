@@ -44,31 +44,9 @@ const DOMAIN_OF_FIELD: Record<number, number> = {
  */
 const LEVEL_WEIGHTS = { domain: 2, field: 1.5, subfield: 1, topic: 0.7 };
 
-/**
- * A keyword the user wrote in a note's topics property that is not one of
- * OpenAlex's topics: a feature of its own, "kw:" + the keyword in lower case,
- * weighing as much as a field (notes sharing it draw together).
- */
-export const KEYWORD_PREFIX = 'kw:';
-const KEYWORD_WEIGHT = 1.5;
-
-/**
- * The topics of a work from the names written in its note (the user's word
- * wins over OpenAlex's): each name is OpenAlex's topic of that name if there
- * is one (with the score OpenAlex gave the work, if it did), otherwise a
- * keyword of its own.
- */
-export function topicsFromNames(names: string[], openAlexTopics: WorkTopics | undefined, idOfName: (name: string) => string | undefined): WorkTopics {
-	const scores = new Map(openAlexTopics ?? []);
-	return names.map((name): [string, number] => {
-		const id = idOfName(name);
-		return id ? [id, scores.get(id) ?? 1] : [KEYWORD_PREFIX + name.trim().toLowerCase(), 1];
-	});
-}
-
-/** The name to show for a topic id (OpenAlex's name, or the keyword itself). */
+/** The name to show for a topic id. */
 export function topicName(id: string, info: (id: string) => TopicInfo | undefined): string {
-	return id.startsWith(KEYWORD_PREFIX) ? id.slice(KEYWORD_PREFIX.length) : (info(id)?.name ?? id);
+	return info(id)?.name ?? id;
 }
 
 /** The number in an OpenAlex id ("fields/23" → 23), or NaN. */
@@ -84,10 +62,6 @@ export function topicVector(topics: WorkTopics | undefined, info: (id: string) =
 		if (feature) vector.set(feature, (vector.get(feature) ?? 0) + weight);
 	};
 	for (const [id, score] of topics ?? []) {
-		if (id.startsWith(KEYWORD_PREFIX)) {
-			add(id, KEYWORD_WEIGHT * score);
-			continue;
-		}
 		const place = info(id);
 		add(id, LEVEL_WEIGHTS.topic * score);
 		if (!place) continue;

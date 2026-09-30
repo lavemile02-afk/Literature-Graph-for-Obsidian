@@ -30,8 +30,8 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
-import { colorsFromSharedKeywords, mainTopics, meaningPlaces, topicColors, topicLegendColors, topicName, topicsFromNames, WorkTopics } from './topics';
-import { topicsInNote } from './topicNotes';
+import { colorsFromSharedKeywords, mainTopics, meaningPlaces, topicColors, topicLegendColors, topicName, WorkTopics } from './topics';
+import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import type { OpenAlexClient } from './openalex';
@@ -559,7 +559,7 @@ export class LiteratureGraphView extends ItemView {
 		this.registerEvent(
 			this.app.metadataCache.on('changed', (file) => {
 				if (!this.nodes.some((n) => n.data.file === file)) return;
-				const topics = topicsInNote(this.app, file, this.settings().topicsProperty.trim() || 'topics').join('\n');
+				const topics = keywordsInNote(this.app, file, keywordsProperty(this.settings())).join('\n');
 				const before = seenTopics.get(file.path);
 				seenTopics.set(file.path, topics);
 				// (First time a note is seen: only if it has topics, which may be new.)
@@ -920,16 +920,9 @@ export class LiteratureGraphView extends ItemView {
 	 * usual color. Topics missing from the cache are fetched once, then the
 	 * graph is colored again.
 	 */
-	/**
-	 * A work's topics: those written in its note's topics property if any (the
-	 * user's word wins), otherwise OpenAlex's.
-	 */
+	/** A work's topics on OpenAlex. */
 	private workTopics(node: SimNode): WorkTopics | undefined {
-		const fromOpenAlex = node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined;
-		const file = node.data.file;
-		if (!file) return fromOpenAlex;
-		const names = topicsInNote(this.app, file, this.settings().topicsProperty.trim() || 'topics');
-		return names.length > 0 ? topicsFromNames(names, fromOpenAlex, (name) => this.openAlex.topicIdByName(name)) : fromOpenAlex;
+		return node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined;
 	}
 
 	/** Places of the works for the topics layout: their place in the plane of meaning, scaled to the graph. */
@@ -952,7 +945,7 @@ export class LiteratureGraphView extends ItemView {
 		if (ids.length > 0 && this.topicsRequested !== this.shownGraph) {
 			this.topicsRequested = this.shownGraph;
 			void this.openAlex
-				.loadTopics(ids, (done, total) => this.setStatus(`${this.summary} · Loading the topics of the works: ${done} of ${total}…`))
+				.loadExtras(ids, (done, total) => this.setStatus(`${this.summary} · Loading the topics of the works: ${done} of ${total}…`))
 				.catch((error) => console.error('Literature Graph: OpenAlex request failed', error))
 				.finally(() => {
 					this.setStatus(this.summary);
