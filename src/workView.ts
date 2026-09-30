@@ -100,6 +100,11 @@ export class WorkView extends ItemView {
 			this.values = valuesFromDetails(details, language);
 			this.pdfUrl = details.pdfUrl;
 			this.openAccessUrl = details.openAccessUrl;
+			// Its topics, from the cache (fetched once if missing).
+			if (this.openAlex.cachedWork(details.id)?.topics === undefined) await this.openAlex.loadTopics([details.id]);
+			this.values.topics = (this.openAlex.cachedWork(details.id)?.topics ?? [])
+				.map(([topic]) => this.openAlex.topicInfo(topic)?.name ?? '')
+				.filter(Boolean);
 		}
 		const template =
 			s.noteTemplate.trim() ||
@@ -109,6 +114,7 @@ export class WorkView extends ItemView {
 				authors: s.authorsProperty || 'authors',
 				year: s.yearProperty || 'year',
 				doi: s.doiProperty || 'doi',
+				topics: s.topicsProperty.trim() || 'topics',
 			});
 		this.split(fillTemplate(template, this.values));
 		// The tab's title follows the work.

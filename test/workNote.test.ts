@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { WorkDetails } from '../src/openalex';
-import { fileNameOf, fillTemplate, initials, inTextCitation, referenceAuthors, splitName, valuesFromDetails } from '../src/workNote';
+import { fileNameOf, fillTemplate, initials, inTextCitation, referenceAuthors, splitName, valuesFromDetails, valuesFromEntry } from '../src/workNote';
 
 const robert: WorkDetails = {
 	id: 'W2097924327',
@@ -64,4 +64,12 @@ test('fills a template: quoted values, empty properties left empty, text replace
 
 test('makes a file name without the characters a file name cannot have', () => {
 	assert.equal(fileNameOf('(Smith: a/b, 2020)'), 'Smith ab, 2020');
+});
+
+test('writes the topics as a list property, or an empty property without topics', () => {
+	const values = valuesFromEntry({ text: 'Rochefort, L. (2000).', title: 'Sphagnum', label: 'Rochefort, 2000', year: '2000' });
+	const template = '---\nTopics: {{topics}}\ntags:\n  - litterature\n---\n';
+	assert.equal(fillTemplate(template, values), '---\nTopics:\ntags:\n  - litterature\n---\n');
+	values.topics = ['Peatlands and Wetlands Ecology', 'Soil "carbon"'];
+	assert.equal(fillTemplate(template, values), '---\nTopics:\n  - "Peatlands and Wetlands Ecology"\n  - "Soil \\"carbon\\""\ntags:\n  - litterature\n---\n');
 });

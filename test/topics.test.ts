@@ -123,7 +123,7 @@ test('reads the topics written in a note: OpenAlex names, and keywords of the us
 });
 
 test('places works on related topics near each other, far from other domains', () => {
-	const works: WorkTopics[] = [[['TP', 1]], [['TP', 1]], [['TM', 1]], [['TC', 1]], [['TD', 1]], undefined];
+	const works: (WorkTopics | undefined)[] = [[['TP', 1]], [['TP', 1]], [['TM', 1]], [['TC', 1]], [['TD', 1]], undefined];
 	const places = meaningPlaces(works, lookup);
 	assert.equal(places[5], null);
 	const d = (a: number, b: number) => Math.hypot(places[a]![0] - places[b]![0], places[a]![1] - places[b]![1]);

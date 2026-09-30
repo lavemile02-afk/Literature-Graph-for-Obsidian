@@ -32,6 +32,8 @@ export interface WorkValues {
 	url: string;
 	language: string;
 	abstract: string;
+	/** Its topics on OpenAlex, most relevant first (a list property; empty when unknown). */
+	topics: string[];
 	/** Name for the note's file: the in-text citation without parentheses. */
 	fileName: string;
 }
@@ -137,6 +139,7 @@ export function valuesFromDetails(work: WorkDetails, language: Language): WorkVa
 		url: work.doi ? '' : (work.openAccessUrl ?? work.pdfUrl ?? ''),
 		language: work.language ?? '',
 		abstract: work.abstract ?? '',
+		topics: [],
 		fileName: fileNameOf(citationText),
 	};
 }
@@ -163,6 +166,7 @@ export function valuesFromEntry(entry: { text: string; title: string; label: str
 		url: '',
 		language: '',
 		abstract: '',
+		topics: [],
 		fileName: fileNameOf(`(${entry.label})`),
 	};
 }
@@ -188,9 +192,10 @@ function yamlQuoted(value: string): string {
  * replaced as it is. Unknown names are left empty.
  */
 export function fillTemplate(template: string, values: WorkValues): string {
+	const raw = (name: string): unknown => (values as unknown as Record<string, unknown>)[name];
 	const value = (name: string) => {
-		const v = (values as unknown as Record<string, unknown>)[name];
-		return typeof v === 'string' ? v : '';
+		const v = raw(name);
+		return typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : '';
 	};
 	let inFrontmatter = false;
 	return template
@@ -202,6 +207,12 @@ export function fillTemplate(template: string, values: WorkValues): string {
 			}
 			const property = inFrontmatter ? /^(\s*[^:#]+:)\s*"?\{\{(\w+)\}\}"?\s*$/.exec(line) : null;
 			if (property) {
+				// A list (the topics): one item per line, or an empty property.
+				const list = raw(property[2] ?? '');
+				if (Array.isArray(list)) {
+					const items = list.map((item) => `  - "${yamlQuoted(String(item))}"`);
+					return [property[1] ?? '', ...items].join('\n');
+				}
 				const v = value(property[2] ?? '');
 				return v ? `${property[1]} "${yamlQuoted(v)}"` : (property[1] ?? '');
 			}
@@ -211,7 +222,7 @@ export function fillTemplate(template: string, values: WorkValues): string {
 }
 
 /** The default template, with the property names of the settings. */
-export function defaultTemplate(names: { title: string; citationText: string; authors: string; year: string; doi: string }): string {
+export function defaultTemplate(names: { title: string; citationText: string; authors: string; year: string; doi: string; topics: string }): string {
 	return [
 		'---',
 		`${names.title}: "{{title}}"`,
@@ -223,6 +234,7 @@ export function defaultTemplate(names: { title: string; citationText: string; au
 		'journal: "{{journal}}"',
 		`${names.doi}: "{{doi}}"`,
 		'url: "{{url}}"',
+		`${names.topics}: {{topics}}`,
 		'---',
 		'',
 		'{{abstract}}',
