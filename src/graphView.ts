@@ -9,7 +9,8 @@ import { collectQueryData } from './groupQueries';
 import { edgeIndices, VERTICES_PER_EDGE, writeEdge } from './edgeGeometry';
 import { LabelBox, placeLabels } from './labels';
 import { buildGraph, EdgeSource, GraphEdge, GraphNode, GraphOptions, LiteratureGraph } from './graphData';
-import { Forces, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
+import { Forces, isLayoutStyle, LAYOUT_STYLES, LayoutStyle, LayoutUpdate } from './layout';
+import { timelineWidth, unknownYearX, yearScale } from './shapes';
 import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { PositionStore } from './positions';
@@ -157,6 +158,9 @@ const SIGNALS = 40;
 const SIGNAL_RADIUS = 3;
 /** Works outside the vault colored by topic: darker than the vault's, but less than usual, to keep their hue. */
 const TOPIC_OUTSIDE_BLEND = 0.35;
+/** A year of publication that makes sense (the layouts ignore the others), or null. */
+const plausibleYear = (year: number | null | undefined): number | null =>
+	year !== null && year !== undefined && year > 1000 && year < 3000 ? year : null;
 /** Topics listed in the panel's legend when coloring by topic. */
 const TOPIC_LEGEND = 12;
 /** Share of the view the sphere fills. */
@@ -267,6 +271,8 @@ export class LiteratureGraphView extends ItemView {
 	private readonly focusOutEdges = new EdgeMesh();
 	private readonly focusInEdges = new EdgeMesh();
 	private readonly nodesLayer = new Container();
+	/** Chronological layout: the decades above the graph, and faint lines down through it. */
+	private readonly axisLayer = new Container();
 	/** Bright signals running along the citations (the constellation animation). */
 	private readonly signalsLayer = new Container();
 	private signalSprites: Sprite[] = [];
@@ -413,7 +419,7 @@ export class LiteratureGraphView extends ItemView {
 				openalex: s.graphEdgeOpenAlex !== false,
 			},
 		};
-		this.layoutStyle = s.graphLayout in LAYOUT_STYLES ? (s.graphLayout as LayoutStyle) : 'default';
+		this.layoutStyle = isLayoutStyle(s.graphLayout) ? s.graphLayout : 'default';
 		const number = (value: unknown, fallback: number) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 		this.forces = {
 			repel: number(s.graphRepel, 90),
@@ -501,6 +507,7 @@ export class LiteratureGraphView extends ItemView {
 		this.circleTexture = pixi.renderer.generateTexture({ target: circle, resolution: 2, antialias: true });
 		circle.destroy();
 		this.world.addChild(
+			this.axisLayer,
 			this.outsideEdges.mesh,
 			this.vaultEdges.mesh,
 			this.focusInEdges.mesh,
@@ -791,10 +798,13 @@ export class LiteratureGraphView extends ItemView {
 		for (const node of this.nodes) if (node.data.depth === 0) this.ensureLabel(node);
 		this.labelMatches();
 
+		// Years first: the chronological and circle layouts place the works by them.
+		this.readYears();
+		this.buildTimeAxis();
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
-			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius })),
+			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius, year: plausibleYear(this.years[n.index]) })),
 			links: this.links.map((l) => ({ source: l.source.index, target: l.target.index, inVault: !outside(l) })),
 			forces: this.forces,
 			// From saved places, a short settling (about 2 to 4 s) is enough.
@@ -811,7 +821,6 @@ export class LiteratureGraphView extends ItemView {
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
 		this.setStatus(this.summary);
-		this.readYears();
 		this.shownGraph = graph;
 		this.renderSuggestions();
 		this.invalidate();
@@ -1303,6 +1312,44 @@ export class LiteratureGraphView extends ItemView {
 		this.describeTimeline();
 	}
 
+	/**
+	 * The time axis of the chronological layout: a faint vertical line and a
+	 * label for each decade, at the place the layout gives its works (see
+	 * `yearScale`), then "?" for the works of unknown year. Built again with
+	 * each graph; hidden for the other styles.
+	 */
+	private buildTimeAxis(): void {
+		const layer = this.axisLayer;
+		for (const child of layer.removeChildren()) child.destroy();
+		layer.visible = this.layoutStyle === 'chronological';
+		const theme = this.theme;
+		if (!layer.visible || !theme) return;
+		const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
+		if (known.length === 0) return;
+		const width = timelineWidth(this.nodes.length);
+		const x = yearScale(this.years.map(plausibleYear), width);
+		const height = Math.max(800, width * 0.6);
+		const lines = new Graphics();
+		const first = Math.ceil(Math.min(...known) / 10) * 10;
+		const last = Math.max(...known);
+		let lastLabel = -Infinity;
+		const mark = (at: number, text: string) => {
+			lines.moveTo(at, -height / 2).lineTo(at, height / 2);
+			// Decades crowded by the scale: only labels far enough apart.
+			if (at - lastLabel < 70) return;
+			lastLabel = at;
+			const label = new Text({ text, style: { fontSize: 22, fill: theme.text.color, fontFamily: theme.fontFamily } });
+			label.anchor.set(0.5, 1);
+			label.alpha = 0.6;
+			label.position.set(at, -height / 2 - 8);
+			layer.addChild(label);
+		};
+		for (let decade = first; decade <= last; decade += 10) mark(x(decade), String(decade));
+		if (this.years.some((y) => plausibleYear(y) === null)) mark(unknownYearX(width), '?');
+		lines.stroke({ width: 1, color: theme.line.color, alpha: 0.35 });
+		layer.addChildAt(lines, 0);
+	}
+
 	/** Moves the year slider without it counting as the user's choice (which stops the timeline). */
 	private showYearOnSlider(year: number): void {
 		this.movingYearSlider = true;
@@ -1583,7 +1630,7 @@ export class LiteratureGraphView extends ItemView {
 			});
 		new Setting(body)
 			.setName('Layout')
-			.setDesc('Default graph, or atoms: each work of the vault at the center of a circle of the works it cites.')
+			.setDesc('Default graph; atoms (each work of the vault with a circle of the works it cites); chronological (by year, left to right); islands (communities of citations); layers (a ring per depth); circle (the vault on a circle by year, citations as chords).')
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOptions({ ...LAYOUT_STYLES })

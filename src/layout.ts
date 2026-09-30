@@ -23,12 +23,20 @@ import {
 	SimulationNodeDatum,
 } from 'd3-force';
 import { createAtomSimulation, setAtomSimulationForces } from './atomLayout';
+import {
+	createChronologicalSimulation,
+	createCircleSimulation,
+	createIslandsSimulation,
+	createLayersSimulation,
+} from './shapes';
 
 export interface LayoutNode extends SimulationNodeDatum {
 	depth: number;
 	radius: number;
 	/** Number of links of the node (set by `createSimulation`). */
 	degree?: number;
+	/** Year of publication, if known (the chronological and circle layouts). */
+	year?: number | null;
 }
 
 export interface LayoutLink extends SimulationLinkDatum<LayoutNode> {
@@ -45,14 +53,41 @@ export interface Forces {
 
 /**
  * Styles of layout: "default" (every work repelling the others, as in
- * Obsidian's graph view) or "atom" (each work of the vault a nucleus with a
- * circle of the works it cites, see `atoms.ts`). Others may be added.
+ * Obsidian's graph view), "atom" (each work of the vault a nucleus with a
+ * circle of the works it cites, see `atoms.ts`), and the shapes of
+ * `shapes.ts`: "chronological", "islands", "layers" and "circle".
  */
-export type LayoutStyle = 'default' | 'atom';
+export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	default: 'Default graph',
 	atom: 'Atom graph',
+	chronological: 'Chronological',
+	islands: 'Islands',
+	layers: 'Layers',
+	circle: 'Circle',
 };
+
+export function isLayoutStyle(value: unknown): value is LayoutStyle {
+	return typeof value === 'string' && value in LAYOUT_STYLES;
+}
+
+/** The simulation of a style of layout. */
+function createStyleSimulation(style: LayoutStyle, nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Simulation<LayoutNode, LayoutLink> {
+	switch (style) {
+		case 'atom':
+			return createAtomSimulation(nodes, links, forces);
+		case 'chronological':
+			return createChronologicalSimulation(nodes, links, forces);
+		case 'islands':
+			return createIslandsSimulation(nodes, links, forces);
+		case 'layers':
+			return createLayersSimulation(nodes, links, forces);
+		case 'circle':
+			return createCircleSimulation(nodes, links, forces);
+		default:
+			return createSimulation(nodes, links, forces);
+	}
+}
 
 /** Messages from the view to the layout. */
 export type LayoutMessage =
@@ -60,7 +95,7 @@ export type LayoutMessage =
 			type: 'start';
 			/** Number of this graph, sent back with its positions. */
 			graph: number;
-			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number }[];
+			nodes: { x?: number; y?: number; vx?: number; vy?: number; depth: number; radius: number; year?: number | null }[];
 			/** Indices into `nodes`. */
 			links: { source: number; target: number; inVault: boolean }[];
 			forces: Forces;
@@ -173,6 +208,8 @@ export class LayoutLoop {
 	private sim: Simulation<LayoutNode, LayoutLink> | null = null;
 	private style: LayoutStyle = 'default';
 	private nodes: LayoutNode[] = [];
+	/** The links of the graph, to build its simulation again when the forces of a shape change. */
+	private links: LayoutLink[] = [];
 	private graph = 0;
 	private timer: number | null = null;
 	private readonly dragged = new Set<number>();
@@ -187,21 +224,20 @@ export class LayoutLoop {
 			case 'start': {
 				this.graph = message.graph;
 				this.nodes = message.nodes.map((n) => ({ ...n }));
-				const links = message.links.map((l) => ({ ...l }));
+				this.links = message.links.map((l) => ({ ...l }));
 				this.dragged.clear();
 				this.style = message.style ?? 'default';
-				this.sim = (
-					this.style === 'atom'
-						? createAtomSimulation(this.nodes, links, message.forces)
-						: createSimulation(this.nodes, links, message.forces)
-				).alpha(message.alpha);
+				this.sim = createStyleSimulation(this.style, this.nodes, this.links, message.forces).alpha(message.alpha);
 				break;
 			}
 			case 'forces':
 				if (this.sim) {
+					const alpha = Math.max(this.sim.alpha(), 0.5);
 					if (this.style === 'atom') setAtomSimulationForces(this.sim, message.forces);
-					else setForces(this.sim, message.forces);
-					this.sim.alpha(Math.max(this.sim.alpha(), 0.5));
+					else if (this.style === 'default') setForces(this.sim, message.forces);
+					// The shapes: built again with the new forces, from where the works are.
+					else this.sim = createStyleSimulation(this.style, this.nodes, this.links, message.forces);
+					this.sim.alpha(alpha);
 				}
 				break;
 			case 'reheat':
