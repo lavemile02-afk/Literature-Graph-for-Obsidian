@@ -172,6 +172,8 @@ const MEANING_TEXT_LIMIT = 200_000;
 const MEANING_DIMENSIONS = 64;
 /** How many works nearest in meaning each work is drawn to, in the Meaning layout. */
 const MEANING_NEIGHBORS = 6;
+/** How visible the citation lines stay in the Meaning layout (1: as usual). */
+const MEANING_EDGE_FADE = 0.2;
 /** Topics listed in the panel's legend when coloring by topic. */
 const TOPIC_LEGEND = 12;
 /** Share of the view the sphere fills. */
@@ -1103,7 +1105,7 @@ export class LiteratureGraphView extends ItemView {
 
 	/** Places of the works for the Meaning layout: their place in the plane of meaning, scaled to the graph. */
 	private meaningAnchors(): ([number, number] | null)[] {
-		const scale = Math.max(300, 100 * Math.sqrt(this.nodes.length));
+		const scale = Math.max(300, 45 * Math.sqrt(this.nodes.length));
 		return this.nodes.map((n) => {
 			const place = this.meaningById.get(n.data.id);
 			return place ? [place[0] * scale, place[1] * scale] : null;
@@ -2388,8 +2390,10 @@ export class LiteratureGraphView extends ItemView {
 		// hovered work's arrows do not. Most idle animations fade them out too,
 		// so that every work moves freely.
 		const idleFade = this.idle.level > 0 && !keepsEdges(this.idle.animation) ? 1 - this.idle.level : 1;
-		// The chronological layout shows only the lines of the highlighted work (decision of the user).
-		const styleFade = this.layoutStyle === 'chronological' ? 0 : 1;
+		// The chronological layout shows only the lines of the highlighted work
+		// (decision of the user); the Meaning layout, a faint trace of them: its
+		// long lines across the clouds would otherwise veil their colors.
+		const styleFade = this.layoutStyle === 'chronological' ? 0 : this.layoutStyle === 'meaning' ? MEANING_EDGE_FADE : 1;
 		const zoomFade = idleFade * Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
 		this.vaultEdges.style(theme.line, styleFade * lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.outsideEdges.style(theme.line, styleFade * lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));

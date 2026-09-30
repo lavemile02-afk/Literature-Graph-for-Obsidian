@@ -382,9 +382,9 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 					return (0.6 * l.similarity * l.similarity) / count;
 				}),
 		)
-		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)))
-		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.06 : 0.005 + forces.center / 4)))
-		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.06 : 0.005 + forces.center / 4)))
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)).distanceMax(600))
+		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.08 : 0.005 + forces.center / 4)))
+		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.08 : 0.005 + forces.center / 4)))
 		.force('collide', collide())
 		.stop();
 	return sim;
