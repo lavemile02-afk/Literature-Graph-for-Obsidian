@@ -201,10 +201,10 @@ export class WorkView extends ItemView {
 				if (line.raw.trim()) table.createDiv({ cls: 'literature-graph-work-property-extra', text: line.raw });
 				return;
 			}
-			const row = table.createDiv({ cls: 'literature-graph-work-property' });
-			row.createDiv({ cls: 'literature-graph-work-property-key', text: line.key });
+			// Key and value go straight into the grid of the properties.
+			table.createDiv({ cls: 'literature-graph-work-property-key', text: line.key });
 			// A list property shows its items separated by commas.
-			const input = row.createEl('input', { type: 'text', value: line.list ? line.list.join(', ') : line.value });
+			const input = table.createEl('input', { type: 'text', value: line.list ? line.list.join(', ') : line.value });
 			input.addEventListener('input', () => {
 				if (line.list) {
 					line.list = input.value

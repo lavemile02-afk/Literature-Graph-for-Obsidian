@@ -2110,6 +2110,11 @@ export class LiteratureGraphView extends ItemView {
 			cls: 'setting-item-description',
 			text: 'These changes last while this view is open; defaults are in the plugin settings.',
 		});
+		// In these narrow panels, a setting with a description puts it above its
+		// controls (a class rather than a CSS :has, which is slow to match).
+		for (const item of [...body.querySelectorAll<HTMLElement>('.setting-item'), ...display.querySelectorAll<HTMLElement>('.setting-item')]) {
+			if (item.querySelector('.setting-item-description')?.textContent?.trim()) item.addClass('literature-graph-setting-stacked');
+		}
 	}
 
 	/**
