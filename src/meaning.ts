@@ -493,3 +493,72 @@ export function groupTargets(places: ([number, number] | null)[], groups: Meanin
 		return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 	});
 }
+
+/** Words that make poor names of groups, besides the stop words: German ones, and words of titles that say little. */
+const TITLE_STOP_WORDS = new Set('der die das und von mit fur ein eine den dem effect effects case review analysis approach approaches new evidence'.split(' '));
+
+/**
+ * The terms of a title that can name a group of meaning: its words, and its
+ * pairs of adjacent words (lower case, without accents, without stop words).
+ */
+export function titleTerms(title: string): string[] {
+	const keep = (w: string | undefined) => w !== undefined && !STOP_WORDS.has(w) && !TITLE_STOP_WORDS.has(w);
+	const terms: string[] = [];
+	// Pairs never span punctuation ("peatlands: water" is not a pair).
+	const plain = title.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+	for (const part of plain.split(/[,.:;!?()[\]"«»]|\s[-–—]\s/)) {
+		const words = part.match(/[a-z]{3,}/g) ?? [];
+		words.forEach((word, i) => {
+			if (!keep(word)) return;
+			terms.push(word);
+			const next = words[i + 1];
+			if (keep(next)) terms.push(`${word} ${next}`);
+		});
+	}
+	return terms;
+}
+
+/**
+ * A name for each group of meaning: the term most typical of the group
+ * (a keyword, or words of the titles, see `titleTerms`), frequent among its
+ * works and rare in the other groups (its share of the group's works times
+ * the share of its uses that are in the group; terms of two words or more
+ * count 2.5 times, as they say more), in at least `minWorks` works. No two
+ * groups get the same name; a group without any such term gets null.
+ */
+export function groupNames(keywords: string[][], group: number[], groupCount: number, minWorks = 5): (string | null)[] {
+	const sizes = Array.from({ length: groupCount }, () => 0);
+	const perGroup = new Map<string, number[]>();
+	const total = new Map<string, number>();
+	const display = new Map<string, string>();
+	keywords.forEach((words, i) => {
+		const g = group[i] ?? -1;
+		if (g < 0 || g >= groupCount) return;
+		sizes[g] = (sizes[g] ?? 0) + 1;
+		for (const word of new Set(words.map((w) => w.trim()).filter(Boolean))) {
+			const key = word.toLowerCase();
+			if (!display.has(key)) display.set(key, word);
+			const counts = perGroup.get(key) ?? Array.from({ length: groupCount }, () => 0);
+			counts[g] = (counts[g] ?? 0) + 1;
+			perGroup.set(key, counts);
+			total.set(key, (total.get(key) ?? 0) + 1);
+		}
+	});
+	const candidates: { g: number; key: string; score: number }[] = [];
+	for (const [key, counts] of perGroup) {
+		counts.forEach((c, g) => {
+			if (c < minWorks) return;
+			candidates.push({ g, key, score: (c / (sizes[g] || 1)) * (c / (total.get(key) ?? c)) * (key.includes(' ') ? 2.5 : 1) });
+		});
+	}
+	candidates.sort((a, b) => b.score - a.score || (a.key < b.key ? -1 : 1));
+	const names: (string | null)[] = Array.from({ length: groupCount }, () => null);
+	const used = new Set<string>();
+	for (const { g, key } of candidates) {
+		if (names[g] !== null || used.has(key)) continue;
+		const name = display.get(key) ?? key;
+		names[g] = name.charAt(0).toUpperCase() + name.slice(1);
+		used.add(key);
+	}
+	return names;
+}

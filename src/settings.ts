@@ -41,6 +41,8 @@ export interface LiteratureGraphSettings {
 	graphCenter: number;
 	/** How strongly works close in meaning draw together, in the Meaning layout. */
 	graphMeaningAttraction: number;
+	/** In the Meaning layout, circles and names around the groups of meaning. */
+	graphShowRegions: boolean;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
 	/** How the works are colored: "groups" (color groups) or "meaning" (their words, see `meaning.ts`). */
@@ -100,6 +102,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphLinkDistance: 60,
 	graphCenter: 0.02,
 	graphMeaningAttraction: 1,
+	graphShowRegions: false,
 	graphColorGroups: '',
 	graphColorBy: 'groups',
 	graphPointScale: 1,
@@ -268,6 +271,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Meaning attraction',
 						desc: 'Meaning layout: how strongly works close in meaning draw together (the closer in meaning, the stronger), times the usual strength. Can be changed in the graph for the time it stays open.',
 						control: { type: 'slider', key: 'graphMeaningAttraction', min: 0, max: 5, step: 0.1 },
+					},
+					{
+						name: 'Meaning regions',
+						desc: 'Meaning layout: a circle around each group of meaning, named by the keyword most typical of its works (from OpenAlex). Also in the graph\'s display panel.',
+						control: { type: 'toggle', key: 'graphShowRegions' },
 					},
 				],
 			},

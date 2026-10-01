@@ -32,7 +32,7 @@ import {
 	signals,
 } from './animations';
 import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
-import { ballCenters, fingerprint, fitPlane, groupTargets, meaningBasis, MeaningBasis, meaningGroups, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import { ballCenters, fingerprint, fitPlane, groupNames, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
@@ -290,6 +290,12 @@ export class LiteratureGraphView extends ItemView {
 	private readonly nodesLayer = new Container();
 	/** Chronological layout: the decades above the graph, and faint lines down through it. */
 	private readonly axisLayer = new Container();
+	/** The regions of the Meaning layout: a circle and a name around each group of meaning (behind the works). */
+	private readonly regionLayer = new Container();
+	/** The group of meaning of each work (by node index) and each group's circle and name; see `buildRegions`. */
+	private regions: { group: number[]; parts: { circle: Graphics; label: Text; color: number }[] } | null = null;
+	/** When the regions were last fitted to the works (they follow them a few times a second at most). */
+	private regionsPlacedAt = 0;
 	private axisParts: { top: Container; grid: Graphics; margin: number } | null = null;
 	/** Bright signals running along the citations (the constellation animation). */
 	private readonly signalsLayer = new Container();
@@ -549,6 +555,7 @@ export class LiteratureGraphView extends ItemView {
 		circle.destroy();
 		this.world.addChild(
 			this.axisLayer,
+			this.regionLayer,
 			this.outsideEdges.mesh,
 			this.vaultEdges.mesh,
 			this.focusInEdges.mesh,
@@ -1161,8 +1168,114 @@ export class LiteratureGraphView extends ItemView {
 		const groups = meaningGroups(places, Math.max(3, Math.min(MEANING_MAX_GROUPS, Math.round(Math.sqrt(placed) / 6))));
 		// Room for one work in a ball: a little more than its collision disc.
 		const radius = this.nodes.reduce((s, n) => s + n.radius * this.pointSize(), 0) / Math.max(1, this.nodes.length);
-		const { centers } = ballCenters(groups, (radius * 1.25 + 1) * 1.6);
-		return groupTargets(places, groups, centers, this.forces.meaning);
+		const balls = ballCenters(groups, (radius * 1.25 + 1) * 1.6);
+		this.buildRegions(groups, balls.radii);
+		return groupTargets(places, groups, balls.centers, this.forces.meaning);
+	}
+
+	/** The keywords of a work: its keywords property for a note of the vault, else its keywords on OpenAlex (cached). */
+	private workKeywords(node: SimNode): string[] {
+		const file = node.data.file;
+		if (file) {
+			const own = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
+			if (own.length > 0) return own;
+		}
+		const id = node.data.openAlexId ?? (node.data.doi ? this.openAlex.cachedIdForDoi(node.data.doi) : null);
+		return id ? (this.openAlex.cachedWork(id)?.keywords ?? []).map(([name]) => name) : [];
+	}
+
+	/** The color of a place in the plane of meaning, with the brightness and intensity of the settings. */
+	private placeColor(place: [number, number]): number {
+		const s = this.settings();
+		const lightness = Math.min(0.9, Math.max(0.15, this.topicLightness() + (Number(s.graphTopicBrightness) || 0) / 100));
+		const intensity = Math.max(0.1, (Number(s.graphTopicIntensity) || 100) / 100);
+		return colorOfPlace(place, lightness, intensity);
+	}
+
+	/**
+	 * The regions of the Meaning layout: for each group of meaning, a circle
+	 * of the group's color and its name, the keyword most typical of its works
+	 * (see `groupNames`), or else its most frequent OpenAlex topic. The names
+	 * are drawn in world units, so they grow and shrink with the zoom.
+	 */
+	private buildRegions(groups: MeaningGroups, radii: number[]): void {
+		const layer = this.regionLayer;
+		for (const child of layer.removeChildren()) child.destroy({ children: true });
+		this.regions = null;
+		const theme = this.theme;
+		if (!theme) return;
+		const count = groups.centers.length;
+		// Terms of each work: its keywords, and the words of its title.
+		const terms = this.nodes.map((n) => {
+			const id = n.data.openAlexId;
+			const title = (id ? this.openAlex.cachedWork(id)?.title : null) ?? n.data.title;
+			return [...this.workKeywords(n), ...titleTerms(title)];
+		});
+		const names = groupNames(terms, groups.group, count);
+		const info = (id: string) => this.openAlex.topicInfo(id);
+		const parts = groups.centers.map((center, g) => {
+			let name = names[g] ?? null;
+			if (!name) {
+				const topics = this.nodes.flatMap((n, i) => (groups.group[i] === g ? [this.workTopics(n)] : []));
+				const top = mainTopics(topics, 1)[0];
+				name = top ? topicName(top.id, info) : '';
+			}
+			const color = this.placeColor(center);
+			const circle = new Graphics();
+			const fontSize = Math.max(36, (radii[g] ?? 100) * 0.22);
+			const label = new Text({ text: name, style: { fontSize, fontWeight: '600', fill: color, fontFamily: theme.fontFamily } });
+			label.anchor.set(0.5, 1);
+			layer.addChild(circle, label);
+			return { circle, label, color };
+		});
+		this.regions = { group: groups.group, parts };
+		this.regionsPlacedAt = 0;
+	}
+
+	/**
+	 * Fits each region to its works where they are now: centered on them, and
+	 * wide enough for nine in ten of them (a few strays do not widen it). At
+	 * most four times a second; returns whether to come back (the works move).
+	 */
+	private placeRegions(now: number): boolean {
+		const regions = this.regions;
+		const shown = !!regions && this.layoutStyle === 'meaning' && this.settings().graphShowRegions === true;
+		this.regionLayer.visible = shown;
+		if (!shown || !regions) return false;
+		// Hidden during the idle animation, where the works are elsewhere for a while.
+		this.regionLayer.alpha = 1 - this.idle.level;
+		if (this.idle.level > 0) return false;
+		if (now - this.regionsPlacedAt < 250) return this.regionsPlacedAt > 0;
+		this.regionsPlacedAt = now;
+		const count = regions.parts.length;
+		const sums = Array.from({ length: count }, () => [0, 0, 0]);
+		this.nodes.forEach((n, i) => {
+			const s = sums[regions.group[i] ?? -1];
+			if (!s || n.x === undefined || n.y === undefined) return;
+			s[0] = (s[0] ?? 0) + n.x;
+			s[1] = (s[1] ?? 0) + n.y;
+			s[2] = (s[2] ?? 0) + 1;
+		});
+		const distances: number[][] = Array.from({ length: count }, () => []);
+		this.nodes.forEach((n, i) => {
+			const g = regions.group[i] ?? -1;
+			const s = sums[g];
+			if (!s || !s[2] || n.x === undefined || n.y === undefined) return;
+			distances[g]?.push(Math.hypot(n.x - (s[0] ?? 0) / s[2], n.y - (s[1] ?? 0) / s[2]));
+		});
+		regions.parts.forEach(({ circle, label, color }, g) => {
+			const s = sums[g] ?? [0, 0, 0];
+			const d = (distances[g] ?? []).sort((a, b) => a - b);
+			circle.clear();
+			label.visible = d.length > 0;
+			if (d.length === 0) return;
+			const cx = (s[0] ?? 0) / (s[2] || 1);
+			const cy = (s[1] ?? 0) / (s[2] || 1);
+			const r = (d[Math.floor(d.length * 0.9)] ?? d[d.length - 1] ?? 0) + label.style.fontSize * 0.3;
+			circle.circle(cx, cy, r).fill({ color, alpha: 0.05 }).stroke({ width: Math.max(2, r / 120), color, alpha: 0.45 });
+			label.position.set(cx, cy - r - label.style.fontSize * 0.15);
+		});
+		return true;
 	}
 
 	private applyTopicColors(): void {
@@ -2212,6 +2325,23 @@ export class LiteratureGraphView extends ItemView {
 					dropdown.setValue(this.layoutStyle);
 				});
 			});
+		// Only in the Meaning layout.
+		const regions = new Setting(body)
+			.setName('Regions')
+			.setDesc('A circle around each group of meaning, named by the keyword most typical of its works. Kept for every graph.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.settings().graphShowRegions === true).onChange((value) => {
+					void this.saveSettings({ graphShowRegions: value });
+					this.regionsPlacedAt = 0;
+					this.requestFrame();
+				});
+				this.syncControls.push(() => {
+					toggle.setValue(this.settings().graphShowRegions === true);
+				});
+			});
+		const showRegions = () => regions.settingEl.toggle(this.layoutStyle === 'meaning');
+		showRegions();
+		this.syncControls.push(showRegions);
 		new Setting(body).addButton((button) =>
 			button
 				.setButtonText('Reset layout')
@@ -2431,6 +2561,7 @@ export class LiteratureGraphView extends ItemView {
 
 		const saved = this.idle.level > 0 ? this.projectIdle(now) : null;
 		this.placeTimeAxis();
+		if (this.placeRegions(now)) again = true;
 		this.draw(theme);
 		this.drawSignals(now, theme);
 		if (saved) this.finishIdle(saved);

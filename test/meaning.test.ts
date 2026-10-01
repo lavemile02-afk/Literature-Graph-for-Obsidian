@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ballCenters, fitPlane, groupTargets, meaningGroups, lsa, meaningBasis, fingerprint, nearestInPlane, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
+import { ballCenters, fitPlane, groupNames, groupTargets, titleTerms, meaningGroups, lsa, meaningBasis, fingerprint, nearestInPlane, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
 
 test('keeps the words that say something, without accents or plurals', () => {
 	assert.deepEqual(tokenize('Les tourbières et la nappe phréatique des sphaignes'), ['tourbiere', 'nappe', 'phreatique', 'sphaigne']);
@@ -101,6 +101,26 @@ test('forms groups of meaning, gives each a ball, and draws works between groups
 	// The work midway goes midway.
 	const mid = targets[60] ?? [0, 0];
 	const middle = [((centers[0]?.[0] ?? 0) + (centers[1]?.[0] ?? 0)) / 2, ((centers[0]?.[1] ?? 0) + (centers[1]?.[1] ?? 0)) / 2];
-	assert.ok(Math.hypot(mid[0] - (middle[0] ?? 0), mid[1] - (middle[1] ?? 0)) < d * 0.2, `midway ${mid} vs ${middle}`);
+	assert.ok(Math.hypot(mid[0] - (middle[0] ?? 0), mid[1] - (middle[1] ?? 0)) < d * 0.2, `midway ${JSON.stringify(mid)} vs ${JSON.stringify(middle)}`);
 	assert.equal(targets[61], null);
+});
+
+test('names each group of meaning by its most typical keyword, never twice', () => {
+	const keywords = [
+		['Peatland restoration', 'Sphagnum'], ['Peatland restoration', 'Water table'], ['peatland restoration', 'Sphagnum'], ['Sphagnum'],
+		['Water table', 'Hydraulic conductivity'], ['Hydraulic conductivity', 'Water table'], ['Hydraulic conductivity'], ['Water table'],
+		['Memory'], [],
+	];
+	const group = [0, 0, 0, 0, 1, 1, 1, 1, 2, -1];
+	const names = groupNames(keywords, group, 3, 3);
+	assert.equal(names[0], 'Peatland restoration');
+	assert.equal(names[1], 'Hydraulic conductivity');
+	// Too few works with a keyword: no name.
+	assert.equal(names[2], null);
+	assert.notEqual(names[0], names[1]);
+});
+
+test('takes the words and the pairs of adjacent words of a title', () => {
+	assert.deepEqual(titleTerms('Restoration of the cutover peatlands: water table'), ['restoration', 'cutover', 'cutover peatlands', 'peatlands', 'water', 'water table', 'table']);
+	assert.deepEqual(titleTerms('Die Moore und der Torf'), ['moore', 'torf']);
 });
