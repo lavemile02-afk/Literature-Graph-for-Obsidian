@@ -32,7 +32,8 @@ import {
 	signals,
 } from './animations';
 import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
-import { fitPlane, meaningBasis, MeaningBasis, nearestNeighbors, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import { fingerprint, fitPlane, meaningBasis, MeaningBasis, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
@@ -437,6 +438,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly positions: PositionStore,
 		/** What was written in the ghost notes of the works outside the vault. */
 		private readonly ghosts: GhostNoteStore,
+		/** The places of the works in the plane of meaning, kept between openings. */
+		private readonly meaningCache: MeaningCache,
 	) {
 		super(leaf);
 		const s = settings();
@@ -951,15 +954,15 @@ export class LiteratureGraphView extends ItemView {
 		return node.data.openAlexId ? this.openAlex.cachedWork(node.data.openAlexId)?.topics : undefined;
 	}
 
-	/** Words of the notes of the vault, kept while a note does not change (reading a long note costs). */
-	private readonly noteWords = new Map<string, { mtime: number; words: string[] }>();
+	/** Words of the notes of the vault, and their fingerprint, kept while a note does not change (reading a long note costs). */
+	private readonly noteWords = new Map<string, { mtime: number; words: string[]; text: string }>();
 
-	/** What OpenAlex says of a work, as words: its title, topics, keywords and abstract (from the cache). */
-	private openAlexWords(id: string, title = ''): string[] {
+	/** What OpenAlex says of a work: its title, topics, keywords and abstract (from the cache). */
+	private openAlexText(id: string, title = ''): string {
 		const work = this.openAlex.cachedWork(id);
 		const topics = (work?.topics ?? []).map(([topic]) => this.openAlex.topicInfo(topic)?.name ?? '');
 		const keywords = (work?.keywords ?? []).map(([keyword]) => keyword);
-		return tokenize([work?.title ?? title, ...topics, ...keywords, this.openAlex.cachedAbstract(id) ?? ''].join('\n'));
+		return [work?.title ?? title, ...topics, ...keywords, this.openAlex.cachedAbstract(id) ?? ''].join('\n');
 	}
 
 	/**
@@ -979,16 +982,17 @@ export class LiteratureGraphView extends ItemView {
 		return [...cited].filter((id) => !own.has(id) && this.openAlex.cachedWork(id)).sort();
 	}
 
-	/** The words of a note of the vault: its title, keywords and whole text (without its other properties). */
-	private async fileWords(file: TFile): Promise<string[]> {
+	/** The words of a note of the vault (its title, keywords and whole text, without its other properties), and their fingerprint. */
+	private async noteText(file: TFile): Promise<{ words: string[]; text: string }> {
 		const cached = this.noteWords.get(file.path);
-		if (cached && cached.mtime === file.stat.mtime) return cached.words;
+		if (cached && cached.mtime === file.stat.mtime) return cached;
 		const text = (await this.app.vault.cachedRead(file)).slice(0, MEANING_TEXT_LIMIT);
 		const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '');
 		const keywords = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
 		const words = tokenize([this.index.vaultWork(file)?.title || file.basename, ...keywords, body].join('\n'));
-		this.noteWords.set(file.path, { mtime: file.stat.mtime, words });
-		return words;
+		const entry = { mtime: file.stat.mtime, words, text: fingerprint(words.join(' ')) };
+		this.noteWords.set(file.path, entry);
+		return entry;
 	}
 
 	/**
@@ -997,27 +1001,27 @@ export class LiteratureGraphView extends ItemView {
 	 * the works they cite (their texts from OpenAlex, without the ghost
 	 * notes), in a fixed order, whatever the graph shows. So a work keeps its
 	 * meaning, and its color, from one opening of the graph to the next, and
-	 * in every graph; it changes only when the notes of the vault change (or
-	 * cite new works).
+	 * in every graph; it changes only when the text of the notes of the vault
+	 * changes (or they cite new works). Learned only when a work's place is
+	 * not in the cache (see `meaningCache.ts`).
 	 */
-	private async meaningModel(pause: () => Promise<void>): Promise<{ vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null }> {
-		const files = this.app.vault
-			.getMarkdownFiles()
-			.filter((f) => this.index.isLiterature(f))
-			.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-		const cited = this.citedByVault(files);
-		try {
-			await this.openAlex.loadExtras(cited, undefined, { abstracts: true });
-		} catch (error) {
-			console.error('Literature Graph: OpenAlex request failed', error);
-		}
-		const key = [...files.map((f) => `${f.path}\t${f.stat.mtime}`), ...cited, keywordsProperty(this.settings())].join('\n');
+	private async meaningModel(
+		files: TFile[],
+		cited: string[],
+		key: string,
+		pause: () => Promise<void>,
+	): Promise<{ vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null }> {
 		if (this.meaningModelCache?.key === key) return this.meaningModelCache;
 		const words: string[][] = [];
-		for (const file of files) words.push(await this.fileWords(file));
-		for (const id of cited) words.push(this.openAlexWords(id));
+		for (const file of files) words.push((await this.noteText(file)).words);
+		for (let i = 0; i < cited.length; i++) {
+			words.push(tokenize(this.openAlexText(cited[i] ?? '')));
+			if (i % 500 === 499) await pause();
+		}
 		const vocabulary = vocabularyOf(words);
+		await pause();
 		const vectors = words.map((w) => vectorize(w, vocabulary));
+		await pause();
 		const basis = await meaningBasis(vectors, vocabulary.idf.length, MEANING_DIMENSIONS, pause);
 		const plane = fitPlane(vectors.map((v) => project(v, basis)));
 		this.meaningModelCache = { key, vocabulary, basis, plane };
@@ -1025,53 +1029,46 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
-	 * The words of a work, for its vector of meaning: its whole note (with its
-	 * title and keywords, without its other properties); or what OpenAlex says
-	 * of it: title, topics, keywords and abstract; or its reference. What was
-	 * written in the ghost note of a work outside the vault counts too.
+	 * The text of a work for its meaning, as a fingerprint (to know whether its
+	 * cached place still holds) and as words (read only if needed): its whole
+	 * note; or what OpenAlex says of it; or its reference. What was written in
+	 * the ghost note of a work outside the vault counts too.
 	 */
-	private async workWords(node: SimNode): Promise<string[]> {
+	private async workText(node: SimNode): Promise<{ text: string; words: () => string[] }> {
 		const file = node.data.file;
-		if (file) return this.fileWords(file);
-		const id = node.data.openAlexId;
-		if (id) {
-			const ghost = this.ghosts.get({ id, doi: node.data.doi }) ?? '';
-			return [...this.openAlexWords(id, node.data.title), ...tokenize(ghost)];
+		if (file) {
+			const note = await this.noteText(file);
+			return { text: note.text, words: () => note.words };
 		}
-		const ghost = this.ghosts.get({ doi: node.data.doi, entry: node.data.entry }) ?? '';
-		return tokenize(`${node.data.title} ${node.data.entry?.text ?? ''} ${ghost}`);
+		const id = node.data.openAlexId;
+		const ghost = id ? this.ghosts.get({ id, doi: node.data.doi }) : this.ghosts.get({ doi: node.data.doi, entry: node.data.entry });
+		const text = id
+			? `${this.openAlexText(id, node.data.title)}\n${ghost ?? ''}`
+			: `${node.data.title} ${node.data.entry?.text ?? ''} ${ghost ?? ''}`;
+		return { text: fingerprint(text), words: () => tokenize(text) };
 	}
 
 	/**
-	 * Computes the vectors of meaning of the works shown (see `meaning.ts`)
-	 * and their places in the plane of meaning, once per graph: fetches the
-	 * keywords and abstracts OpenAlex has for the works outside the vault
-	 * (once), reads the notes, then colors the works and places them (in the
-	 * Meaning layout).
+	 * Gives the works shown their places in the plane of meaning, once per set
+	 * of works: from the cache (`meaningCache.ts`) when their text and the
+	 * notes of the vault are the same as when it was computed, otherwise by
+	 * computing them (fetching first, once, the keywords and abstracts OpenAlex
+	 * has for the works outside the vault). Then colors the works and, in the
+	 * Meaning layout, finds each work's nearest works in the plane and places
+	 * them. The long loops pause now and then, so Obsidian stays responsive.
 	 */
 	private async computeMeaning(): Promise<void> {
 		const graph = this.shownGraph;
 		if (!graph) return;
+		const needKin = this.layoutStyle === 'meaning';
 		// By the works shown, not by the graph object: showing the same works
 		// again (the Meaning layout does, once the meaning is known) builds a
 		// new object, and must not start the computation again.
-		const works = this.nodes.map((n) => n.data.id).join('\n');
+		const works = `${this.nodes.map((n) => n.data.id).join('\n')}\n${needKin ? 'kin' : ''}`;
 		if (this.meaningFor === works) return;
 		this.meaningFor = works;
 		const run = ++this.meaningRun;
 		const nodes = this.nodes.slice();
-		const ids = nodes.flatMap((n) => (n.data.openAlexId ? [n.data.openAlexId] : []));
-		try {
-			await this.openAlex.loadExtras(
-				ids,
-				(done, total) => this.setStatus(`${this.summary} · Loading the keywords and abstracts of the works: ${done} of ${total}…`),
-				{ abstracts: true },
-			);
-		} catch (error) {
-			console.error('Literature Graph: OpenAlex request failed', error);
-		}
-		if (run !== this.meaningRun) return;
-		this.setStatus(`${this.summary} · Computing the meaning of the works…`);
 		// A message, not a timer: timers are slowed down to once a second or
 		// less while Obsidian's window is in the background.
 		const pause = () =>
@@ -1083,20 +1080,64 @@ export class LiteratureGraphView extends ItemView {
 				};
 				channel.port2.postMessage(null);
 			});
-		const model = await this.meaningModel(pause);
+		const files = this.app.vault
+			.getMarkdownFiles()
+			.filter((f) => this.index.isLiterature(f))
+			.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+		const cited = this.citedByVault(files);
+		const ids = [...new Set([...nodes.flatMap((n) => (n.data.openAlexId ? [n.data.openAlexId] : [])), ...cited])];
+		try {
+			await this.openAlex.loadExtras(
+				ids,
+				(done, total) => this.setStatus(`${this.summary} · Loading the keywords and abstracts of the works: ${done} of ${total}…`),
+				{ abstracts: true },
+			);
+		} catch (error) {
+			console.error('Literature Graph: OpenAlex request failed', error);
+		}
 		if (run !== this.meaningRun) return;
-		const vectors: (Float32Array | null)[] = [];
-		for (const node of nodes) vectors.push(project(vectorize(await this.workWords(node), model.vocabulary), model.basis));
-		const plane = model.plane;
-		this.meaningById = new Map(
-			nodes.flatMap((n, i) => {
-				const v = vectors[i];
-				return v && plane ? [[n.data.id, placeIn(plane, v)] as [string, [number, number]]] : [];
-			}),
-		);
-		// Neighbors in meaning, for the Meaning layout (by node index: the nodes are those of the graph shown).
-		this.meaningKin = await nearestNeighbors(vectors, MEANING_NEIGHBORS, pause);
+		this.setStatus(`${this.summary} · Computing the meaning of the works…`);
+		await this.meaningCache.load();
+		// What the meaning is learned from, as one fingerprint.
+		const sources: string[] = [];
+		for (const file of files) {
+			sources.push(`${file.path}\t${(await this.noteText(file)).text}`);
+			await pause();
+		}
+		for (const id of cited) sources.push(`${id}\t${fingerprint(this.openAlexText(id))}`);
+		sources.push(keywordsProperty(this.settings()));
+		const model = fingerprint(sources.join('\n'));
 		if (run !== this.meaningRun) return;
+		this.meaningCache.useModel(model);
+		// Places from the cache; the others are computed.
+		const places = new Map<string, [number, number]>();
+		const missing: { node: SimNode; text: string; words: () => string[] }[] = [];
+		for (let i = 0; i < nodes.length; i++) {
+			const node = nodes[i];
+			if (!node) continue;
+			const { text, words } = await this.workText(node);
+			const place = this.meaningCache.place(node.data.id, text);
+			if (place === undefined) missing.push({ node, text, words });
+			else if (place) places.set(node.data.id, place);
+			if (i % 500 === 499) await pause();
+		}
+		if (run !== this.meaningRun) return;
+		if (missing.length > 0) {
+			const { vocabulary, basis, plane } = await this.meaningModel(files, cited, model, pause);
+			for (let i = 0; i < missing.length; i++) {
+				const { node, text, words } = missing[i] ?? { node: null, text: '', words: () => [] };
+				if (!node) continue;
+				const vector = project(vectorize(words(), vocabulary), basis);
+				const place = vector && plane ? placeIn(plane, vector) : null;
+				this.meaningCache.setPlace(node.data.id, text, place);
+				if (place) places.set(node.data.id, place);
+				if (i % 200 === 199) await pause();
+			}
+			if (run !== this.meaningRun) return;
+		}
+		this.meaningById = places;
+		// The Meaning layout draws each work to its nearest works in the plane (by node index).
+		this.meaningKin = needKin ? nearestInPlane(nodes.map((n) => places.get(n.data.id) ?? null), MEANING_NEIGHBORS) : [];
 		this.setStatus(this.summary);
 		this.applyTopicColors();
 		// The Meaning layout places the works by their meaning, now known.

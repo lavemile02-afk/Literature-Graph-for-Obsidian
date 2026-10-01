@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fitPlane, lsa, meaningBasis, nearestNeighbors, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
+import { fitPlane, lsa, meaningBasis, fingerprint, nearestInPlane, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
 
 test('keeps the words that say something, without accents or plurals', () => {
 	assert.deepEqual(tokenize('Les tourbières et la nappe phréatique des sphaignes'), ['tourbiere', 'nappe', 'phreatique', 'sphaigne']);
@@ -65,14 +65,20 @@ test('gives a work the same place whatever other works it is shown with', async 
 	assert.ok(d(alone, peatPlace) < d(alone, mindPlace));
 });
 
-test('finds the nearest works in meaning, most similar first', async () => {
-	const v = (x: number, y: number) => {
-		const n = Math.hypot(x, y);
-		return Float32Array.from([x / n, y / n]);
-	};
-	const kin = await nearestNeighbors([v(1, 0), v(1, 0.1), v(1, 0.5), v(-1, 0), null], 2);
+test('finds the nearest works in the plane, the closest first', () => {
+	const places: ([number, number] | null)[] = [[0, 0], [0.1, 0], [0.5, 0], [-3, 2], null];
+	for (let i = 0; i < 40; i++) places.push([5 + (i % 7) * 0.3, 5 + Math.floor(i / 7) * 0.3]);
+	const kin = nearestInPlane(places, 2);
 	assert.deepEqual(kin[0]?.map(([j]) => j), [1, 2]);
-	assert.deepEqual(kin[3], []);
-	assert.deepEqual(kin[4], []);
 	assert.ok((kin[0]?.[0]?.[1] ?? 0) > (kin[0]?.[1]?.[1] ?? 0));
+	assert.ok((kin[0]?.[0]?.[1] ?? 0) <= 1);
+	assert.deepEqual(kin[4], []);
+	// A work far from the others still gets its nearest ones.
+	assert.equal(kin[3]?.length, 2);
+});
+
+test('fingerprints texts: the same text, the same fingerprint', () => {
+	assert.equal(fingerprint('peat and water'), fingerprint('peat and water'));
+	assert.notEqual(fingerprint('peat and water'), fingerprint('peat and waters'));
+	assert.match(fingerprint(''), /^[0-9a-f]{8}$/);
 });

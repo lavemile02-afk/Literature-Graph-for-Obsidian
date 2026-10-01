@@ -7,6 +7,7 @@ import { CITATIONS_VIEW, CitationsView } from './panel';
 import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
 import { GhostNoteStore } from './ghostNotes';
+import { MeaningCache } from './meaningCache';
 import { writeSuggestionsFile } from './suggestionsFile';
 import { writeKeywordsToNotes } from './keywordNotes';
 import { WORK_VIEW, WorkView } from './workView';
@@ -18,6 +19,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 	openAlex!: OpenAlexClient;
 	positions!: PositionStore;
 	ghosts!: GhostNoteStore;
+	meaningCache!: MeaningCache;
 	/** Resolves when the citation index is first built. */
 	private indexReady: Promise<void> | null = null;
 
@@ -36,6 +38,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.openAlex.onLimit = (error) => new Notice(error.message, 12000);
 		this.positions = new PositionStore(this.app, `${this.manifest.dir ?? ''}/layout-positions.json`);
 		this.ghosts = new GhostNoteStore(this.app, `${this.manifest.dir ?? ''}/ghost-notes.json`);
+		this.meaningCache = new MeaningCache(this.app, `${this.manifest.dir ?? ''}/meaning-cache.json`);
 		this.app.workspace.onLayoutReady(() => {
 			void this.startIndex();
 			this.connectBetterCitations();
@@ -60,6 +63,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 					},
 					this.positions,
 					this.ghosts,
+					this.meaningCache,
 				),
 		);
 		this.registerView(WORK_VIEW, (leaf) => new WorkView(leaf, this.openAlex, () => this.settings, this.ghosts));
@@ -209,6 +213,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		void this.openAlex.flush();
 		void this.positions.flush();
 		void this.ghosts.flush();
+		void this.meaningCache.flush();
 	}
 
 	/** Called when a setting changes in the settings tab. */

@@ -25,6 +25,7 @@ data.json
 openalex-cache.json
 layout-positions.json
 ghost-notes.json
+meaning-cache.json
 reading-suggestions.jsonl
 
 # Tests compiled by scripts/test.mjs

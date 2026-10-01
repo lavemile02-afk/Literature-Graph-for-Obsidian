@@ -296,29 +296,73 @@ export function planeOf(vectors: (Float32Array | null)[]): ([number, number] | n
 }
 
 /**
- * The `k` nearest neighbors in meaning of each vector, with their similarity
- * (most similar first; only positive similarities). `pause` is awaited now
- * and then: with n vectors, this takes n² products.
+ * The `k` works nearest to each work in the plane of meaning (so the
+ * nearest in color), with a closeness from 1 (same place) towards 0, most
+ * alike first. Found through a grid of the plane: only the works of the
+ * nearby cells are compared, so it takes a few milliseconds for tens of
+ * thousands of works (comparing every pair took minutes). Works without a
+ * place get none.
  */
-export async function nearestNeighbors(vectors: (Float32Array | null)[], k: number, pause: () => Promise<void> = () => Promise.resolve()): Promise<[number, number][][]> {
-	const out: [number, number][][] = vectors.map(() => []);
-	for (let i = 0; i < vectors.length; i++) {
-		const a = vectors[i];
-		if (a) {
-			const best: [number, number][] = [];
-			for (let j = 0; j < vectors.length; j++) {
-				const b = vectors[j];
-				if (j === i || !b) continue;
-				const s = similarity(a, b);
-				if (s <= 0 || (best.length === k && s <= (best[k - 1]?.[1] ?? 0))) continue;
-				let at = best.length;
-				while (at > 0 && (best[at - 1]?.[1] ?? 0) < s) at--;
-				best.splice(at, 0, [j, s]);
-				if (best.length > k) best.pop();
+export function nearestInPlane(places: ([number, number] | null)[], k: number): [number, number][][] {
+	const placed = places.flatMap((p, i) => (p ? [i] : []));
+	const out: [number, number][][] = places.map(() => []);
+	if (placed.length < 2) return out;
+	let minX = Infinity;
+	let minY = Infinity;
+	let maxX = -Infinity;
+	let maxY = -Infinity;
+	for (const i of placed) {
+		const [x, y] = places[i] ?? [0, 0];
+		minX = Math.min(minX, x);
+		minY = Math.min(minY, y);
+		maxX = Math.max(maxX, x);
+		maxY = Math.max(maxY, y);
+	}
+	// About k works per cell.
+	const cells = Math.max(1, Math.ceil(Math.sqrt(placed.length / Math.max(1, k))));
+	const size = Math.max(maxX - minX, maxY - minY, 1e-9) / cells;
+	const cellOf = (v: number, min: number) => Math.min(cells - 1, Math.floor((v - min) / size));
+	const grid = new Map<number, number[]>();
+	for (const i of placed) {
+		const [x, y] = places[i] ?? [0, 0];
+		const key = cellOf(x, minX) * cells + cellOf(y, minY);
+		const list = grid.get(key);
+		if (list) list.push(i);
+		else grid.set(key, [i]);
+	}
+	// Closeness: 1 at the same place, 0.5 at a typical distance between neighbors.
+	const scale = size / 2;
+	for (const i of placed) {
+		const [x, y] = places[i] ?? [0, 0];
+		const cx = cellOf(x, minX);
+		const cy = cellOf(y, minY);
+		const found: [number, number][] = [];
+		// Rings of cells around the work's own, until enough works are found (one more ring then, for the corners).
+		for (let ring = 0, extra = 0; ring < cells && extra < 2; ring++) {
+			for (let gx = cx - ring; gx <= cx + ring; gx++) {
+				for (let gy = cy - ring; gy <= cy + ring; gy++) {
+					if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) !== ring || gx < 0 || gy < 0 || gx >= cells || gy >= cells) continue;
+					for (const j of grid.get(gx * cells + gy) ?? []) {
+						if (j === i) continue;
+						const [qx, qy] = places[j] ?? [0, 0];
+						found.push([j, Math.hypot(qx - x, qy - y)]);
+					}
+				}
 			}
-			out[i] = best;
+			if (found.length >= k) extra++;
 		}
-		if (i % 250 === 249) await pause();
+		found.sort((a, b) => a[1] - b[1]);
+		out[i] = found.slice(0, k).map(([j, d]) => [j, 1 / (1 + d / scale)]);
 	}
 	return out;
+}
+
+/** A short fingerprint of a text (FNV-1a, 32 bits, in hexadecimal), to know whether it changed. */
+export function fingerprint(text: string): string {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++) {
+		h ^= text.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16).padStart(8, '0');
 }
