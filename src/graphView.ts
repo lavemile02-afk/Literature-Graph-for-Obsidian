@@ -1233,8 +1233,9 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
-	 * Fits each region to its works where they are now: centered on them, and
-	 * wide enough for nine in ten of them (a few strays do not widen it). At
+	 * Fits each region to its works where they are now: centered on the
+	 * middle of the group, and wide enough for four in five of its works (the
+	 * works between groups do not widen it). At
 	 * most four times a second; returns whether to come back (the works move).
 	 */
 	private placeRegions(now: number): boolean {
@@ -1247,31 +1248,29 @@ export class LiteratureGraphView extends ItemView {
 		if (this.idle.level > 0) return false;
 		if (now - this.regionsPlacedAt < 250) return this.regionsPlacedAt > 0;
 		this.regionsPlacedAt = now;
+		// The middle of a group: the median of its works on each axis, so the
+		// works on the bridges to other groups do not pull it off its ball.
 		const count = regions.parts.length;
-		const sums = Array.from({ length: count }, () => [0, 0, 0]);
-		this.nodes.forEach((n, i) => {
-			const s = sums[regions.group[i] ?? -1];
-			if (!s || n.x === undefined || n.y === undefined) return;
-			s[0] = (s[0] ?? 0) + n.x;
-			s[1] = (s[1] ?? 0) + n.y;
-			s[2] = (s[2] ?? 0) + 1;
-		});
-		const distances: number[][] = Array.from({ length: count }, () => []);
+		const xs: number[][] = Array.from({ length: count }, () => []);
+		const ys: number[][] = Array.from({ length: count }, () => []);
 		this.nodes.forEach((n, i) => {
 			const g = regions.group[i] ?? -1;
-			const s = sums[g];
-			if (!s || !s[2] || n.x === undefined || n.y === undefined) return;
-			distances[g]?.push(Math.hypot(n.x - (s[0] ?? 0) / s[2], n.y - (s[1] ?? 0) / s[2]));
+			if (g < 0 || g >= count || n.x === undefined || n.y === undefined) return;
+			xs[g]?.push(n.x);
+			ys[g]?.push(n.y);
 		});
+		const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 		regions.parts.forEach(({ circle, label, color }, g) => {
-			const s = sums[g] ?? [0, 0, 0];
-			const d = (distances[g] ?? []).sort((a, b) => a - b);
+			const gx = xs[g] ?? [];
+			const gy = ys[g] ?? [];
 			circle.clear();
-			label.visible = d.length > 0;
-			if (d.length === 0) return;
-			const cx = (s[0] ?? 0) / (s[2] || 1);
-			const cy = (s[1] ?? 0) / (s[2] || 1);
-			const r = (d[Math.floor(d.length * 0.9)] ?? d[d.length - 1] ?? 0) + label.style.fontSize * 0.3;
+			label.visible = gx.length > 0;
+			if (gx.length === 0) return;
+			const cx = median([...gx]);
+			const cy = median([...gy]);
+			const d = gx.map((x, j) => Math.hypot(x - cx, (gy[j] ?? 0) - cy)).sort((a, b) => a - b);
+			// Wide enough for four in five of its works.
+			const r = (d[Math.floor(d.length * 0.8)] ?? d[d.length - 1] ?? 0) + label.style.fontSize * 0.3;
 			circle.circle(cx, cy, r).fill({ color, alpha: 0.05 }).stroke({ width: Math.max(2, r / 120), color, alpha: 0.45 });
 			label.position.set(cx, cy - r - label.style.fontSize * 0.15);
 		});
