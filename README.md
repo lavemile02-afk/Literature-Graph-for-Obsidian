@@ -130,6 +130,16 @@ When **Use OpenAlex** is on (the default), the plugin sends requests to [OpenAle
 
 Without an API key, OpenAlex allows each network (IP address) a free budget of $0.10 of usage a day, renewed at midnight UTC; the plugin fetches works by DOI or id in batches of 50, at $0.0001 per batch, so a few hundred works cost well under a cent, but a first large depth-2 graph, or other programs on the same network, can still use it up. When OpenAlex refuses requests, the plugin says so once, stops asking until the budget is back, and keeps using what is cached. A free API key (see [openalex.org](https://openalex.org)) has its own budget, ten times larger ($1 a day): store it with **OpenAlex API key** in the settings, which keeps it in Obsidian's secret storage rather than in the plugin's settings file.
 
+## Privacy and permissions
+
+What the plugin reads, writes and runs, as Obsidian's automatic review lists it:
+
+- **Reading the vault (vault enumeration).** The plugin lists the Markdown notes of the vault and reads them through Obsidian's API to build its citation index: every note for its citation links, and the notes of the literature folder also for their properties, their reference lists and, for the colors by meaning, their words. Nothing leaves your computer except the requests described above.
+- **Writing.** Only in your vault, through Obsidian's API, and only when you ask: the note of a work outside the vault (**Create note** in its ghost note), its PDF (**Download PDF**, in the **PDF folder**), the keywords property of your literature notes where it is empty (**Write keywords to notes**), and the reading suggestions file (**Export reading suggestions**). In its own folder (`.obsidian/plugins/literature-graph/`), the plugin keeps its settings and caches: `openalex-cache.json` (what OpenAlex answered), `layout-positions.json` (where the works were), `ghost-notes.json` (what you wrote in ghost notes) and `meaning-cache.json` (the places of the works in the plane of meaning).
+- **Clipboard.** The plugin writes to the clipboard only when you click **Copy the reference** of a work in the reading suggestions; it never reads the clipboard.
+- **Dynamic code execution.** The plugin's own code never builds or evaluates code. The review finds `new Function` in [PixiJS](https://pixijs.com/), the library that draws the graph: a one-time test of whether the environment allows it. The layout of the graph runs in a web worker created from code bundled in `main.js` (a `Blob`), not from anything downloaded.
+- **No telemetry**, no account, no advertising.
+
 ## Development
 
 Requires [Node.js](https://nodejs.org/) (current LTS) and npm.
