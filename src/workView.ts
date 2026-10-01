@@ -1,9 +1,4 @@
 import { ItemView, normalizePath, Notice, requestUrl, setIcon, ViewStateResult, WorkspaceLeaf } from 'obsidian';
-// The download folder may be anywhere on the computer (the plugin is for
-// desktop only), so Node's file system is used for it, not the vault's.
-import { mkdir, writeFile } from 'fs/promises';
-import { homedir } from 'os';
-import { join } from 'path';
 import type { GhostNoteStore, GhostWork } from './ghostNotes';
 import type { OpenAlexClient } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
@@ -263,9 +258,10 @@ export class WorkView extends ItemView {
 	}
 
 	/**
-	 * Downloads the free PDF into the download folder of the settings (or the
-	 * Downloads folder), named like the note. A link that does not give a PDF
-	 * (a web page) is opened in the browser instead.
+	 * Downloads the free PDF into the vault: in the PDF folder of the
+	 * settings, or else where Obsidian puts attachments; named like the note.
+	 * A link that does not give a PDF (a web page) is opened in the browser
+	 * instead.
 	 */
 	private async download(): Promise<void> {
 		const url = this.pdfUrl;
@@ -280,11 +276,18 @@ export class WorkView extends ItemView {
 				new Notice('This free version is a web page, not a PDF: it was opened in your browser.');
 				return;
 			}
-			const folder = this.settings().downloadFolder.trim() || join(homedir(), 'Downloads');
-			await mkdir(folder, { recursive: true });
-			const target = join(folder, `${values.fileName || 'work'}.pdf`);
-			await writeFile(target, new Uint8Array(response.arrayBuffer));
-			new Notice(`PDF saved: ${target}`);
+			const base = values.fileName || 'work';
+			const folder = this.settings().pdfFolder.trim().replace(/^\/+|\/+$/g, '');
+			let path: string;
+			if (folder) {
+				if (!this.app.vault.getAbstractFileByPath(normalizePath(folder))) await this.app.vault.createFolder(normalizePath(folder));
+				path = normalizePath(`${folder}/${base}.pdf`);
+				for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = normalizePath(`${folder}/${base} (${n}).pdf`);
+			} else {
+				path = await this.app.fileManager.getAvailablePathForAttachment(`${base}.pdf`);
+			}
+			const file = await this.app.vault.createBinary(path, response.arrayBuffer);
+			new Notice(`PDF saved: ${file.path}`);
 		} catch (error) {
 			new Notice(`The PDF could not be downloaded: ${error instanceof Error ? error.message : String(error)}`);
 		}

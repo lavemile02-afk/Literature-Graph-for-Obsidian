@@ -72,8 +72,8 @@ export interface LiteratureGraphSettings {
 	graphEdgeOpenAlex: boolean;
 	/** Template of the note of a work outside the vault (see `workNote.ts`); empty: the default template. */
 	noteTemplate: string;
-	/** Folder (anywhere on the computer) where free PDFs are downloaded; empty: the Downloads folder. */
-	downloadFolder: string;
+	/** Folder of the vault where free PDFs are downloaded; empty: where Obsidian puts attachments. */
+	pdfFolder: string;
 	/** Where "Export reading suggestions" writes its file (a path in the vault); empty: in the plugin folder. */
 	suggestionsFile: string;
 }
@@ -115,7 +115,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphEdgeBibliographies: true,
 	graphEdgeOpenAlex: true,
 	noteTemplate: '',
-	downloadFolder: '',
+	pdfFolder: '',
 	suggestionsFile: '',
 };
 
@@ -348,9 +348,9 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						},
 					},
 					{
-						name: 'Download folder',
-						desc: 'Folder of your computer (not only of the vault) where "Download PDF" saves the free PDFs of works. Empty: your Downloads folder.',
-						control: { type: 'text', key: 'downloadFolder', placeholder: 'C:\\Users\\me\\Documents\\Articles' },
+						name: 'PDF folder',
+						desc: 'Folder of the vault where "Download PDF" saves the free PDFs of works. Empty: where Obsidian puts attachments (Settings, Files and links).',
+						control: { type: 'text', key: 'pdfFolder', placeholder: 'Literature/PDF' },
 					},
 					{
 						name: 'Reading suggestions file',

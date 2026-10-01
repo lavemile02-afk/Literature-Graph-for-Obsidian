@@ -225,6 +225,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<LiteratureGraphSettings>);
+		// A setting of earlier versions: PDFs are now saved in the vault (pdfFolder).
+		delete (this.settings as LiteratureGraphSettings & { downloadFolder?: string }).downloadFolder;
 	}
 
 	async saveSettings() {
