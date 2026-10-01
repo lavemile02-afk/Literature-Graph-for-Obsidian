@@ -32,7 +32,7 @@ import {
 	signals,
 } from './animations';
 import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
-import { fingerprint, fitPlane, meaningBasis, MeaningBasis, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import { ballCenters, fingerprint, fitPlane, groupTargets, meaningBasis, MeaningBasis, meaningGroups, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
@@ -173,6 +173,8 @@ const MEANING_TEXT_LIMIT = 200_000;
 const MEANING_DIMENSIONS = 64;
 /** How many works nearest in meaning each work is drawn to, in the Meaning layout. */
 const MEANING_NEIGHBORS = 6;
+/** At most this many groups (balls) of meaning in the Meaning layout. */
+const MEANING_MAX_GROUPS = 24;
 /** How visible the citation lines stay in the Meaning layout (1: as usual). */
 const MEANING_EDGE_FADE = 0.2;
 /** Topics listed in the panel's legend when coloring by topic. */
@@ -1145,13 +1147,22 @@ export class LiteratureGraphView extends ItemView {
 		if (this.layoutStyle === 'meaning') this.showCurrent();
 	}
 
-	/** Places of the works for the Meaning layout: their place in the plane of meaning, scaled to the graph. */
+	/**
+	 * Where each work is drawn to in the Meaning layout: the works are grouped
+	 * by meaning (so by color, in the plane of meaning), each group gets a ball
+	 * as large as its works need, near the balls of neighbor colors, and each
+	 * work goes to its group's ball, or between the balls of its two nearest
+	 * groups as much as it resembles each (see `meaning.ts`). The "Meaning
+	 * attraction" setting makes the groups more decided.
+	 */
 	private meaningAnchors(): ([number, number] | null)[] {
-		const scale = Math.max(300, 45 * Math.sqrt(this.nodes.length));
-		return this.nodes.map((n) => {
-			const place = this.meaningById.get(n.data.id);
-			return place ? [place[0] * scale, place[1] * scale] : null;
-		});
+		const places = this.nodes.map((n) => this.meaningById.get(n.data.id) ?? null);
+		const placed = places.filter(Boolean).length;
+		const groups = meaningGroups(places, Math.max(3, Math.min(MEANING_MAX_GROUPS, Math.round(Math.sqrt(placed) / 6))));
+		// Room for one work in a ball: a little more than its collision disc.
+		const radius = this.nodes.reduce((s, n) => s + n.radius * this.pointSize(), 0) / Math.max(1, this.nodes.length);
+		const { centers } = ballCenters(groups, (radius * 1.25 + 1) * 1.6);
+		return groupTargets(places, groups, centers, this.forces.meaning);
 	}
 
 	private applyTopicColors(): void {
@@ -2123,14 +2134,15 @@ export class LiteratureGraphView extends ItemView {
 		// Only in the Meaning layout.
 		const meaningAttraction = new Setting(body)
 			.setName('Meaning attraction')
-			.setDesc('Works close in meaning draw together: the closer, the stronger.')
+			.setDesc('Works of one meaning gather in balls; works between two meanings, between their balls. Higher: denser balls, more decided groups.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(0, 5, 0.1)
 					.setValue(this.forces.meaning)
 					.onChange((value) => {
 						this.forces.meaning = value;
-						this.applyForces();
+						// The places the works are drawn to depend on it: the layout starts again, from where the works are.
+						relayoutSoon();
 					}),
 			);
 		const showMeaningAttraction = () => meaningAttraction.settingEl.toggle(this.layoutStyle === 'meaning');

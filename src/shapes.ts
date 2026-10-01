@@ -331,6 +331,9 @@ export function createCircleSimulation(nodes: LayoutNode[], links: LayoutLink[],
 
 // ----- Meaning -----
 
+/** How far the works repel each other in the Meaning layout: only their neighbors, so the balls of meaning stay dense. */
+const MEANING_REPEL_RANGE = 120;
+
 /** A pull between two works close in meaning (the Meaning layout). */
 interface KinLink {
 	source: LayoutNode | number;
@@ -364,7 +367,7 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 	for (const l of kinLinks) for (const end of [l.source, l.target] as number[]) kinCount.set(end, (kinCount.get(end) ?? 0) + 1);
 	const kinEnds = (l: KinLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
 	const attraction = Math.max(0, Number.isFinite(forces.meaning) ? forces.meaning : 1);
-	const lean = (n: LayoutNode) => (placed(n) ? Math.min(0.5, 0.08 * attraction) : 0.005);
+	const lean = (n: LayoutNode) => (placed(n) ? Math.min(0.16, 0.08 * attraction) : 0.005);
 	// Citations between placed works barely pull (their meaning places them); a
 	// work without any text follows the works it is linked to.
 	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
@@ -385,13 +388,14 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 					return Math.min(1, (0.6 * attraction * l.similarity * l.similarity) / count);
 				}),
 		)
-		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)).distanceMax(600))
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)).distanceMax(MEANING_REPEL_RANGE))
 		// Each work leans towards its place in the plane of meaning (strength `lean`)
 		// and towards the middle (the center force): together, towards the point
 		// between them, so a stronger center force draws the whole graph in.
 		.force('x', forceX<LayoutNode>((n) => ((n.anchor?.[0] ?? 0) * lean(n)) / (lean(n) + forces.center || 1)).strength((n) => lean(n) + forces.center))
 		.force('y', forceY<LayoutNode>((n) => ((n.anchor?.[1] ?? 0) * lean(n)) / (lean(n) + forces.center || 1)).strength((n) => lean(n) + forces.center))
-		.force('collide', collide())
+		// Firm collisions: the balls are dense, and their works must not overlap.
+		.force('collide', forceCollide<LayoutNode>(collideRadius).strength(1).iterations(3))
 		.stop();
 	return sim;
 }

@@ -366,3 +366,130 @@ export function fingerprint(text: string): string {
 	}
 	return (h >>> 0).toString(16).padStart(8, '0');
 }
+
+/** Groups of meaning: their centers in the plane of meaning, and the group of each work (-1 without a place). */
+export interface MeaningGroups {
+	centers: [number, number][];
+	group: number[];
+	counts: number[];
+}
+
+/**
+ * Groups of works close in meaning (so of one color), by k-means in the
+ * plane of meaning. Deterministic: the first centers are spread around the
+ * color wheel (by the angle of the places), then refined.
+ */
+export function meaningGroups(places: ([number, number] | null)[], k: number, iterations = 25): MeaningGroups {
+	const placed = places.flatMap((p, i) => (p ? [i] : []));
+	const count = Math.max(1, Math.min(k, placed.length));
+	const angle = (i: number) => Math.atan2(places[i]?.[1] ?? 0, places[i]?.[0] ?? 0);
+	const byAngle = [...placed].sort((a, b) => angle(a) - angle(b));
+	let centers: [number, number][] = Array.from({ length: count }, (_, c) => {
+		const p = places[byAngle[Math.floor(((c + 0.5) * byAngle.length) / count)] ?? 0] ?? [0, 0];
+		return [p[0], p[1]];
+	});
+	const group = places.map(() => -1);
+	for (let it = 0; it < iterations; it++) {
+		let moved = false;
+		for (const i of placed) {
+			const [x, y] = places[i] ?? [0, 0];
+			let best = 0;
+			let bestD = Infinity;
+			centers.forEach(([cx, cy], c) => {
+				const d = (cx - x) ** 2 + (cy - y) ** 2;
+				if (d < bestD) {
+					bestD = d;
+					best = c;
+				}
+			});
+			if (group[i] !== best) moved = true;
+			group[i] = best;
+		}
+		const sums = centers.map(() => [0, 0, 0]);
+		for (const i of placed) {
+			const s = sums[group[i] ?? 0];
+			if (!s) continue;
+			s[0] = (s[0] ?? 0) + (places[i]?.[0] ?? 0);
+			s[1] = (s[1] ?? 0) + (places[i]?.[1] ?? 0);
+			s[2] = (s[2] ?? 0) + 1;
+		}
+		centers = centers.map((c, j) => {
+			const s = sums[j] ?? [0, 0, 0];
+			return (s[2] ?? 0) > 0 ? [(s[0] ?? 0) / (s[2] ?? 1), (s[1] ?? 0) / (s[2] ?? 1)] : c;
+		});
+		if (!moved && it > 0) break;
+	}
+	const counts = centers.map(() => 0);
+	for (const i of placed) counts[group[i] ?? 0] = (counts[group[i] ?? 0] ?? 0) + 1;
+	return { centers, group, counts };
+}
+
+/**
+ * Where to draw each group's ball: near its place in the plane of meaning
+ * (so neighbor colors stay neighbors), as large as its works need (radius
+ * `spacing` × √works), and pushed apart until no two balls overlap.
+ */
+export function ballCenters(groups: MeaningGroups, spacing: number): { centers: [number, number][]; radii: number[] } {
+	const radii = groups.counts.map((n) => spacing * Math.sqrt(Math.max(1, n)));
+	const total = Math.sqrt(radii.reduce((s, r) => s + r * r, 0));
+	// The plane's places are about one unit apart: spread them over the size of all the balls together.
+	const centers: [number, number][] = groups.centers.map(([x, y]) => [x * total, y * total]);
+	for (let it = 0; it < 200; it++) {
+		let overlap = false;
+		for (let a = 0; a < centers.length; a++) {
+			for (let b = a + 1; b < centers.length; b++) {
+				const ca = centers[a];
+				const cb = centers[b];
+				if (!ca || !cb) continue;
+				let dx = cb[0] - ca[0];
+				let dy = cb[1] - ca[1];
+				let d = Math.hypot(dx, dy);
+				if (d === 0) {
+					dx = 1;
+					dy = 0;
+					d = 1e-6;
+				}
+				// Room between the balls, growing with their size, so each stands apart.
+				const need = ((radii[a] ?? 0) + (radii[b] ?? 0)) * 1.4 + spacing * 2;
+				if (d >= need) continue;
+				overlap = true;
+				const push = (need - d) / 2;
+				ca[0] -= (dx / d) * push;
+				ca[1] -= (dy / d) * push;
+				cb[0] += (dx / d) * push;
+				cb[1] += (dy / d) * push;
+			}
+		}
+		if (!overlap) break;
+	}
+	return { centers, radii };
+}
+
+/**
+ * Where each work is drawn to: its group's ball, or, for a work between
+ * groups, a point between the balls of its two nearest groups, weighted by
+ * how close it is to each in the plane of meaning (inverse distance, to the
+ * power 1 + `sharpness`): a work midway between two groups goes midway
+ * between their balls; a higher `sharpness` makes the groups more decided.
+ * Null for a work without a place.
+ */
+export function groupTargets(places: ([number, number] | null)[], groups: MeaningGroups, balls: [number, number][], sharpness: number): ([number, number] | null)[] {
+	const power = 1 + Math.max(0, sharpness);
+	return places.map((p) => {
+		if (!p) return null;
+		const near = groups.centers
+			.map(([cx, cy], c) => [c, Math.hypot(cx - p[0], cy - p[1])] as const)
+			.sort((a, b) => a[1] - b[1])
+			.slice(0, 2);
+		const [first, second] = near;
+		if (!first) return null;
+		const ball = (c: number): [number, number] => balls[c] ?? [0, 0];
+		if (!second || first[1] < 1e-9) return ball(first[0]);
+		const wa = (1 / first[1]) ** power;
+		const wb = (1 / second[1]) ** power;
+		const t = wb / (wa + wb);
+		const a = ball(first[0]);
+		const b = ball(second[0]);
+		return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+	});
+}

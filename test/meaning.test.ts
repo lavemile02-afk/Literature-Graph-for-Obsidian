@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fitPlane, lsa, meaningBasis, fingerprint, nearestInPlane, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
+import { ballCenters, fitPlane, groupTargets, meaningGroups, lsa, meaningBasis, fingerprint, nearestInPlane, placeIn, planeOf, project, similarity, tfidf, tokenize, vectorize, vocabularyOf } from '../src/meaning';
 
 test('keeps the words that say something, without accents or plurals', () => {
 	assert.deepEqual(tokenize('Les tourbières et la nappe phréatique des sphaignes'), ['tourbiere', 'nappe', 'phreatique', 'sphaigne']);
@@ -81,4 +81,26 @@ test('fingerprints texts: the same text, the same fingerprint', () => {
 	assert.equal(fingerprint('peat and water'), fingerprint('peat and water'));
 	assert.notEqual(fingerprint('peat and water'), fingerprint('peat and waters'));
 	assert.match(fingerprint(''), /^[0-9a-f]{8}$/);
+});
+
+test('forms groups of meaning, gives each a ball, and draws works between groups between their balls', () => {
+	const places: ([number, number] | null)[] = [];
+	for (let i = 0; i < 30; i++) places.push([-1 + (i % 5) * 0.02, (i % 3) * 0.02]);
+	for (let i = 0; i < 30; i++) places.push([1 + (i % 5) * 0.02, (i % 3) * 0.02]);
+	places.push([0.02, 0.01], null);
+	const groups = meaningGroups(places, 2);
+	assert.notEqual(groups.group[0], groups.group[30]);
+	assert.equal(groups.group[61], -1);
+	const { centers, radii } = ballCenters(groups, 10);
+	const d = Math.hypot((centers[0]?.[0] ?? 0) - (centers[1]?.[0] ?? 0), (centers[0]?.[1] ?? 0) - (centers[1]?.[1] ?? 0));
+	assert.ok(d >= (radii[0] ?? 0) + (radii[1] ?? 0), 'the balls do not overlap');
+	const targets = groupTargets(places, groups, centers, 1);
+	const ball = (i: number) => centers[groups.group[i] ?? 0] ?? [0, 0];
+	// A work of a group goes to its ball.
+	assert.ok(Math.hypot((targets[0]?.[0] ?? 0) - ball(0)[0], (targets[0]?.[1] ?? 0) - ball(0)[1]) < d * 0.05);
+	// The work midway goes midway.
+	const mid = targets[60] ?? [0, 0];
+	const middle = [((centers[0]?.[0] ?? 0) + (centers[1]?.[0] ?? 0)) / 2, ((centers[0]?.[1] ?? 0) + (centers[1]?.[1] ?? 0)) / 2];
+	assert.ok(Math.hypot(mid[0] - (middle[0] ?? 0), mid[1] - (middle[1] ?? 0)) < d * 0.2, `midway ${mid} vs ${middle}`);
+	assert.equal(targets[61], null);
 });
