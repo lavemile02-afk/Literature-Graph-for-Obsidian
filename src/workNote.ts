@@ -15,7 +15,7 @@ export interface WorkValues {
 	title: string;
 	/** In-text citation with its parentheses: "(Robert et al., 1999)". */
 	citationText: string;
-	/** Full reference, APA 7 (English, or the French adaptation of the FSAA). */
+	/** Full reference, APA 7 (in English, or in its usual French adaptation). */
 	citation: string;
 	/** "Robert, É. C., Rochefort, L., Garneau, M." */
 	authors: string;
@@ -73,7 +73,7 @@ export function inTextCitation(families: string[], year: string, language: Langu
 
 /**
  * Authors of a reference, APA 7: "Robert, É. C., Rochefort, L. et Garneau, M."
- * in French (FSAA), "Robert, É. C., Rochefort, L., & Garneau, M." in English;
+ * in French, "Robert, É. C., Rochefort, L., & Garneau, M." in English;
  * the first 19 and the last when there are more than 20.
  */
 export function referenceAuthors(names: { family: string; initials: string }[], language: Language): string {
@@ -191,7 +191,7 @@ function yamlQuoted(value: string): string {
 
 /**
  * The note's text from its template. In a property line such as
- * `Titre: "{{title}}"`, the value is written as a YAML string, and an empty
+ * `Title: "{{title}}"`, the value is written as a YAML string, and an empty
  * value leaves the property empty (`Journal:`); elsewhere, {{name}} is
  * replaced as it is. Unknown names are left empty.
  */

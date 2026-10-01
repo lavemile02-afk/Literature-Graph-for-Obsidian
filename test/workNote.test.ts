@@ -68,8 +68,8 @@ test('makes a file name without the characters a file name cannot have', () => {
 
 test('writes the topics as a list property, or an empty property without topics', () => {
 	const values = valuesFromEntry({ text: 'Rochefort, L. (2000).', title: 'Sphagnum', label: 'Rochefort, 2000', year: '2000' });
-	const template = '---\nTopics: {{topics}}\ntags:\n  - litterature\n---\n';
-	assert.equal(fillTemplate(template, values), '---\nTopics:\ntags:\n  - litterature\n---\n');
+	const template = '---\nTopics: {{topics}}\ntags:\n  - literature\n---\n';
+	assert.equal(fillTemplate(template, values), '---\nTopics:\ntags:\n  - literature\n---\n');
 	values.topics = ['Peatlands and Wetlands Ecology', 'Soil "carbon"'];
-	assert.equal(fillTemplate(template, values), '---\nTopics:\n  - "Peatlands and Wetlands Ecology"\n  - "Soil \\"carbon\\""\ntags:\n  - litterature\n---\n');
+	assert.equal(fillTemplate(template, values), '---\nTopics:\n  - "Peatlands and Wetlands Ecology"\n  - "Soil \\"carbon\\""\ntags:\n  - literature\n---\n');
 });

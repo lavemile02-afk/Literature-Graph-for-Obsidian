@@ -3,19 +3,19 @@ import { test } from 'node:test';
 import { QueryData, querySuggestions } from '../src/groupQueries';
 
 const data: QueryData = {
-	tags: ['ecole', 'litterature', 'maitrise', 'tourbe/restauration'],
+	tags: ['course', 'literature', 'methods', 'wetlands/restoration'],
 	properties: new Map([
-		['Annee', ['1996', '2016']],
+		['Year', ['1996', '2016']],
 		['Type', ['Article', 'Livre', 'Thèse']],
 	]),
-	folders: ['Documents', 'Documents/Thèses'],
+	folders: ['Literature', 'Literature/Thèses'],
 };
 
 test('suggests tags after "tag:"', () => {
-	assert.deepEqual(querySuggestions('tag:', data), ['tag:#ecole', 'tag:#litterature', 'tag:#maitrise', 'tag:#tourbe/restauration']);
-	assert.deepEqual(querySuggestions('tag:#ma', data), ['tag:#maitrise']);
+	assert.deepEqual(querySuggestions('tag:', data), ['tag:#course', 'tag:#literature', 'tag:#methods', 'tag:#wetlands/restoration']);
+	assert.deepEqual(querySuggestions('tag:#me', data), ['tag:#methods']);
 	// A part typed anywhere in the tag, after those that start with it.
-	assert.deepEqual(querySuggestions('tag:rest', data), ['tag:#tourbe/restauration']);
+	assert.deepEqual(querySuggestions('tag:rest', data), ['tag:#wetlands/restoration']);
 });
 
 test('suggests properties after "[", then their values', () => {
@@ -27,7 +27,7 @@ test('suggests properties after "[", then their values', () => {
 });
 
 test('suggests folders after "path:", and the kinds of queries otherwise', () => {
-	assert.deepEqual(querySuggestions('path:th', data), ['path:Documents/Thèses']);
+	assert.deepEqual(querySuggestions('path:th', data), ['path:Literature/Thèses']);
 	assert.deepEqual(querySuggestions('', data), ['tag:#', '[', 'path:', 'file:']);
 	assert.deepEqual(querySuggestions('pa', data), ['path:']);
 	assert.deepEqual(querySuggestions('Bourgeois', data), []);
