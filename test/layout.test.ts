@@ -40,7 +40,7 @@ const start = (graph: number): LayoutMessage => ({
 		{ source: 0, target: 1, inVault: true },
 		{ source: 0, target: 2, inVault: false },
 	],
-	forces: { repel: 90, linkDistance: 60, center: 0.05 },
+	forces: { repel: 90, linkDistance: 60, center: 0.05, meaning: 1 },
 	alpha: 1,
 });
 

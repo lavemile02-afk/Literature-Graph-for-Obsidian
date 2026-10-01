@@ -8,12 +8,13 @@ import {
 	createCircleSimulation,
 	createIslandsSimulation,
 	createLayersSimulation,
+	createMeaningSimulation,
 	detectCommunities,
 	islandCenters,
 	yearScale,
 } from '../src/shapes';
 
-const forces = { repel: 90, linkDistance: 60, center: 0.02 };
+const forces = { repel: 90, linkDistance: 60, center: 0.02, meaning: 1 };
 
 /** Two dense groups of works joined by a single citation. */
 function twoGroups(): { nodes: LayoutNode[]; links: LayoutLink[] } {
@@ -96,4 +97,24 @@ test('holds the works of the vault on a circle, by year', () => {
 	run(createCircleSimulation(nodes, links, forces));
 	for (const n of nodes.filter((m) => m.depth === 0)) assert.ok(Math.abs(Math.hypot(n.x ?? 0, n.y ?? 0) - R) < R * 0.05);
 	for (const n of nodes.filter((m) => m.depth === 1)) assert.ok(Math.hypot(n.x ?? 0, n.y ?? 0) > R);
+});
+
+test('draws works close in meaning together, and the graph in with the center force', () => {
+	const run = (meaning: number, center: number) => {
+		// Pairs of works close in meaning (kin), their places in a ring.
+		const nodes: LayoutNode[] = Array.from({ length: 40 }, (_, i) => {
+			const angle = (Math.floor(i / 2) / 20) * 2 * Math.PI;
+			return { depth: 1, radius: 4, x: Math.cos(i) * 300, y: Math.sin(i) * 300, anchor: [Math.cos(angle) * 800, Math.sin(angle) * 800] as [number, number], kin: [[i % 2 ? i - 1 : i + 1, 0.9]] as [number, number][] };
+		});
+		const sim = createMeaningSimulation(nodes, [], { ...forces, meaning, center });
+		for (let i = 0; i < 300; i++) sim.tick();
+		const pairGap = nodes.filter((_, i) => i % 2 === 0).reduce((s, n, k) => s + Math.hypot((n.x ?? 0) - (nodes[2 * k + 1]?.x ?? 0), (n.y ?? 0) - (nodes[2 * k + 1]?.y ?? 0)), 0) / 20;
+		const extent = Math.max(...nodes.map((n) => Math.hypot(n.x ?? 0, n.y ?? 0)));
+		return { pairGap, extent };
+	};
+	const usual = run(1, 0.02);
+	const strong = run(4, 0.02);
+	const centered = run(1, 0.2);
+	assert.ok(strong.pairGap < usual.pairGap, `pairs: ${strong.pairGap} < ${usual.pairGap}`);
+	assert.ok(centered.extent < usual.extent * 0.8, `extent: ${centered.extent} < ${usual.extent}`);
 });

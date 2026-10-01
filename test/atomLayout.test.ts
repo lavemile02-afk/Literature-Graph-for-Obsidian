@@ -51,7 +51,7 @@ test('lays out atoms whose clouds keep their electrons and do not overlap', () =
 		graph: 1,
 		nodes,
 		links,
-		forces: { repel: 90, linkDistance: 60, center: 0.02 },
+		forces: { repel: 90, linkDistance: 60, center: 0.02, meaning: 1 },
 		alpha: 1,
 		style: 'atom',
 	};

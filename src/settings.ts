@@ -39,6 +39,8 @@ export interface LiteratureGraphSettings {
 	graphRepel: number;
 	graphLinkDistance: number;
 	graphCenter: number;
+	/** How strongly works close in meaning draw together, in the Meaning layout. */
+	graphMeaningAttraction: number;
 	/** Color groups of the literature graph, one per line: "query = color". */
 	graphColorGroups: string;
 	/** How the works are colored: "groups" (color groups) or "meaning" (their words, see `meaning.ts`). */
@@ -97,6 +99,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphRepel: 90,
 	graphLinkDistance: 60,
 	graphCenter: 0.02,
+	graphMeaningAttraction: 1,
 	graphColorGroups: '',
 	graphColorBy: 'groups',
 	graphPointScale: 1,
@@ -260,6 +263,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'Center force',
 						desc: 'How strongly every work is pulled toward the middle: higher for a tighter, rounder graph, lower to spread it. Can be changed in the graph for the time it stays open.',
 						control: { type: 'slider', key: 'graphCenter', min: 0, max: 0.2, step: 0.005 },
+					},
+					{
+						name: 'Meaning attraction',
+						desc: 'Meaning layout: how strongly works close in meaning draw together (the closer in meaning, the stronger), times the usual strength. Can be changed in the graph for the time it stays open.',
+						control: { type: 'slider', key: 'graphMeaningAttraction', min: 0, max: 5, step: 0.1 },
 					},
 				],
 			},

@@ -54,6 +54,8 @@ export interface Forces {
 	repel: number;
 	linkDistance: number;
 	center: number;
+	/** How strongly works close in meaning draw together, in the Meaning layout (1: as by default). */
+	meaning: number;
 }
 
 /**

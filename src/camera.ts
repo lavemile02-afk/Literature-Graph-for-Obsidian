@@ -10,7 +10,7 @@ export interface Camera {
 	scale: number;
 }
 
-export const MIN_SCALE = 0.05;
+export const MIN_SCALE = 0.005;
 export const MAX_SCALE = 6;
 
 export function clampScale(scale: number): number {

@@ -363,6 +363,8 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 	const kinCount = new Map<number, number>();
 	for (const l of kinLinks) for (const end of [l.source, l.target] as number[]) kinCount.set(end, (kinCount.get(end) ?? 0) + 1);
 	const kinEnds = (l: KinLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
+	const attraction = Math.max(0, Number.isFinite(forces.meaning) ? forces.meaning : 1);
+	const lean = (n: LayoutNode) => (placed(n) ? Math.min(0.5, 0.08 * attraction) : 0.005);
 	// Citations between placed works barely pull (their meaning places them); a
 	// work without any text follows the works it is linked to.
 	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
@@ -379,12 +381,16 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 				.strength((l) => {
 					const [a, b] = kinEnds(l);
 					const count = Math.min(kinCount.get(a.index ?? 0) ?? 1, kinCount.get(b.index ?? 0) ?? 1);
-					return (0.6 * l.similarity * l.similarity) / count;
+					// Stronger the closer in meaning, times the "Meaning attraction" setting (at most 1, past which d3 overshoots).
+					return Math.min(1, (0.6 * attraction * l.similarity * l.similarity) / count);
 				}),
 		)
 		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)).distanceMax(600))
-		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => (placed(n) ? 0.08 : 0.005 + forces.center / 4)))
-		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => (placed(n) ? 0.08 : 0.005 + forces.center / 4)))
+		// Each work leans towards its place in the plane of meaning (strength `lean`)
+		// and towards the middle (the center force): together, towards the point
+		// between them, so a stronger center force draws the whole graph in.
+		.force('x', forceX<LayoutNode>((n) => ((n.anchor?.[0] ?? 0) * lean(n)) / (lean(n) + forces.center || 1)).strength((n) => lean(n) + forces.center))
+		.force('y', forceY<LayoutNode>((n) => ((n.anchor?.[1] ?? 0) * lean(n)) / (lean(n) + forces.center || 1)).strength((n) => lean(n) + forces.center))
 		.force('collide', collide())
 		.stop();
 	return sim;

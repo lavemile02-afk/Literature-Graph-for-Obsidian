@@ -424,7 +424,7 @@ export class LiteratureGraphView extends ItemView {
 	/** Hide the works that cite and are cited by none of the works shown. */
 	private hideIsolated = false;
 	/** Forces of the layout, changed with the sliders of the view. */
-	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.02 };
+	private forces: Forces = { repel: 90, linkDistance: 60, center: 0.02, meaning: 1 };
 	private readonly reload = debounce(() => void this.loadData(), 2000, true);
 
 	constructor(
@@ -462,6 +462,7 @@ export class LiteratureGraphView extends ItemView {
 			repel: number(s.graphRepel, 90),
 			linkDistance: number(s.graphLinkDistance, 60),
 			center: number(s.graphCenter, 0.02),
+			meaning: number(s.graphMeaningAttraction, 1),
 		};
 	}
 
@@ -2119,6 +2120,22 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
+		// Only in the Meaning layout.
+		const meaningAttraction = new Setting(body)
+			.setName('Meaning attraction')
+			.setDesc('Works close in meaning draw together: the closer, the stronger.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 5, 0.1)
+					.setValue(this.forces.meaning)
+					.onChange((value) => {
+						this.forces.meaning = value;
+						this.applyForces();
+					}),
+			);
+		const showMeaningAttraction = () => meaningAttraction.settingEl.toggle(this.layoutStyle === 'meaning');
+		showMeaningAttraction();
+		this.syncControls.push(showMeaningAttraction);
 		const timeline = new Setting(body).setName('Timeline');
 		this.timelineDesc = timeline.descEl;
 		timeline
@@ -2173,6 +2190,7 @@ export class LiteratureGraphView extends ItemView {
 					.setValue(this.layoutStyle)
 					.onChange((value) => {
 						this.layoutStyle = isLayoutStyle(value) ? value : 'default';
+						for (const sync of this.syncControls) sync();
 						// A new layout from the positions shown: the works move to their new places.
 						this.showCurrent();
 						this.layout?.send({ type: 'reheat', alpha: 1 });
