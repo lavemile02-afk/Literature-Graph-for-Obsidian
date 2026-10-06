@@ -38,7 +38,7 @@ import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
 import { OpenAlexClient, workCitation } from './openalex';
-import type { LiteratureGraphSettings } from './settings';
+import { CITED_BY_GRAPH, LiteratureGraphSettings } from './settings';
 
 export const GRAPH_VIEW = 'literature-graph-graph';
 
@@ -2084,7 +2084,7 @@ export class LiteratureGraphView extends ItemView {
 		list.createDiv({
 			cls: 'literature-graph-suggestions-desc',
 			text: citing
-				? `${ranked.length} works outside your vault cite your works; those citing the most of them first. Hover a work to see which (and where it is, in the cited-by graph); click it to see its note-to-be.`
+				? `${ranked.length} works outside your vault cite your works; those citing the most of them first. Hover a work to see which (and where it is, in the "Cited By" graph); click it to see its note-to-be.`
 				: missing
 					? `${ranked.length} works cited in your notes that OpenAlex does not know, most relevant first, with their reference as written in your notes, to find them by hand.`
 					: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
@@ -2305,8 +2305,6 @@ export class LiteratureGraphView extends ItemView {
 			},
 			{ capture: true },
 		);
-		this.buildDisplay(display, () => setOpen(null));
-
 		const reloadSoon = debounce(() => void this.loadData(), 600, true);
 		const relayoutSoon = debounce(
 			() => {
@@ -2316,6 +2314,7 @@ export class LiteratureGraphView extends ItemView {
 			500,
 			true,
 		);
+		this.buildDisplay(display, () => setOpen(null), reloadSoon, relayoutSoon);
 		new Setting(body).setName('Filter').addSearch((search) =>
 			search.setPlaceholder('Author, year or title').onChange((value) => {
 				this.filter = value.trim().toLowerCase();
@@ -2366,19 +2365,6 @@ export class LiteratureGraphView extends ItemView {
 						reloadSoon();
 					}),
 			);
-		new Setting(body)
-			.setName('Cited by graph')
-			.setDesc('Instead of the works your works cite, the works outside your vault that cite them (often newer), from OpenAlex. Minimum citations: how many of your works they cite. Kept for every graph.')
-			.addToggle((toggle) => {
-				toggle.setValue(this.options.citedBy === true).onChange((value) => {
-					this.options.citedBy = value;
-					void this.saveSettings({ graphCitedBy: value });
-					reloadSoon();
-				});
-				this.syncControls.push(() => {
-					toggle.setValue(this.options.citedBy === true);
-				});
-			});
 		new Setting(body)
 			.setName('Works without a DOI')
 			.setDesc('Works of the reference lists that have no DOI, known only from your notes (depth 1).')
@@ -2435,7 +2421,6 @@ export class LiteratureGraphView extends ItemView {
 					this.showCurrent();
 				}),
 			);
-		this.buildColors(body);
 		this.groupsEl = body.createDiv();
 		this.buildGroups(this.groupsEl);
 		this.renderTopicLegend();
@@ -2457,24 +2442,6 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
-		new Setting(body)
-			.setName('Point size')
-			.setDesc('Kept for every graph.')
-			.addSlider((slider) => {
-				slider
-					.setLimits(0.25, 3, 0.05)
-					.setValue(Number(this.settings().graphPointScale) || 1)
-					.onChange((value) => {
-						this.invalidate();
-						this.requestFrame();
-						void this.saveSettings({ graphPointScale: value });
-						// The spacing follows the size: the layout starts again, from where the works are.
-						relayoutSoon();
-					});
-				this.syncControls.push(() => {
-					slider.setValue(Number(this.settings().graphPointScale) || 1);
-				});
-			});
 		new Setting(body).setName('Center force').addSlider((slider) =>
 			slider
 				.setLimits(0, 0.2, 0.005)
@@ -2484,44 +2451,6 @@ export class LiteratureGraphView extends ItemView {
 					this.applyForces();
 				}),
 		);
-		// Only in the Meaning layout.
-		const meaningAttraction = new Setting(body)
-			.setName('Meaning attraction')
-			.setDesc('Works of one meaning gather in balls; works between two meanings, between their balls. Higher: denser balls, more decided groups.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(0, 5, 0.1)
-					.setValue(this.forces.meaning)
-					.onChange((value) => {
-						this.forces.meaning = value;
-						// The places the works are drawn to depend on it: the layout starts again, from where the works are.
-						relayoutSoon();
-					}),
-			);
-		const showMeaningAttraction = () => meaningAttraction.settingEl.toggle(this.layoutStyle === 'meaning');
-		showMeaningAttraction();
-		this.syncControls.push(showMeaningAttraction);
-		const timeline = new Setting(body).setName('Timeline');
-		this.timelineDesc = timeline.descEl;
-		timeline
-			.addSlider((slider) => {
-				this.yearSlider = slider;
-				slider.setLimits(1900, 2030, 1).setValue(2030);
-				slider.onChange((value) => {
-					if (this.movingYearSlider) return;
-					this.stopTimeline();
-					const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
-					this.setYearLimit(known.length > 0 && value >= Math.max(...known) ? null : value);
-				});
-			})
-			.addExtraButton((button) =>
-				button
-					.setIcon('play')
-					.setTooltip('Play: the literature year by year')
-					.onClick(() => this.playTimeline()),
-			);
-		this.describeTimeline();
-		this.register(() => this.stopTimeline());
 		new Setting(body).addButton((button) =>
 			button.setButtonText('Restart layout').onClick(() => {
 				this.layout?.send({ type: 'reheat', alpha: 1 });
@@ -2542,10 +2471,12 @@ export class LiteratureGraphView extends ItemView {
 
 	/**
 	 * The display panel: the style of layout (for as long as the view is
-	 * open; its default is in the settings) and the idle animation (kept for
-	 * every graph), with the buttons to lay the graph out again.
+	 * open; its default is in the settings) and what changes how the graph
+	 * looks (the cited-by graph, the colors, the point size, the timeline),
+	 * the idle animation (kept for every graph), and the buttons to lay the
+	 * graph out again.
 	 */
-	private buildDisplay(body: HTMLElement, close: () => void): void {
+	private buildDisplay(body: HTMLElement, close: () => void, reloadSoon: () => void, relayoutSoon: () => void): void {
 		new Setting(body)
 			.setName('Layout')
 			.setDesc('For as long as the view is open; the default is in the plugin settings. Meaning: works on related subjects gather in clouds.')
@@ -2585,6 +2516,76 @@ export class LiteratureGraphView extends ItemView {
 		const showRegions = () => regions.settingEl.toggle(this.layoutStyle === 'meaning');
 		showRegions();
 		this.syncControls.push(showRegions);
+		// Only in the Meaning layout.
+		const meaningAttraction = new Setting(body)
+			.setName('Meaning attraction')
+			.setDesc('Works of one meaning gather in balls; works between two meanings, between their balls. Higher: denser balls, more decided groups.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 5, 0.1)
+					.setValue(this.forces.meaning)
+					.onChange((value) => {
+						this.forces.meaning = value;
+						// The places the works are drawn to depend on it: the layout starts again, from where the works are.
+						relayoutSoon();
+					}),
+			);
+		const showMeaningAttraction = () => meaningAttraction.settingEl.toggle(this.layoutStyle === 'meaning');
+		showMeaningAttraction();
+		this.syncControls.push(showMeaningAttraction);
+		new Setting(body)
+			.setName(CITED_BY_GRAPH)
+			.setDesc('Instead of the works your works cite, the works outside your vault that cite them (often newer), from OpenAlex. Minimum citations: how many of your works they cite. Kept for every graph.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.options.citedBy === true).onChange((value) => {
+					this.options.citedBy = value;
+					void this.saveSettings({ graphCitedBy: value });
+					reloadSoon();
+				});
+				this.syncControls.push(() => {
+					toggle.setValue(this.options.citedBy === true);
+				});
+			});
+		this.buildColors(body);
+		new Setting(body)
+			.setName('Point size')
+			.setDesc('Kept for every graph.')
+			.addSlider((slider) => {
+				slider
+					.setLimits(0.25, 3, 0.05)
+					.setValue(Number(this.settings().graphPointScale) || 1)
+					.onChange((value) => {
+						this.invalidate();
+						this.requestFrame();
+						void this.saveSettings({ graphPointScale: value });
+						// The spacing follows the size: the layout starts again, from where the works are.
+						relayoutSoon();
+					});
+				this.syncControls.push(() => {
+					slider.setValue(Number(this.settings().graphPointScale) || 1);
+				});
+			});
+		const timeline = new Setting(body).setName('Timeline');
+		this.timelineDesc = timeline.descEl;
+		timeline
+			.addSlider((slider) => {
+				this.yearSlider = slider;
+				slider.setLimits(1900, 2030, 1).setValue(2030);
+				slider.onChange((value) => {
+					if (this.movingYearSlider) return;
+					this.stopTimeline();
+					const known = this.years.filter((y): y is number => y !== null && y > 1000 && y < 3000);
+					this.setYearLimit(known.length > 0 && value >= Math.max(...known) ? null : value);
+				});
+			})
+			.addExtraButton((button) =>
+				button
+					.setIcon('play')
+					.setTooltip('Play: the literature year by year')
+					.onClick(() => this.playTimeline()),
+			);
+		this.describeTimeline();
+		this.register(() => this.stopTimeline());
 		new Setting(body).addButton((button) =>
 			button
 				.setButtonText('Reset layout')

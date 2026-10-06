@@ -4,6 +4,9 @@ import { LAYOUT_STYLES } from './layout';
 
 export type CitationLanguage = 'en' | 'fr';
 
+/** The name of the cited-by mode of the graph: a proper name, capitalized as its author chose. */
+export const CITED_BY_GRAPH = '"Cited By" graph';
+
 export interface LiteratureGraphSettings {
 	/** Folder that holds the literature notes (empty = whole vault). */
 	literatureFolder: string;
@@ -233,7 +236,7 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						control: { type: 'toggle', key: 'graphAllNotes' },
 					},
 					{
-						name: 'Cited by graph',
+						name: CITED_BY_GRAPH,
 						desc: 'At depth 1 and 2, show the works outside the vault that cite the works of the vault (often newer literature, listed once by OpenAlex), instead of the works they cite. The minimum number of citations is then how many works of the vault they cite. Can be changed in the graph.',
 						control: { type: 'toggle', key: 'graphCitedBy' },
 					},
