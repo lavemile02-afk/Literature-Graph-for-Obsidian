@@ -227,6 +227,8 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<LiteratureGraphSettings>);
 		// A setting of earlier versions: PDFs are now saved in the vault (pdfFolder).
 		delete (this.settings as LiteratureGraphSettings & { downloadFolder?: string }).downloadFolder;
+		// Earlier versions kept the Meaning regions on for every graph; they are now off whenever a graph opens.
+		delete (this.settings as LiteratureGraphSettings & { graphShowRegions?: boolean }).graphShowRegions;
 	}
 
 	async saveSettings() {

@@ -50,7 +50,7 @@ test('sends positions after each step until the layout settles, then stops', () 
 	const loop = new LayoutLoop((u) => updates.push(u), clock.timers);
 	loop.handle(start(7));
 	clock.run(1000);
-	assert.ok(updates.length > 100 && updates.length < 1000);
+	assert.ok(updates.length > 20 && updates.length < 1000, `${updates.length} steps`);
 	assert.equal(updates.at(-1)?.moving, false);
 	assert.equal(updates.at(-1)?.graph, 7);
 	assert.equal(updates.at(-1)?.positions.length, 6);
@@ -89,4 +89,26 @@ test('stops for good on "stop"', () => {
 	loop.handle({ type: 'reheat', alpha: 1 });
 	clock.run(10);
 	assert.equal(updates.length, count);
+});
+
+test('freezes once nothing moves visibly, before the end of the cooling, and moves again when asked', () => {
+	const updates: LayoutUpdate[] = [];
+	const clock = fakeTimers();
+	const loop = new LayoutLoop((u) => updates.push(u), clock.timers);
+	loop.handle(start(1));
+	clock.run(1000);
+	assert.equal(updates.at(-1)?.moving, false);
+	// d3 cools in about 300 steps from alpha 1; a still graph stops before.
+	const steps = updates.length;
+	assert.ok(steps < 300, `${steps} steps`);
+	// The last steps barely moved anything.
+	const a = updates.at(-2)?.positions ?? new Float32Array(6);
+	const b = updates.at(-1)?.positions ?? new Float32Array(6);
+	assert.ok(a.every((x, i) => Math.abs(x - (b[i] ?? 0)) < 0.05));
+	// Changing a force starts it again.
+	loop.handle({ type: 'forces', forces: { repel: 200, linkDistance: 120, center: 0.05, meaning: 1 } });
+	clock.run(1);
+	assert.equal(updates.at(-1)?.moving, true);
+	clock.run(1000);
+	assert.equal(updates.at(-1)?.moving, false);
 });

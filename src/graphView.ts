@@ -296,6 +296,13 @@ export class LiteratureGraphView extends ItemView {
 	private regions: { group: number[]; parts: { circle: Graphics; label: Text; color: number }[] } | null = null;
 	/** When the regions were last fitted to the works (they follow them a few times a second at most). */
 	private regionsPlacedAt = 0;
+	/** The works moved since the regions were last fitted to them. */
+	private regionsStale = true;
+	/**
+	 * Whether the regions are shown (Meaning layout): off when the view opens
+	 * and whenever another layout is chosen (decision of the user).
+	 */
+	private showRegions = false;
 	private axisParts: { top: Container; grid: Graphics; margin: number } | null = null;
 	/** Bright signals running along the citations (the constellation animation). */
 	private readonly signalsLayer = new Container();
@@ -1230,24 +1237,29 @@ export class LiteratureGraphView extends ItemView {
 		});
 		this.regions = { group: groups.group, parts };
 		this.regionsPlacedAt = 0;
+		this.regionsStale = true;
 	}
 
 	/**
 	 * Fits each region to its works where they are now: centered on the
 	 * middle of the group, and wide enough for four in five of its works (the
 	 * works between groups do not widen it). At
-	 * most four times a second; returns whether to come back (the works move).
+	 * most four times a second, and only when the works moved; returns
+	 * whether to come back for a move not followed yet. (It used to ask for
+	 * frames for ever, which kept the processor busy while the graph stood
+	 * still.)
 	 */
 	private placeRegions(now: number): boolean {
 		const regions = this.regions;
-		const shown = !!regions && this.layoutStyle === 'meaning' && this.settings().graphShowRegions === true;
+		const shown = !!regions && this.layoutStyle === 'meaning' && this.showRegions;
 		this.regionLayer.visible = shown;
 		if (!shown || !regions) return false;
 		// Hidden during the idle animation, where the works are elsewhere for a while.
 		this.regionLayer.alpha = 1 - this.idle.level;
-		if (this.idle.level > 0) return false;
-		if (now - this.regionsPlacedAt < 250) return this.regionsPlacedAt > 0;
+		if (this.idle.level > 0 || !this.regionsStale) return false;
+		if (now - this.regionsPlacedAt < 250) return true;
 		this.regionsPlacedAt = now;
+		this.regionsStale = false;
 		// The middle of a group: the median of its works on each axis, so the
 		// works on the bridges to other groups do not pull it off its ball.
 		const count = regions.parts.length;
@@ -1274,7 +1286,7 @@ export class LiteratureGraphView extends ItemView {
 			circle.circle(cx, cy, r).fill({ color, alpha: 0.05 }).stroke({ width: Math.max(2, r / 120), color, alpha: 0.45 });
 			label.position.set(cx, cy - r - label.style.fontSize * 0.15);
 		});
-		return true;
+		return false;
 	}
 
 	private applyTopicColors(): void {
@@ -1435,6 +1447,7 @@ export class LiteratureGraphView extends ItemView {
 			node.y = p[node.index * 2 + 1];
 		}
 		this.edgesDirty = true;
+		this.regionsStale = true;
 		this.requestFrame();
 		// At rest: remember where each work is, for the next opening (global graph only).
 		if (!update.moving && !this.local) this.savePositions();
@@ -2175,13 +2188,14 @@ export class LiteratureGraphView extends ItemView {
 		}
 		new Setting(body)
 			.setName('Minimum citations')
-			.setDesc('For a work outside the vault to be shown.')
+			.setDesc('For a work outside the vault to be shown (works of the vault always are). Kept for every graph.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(1, 10, 1)
 					.setValue(this.options.minCitations)
 					.onChange((value) => {
 						this.options.minCitations = value;
+						void this.saveSettings({ graphMinCitations: value });
 						reloadSoon();
 					}),
 			);
@@ -2314,6 +2328,8 @@ export class LiteratureGraphView extends ItemView {
 					.setValue(this.layoutStyle)
 					.onChange((value) => {
 						this.layoutStyle = isLayoutStyle(value) ? value : 'default';
+						// The regions are off again when the Meaning layout is left.
+						if (this.layoutStyle !== 'meaning') this.showRegions = false;
 						for (const sync of this.syncControls) sync();
 						// A new layout from the positions shown: the works move to their new places.
 						this.showCurrent();
@@ -2327,15 +2343,16 @@ export class LiteratureGraphView extends ItemView {
 		// Only in the Meaning layout.
 		const regions = new Setting(body)
 			.setName('Regions')
-			.setDesc('A circle around each group of meaning, named by the keyword most typical of its works. Kept for every graph.')
+			.setDesc('A circle around each group of meaning, named by the keyword most typical of its works. Off when the graph opens.')
 			.addToggle((toggle) => {
-				toggle.setValue(this.settings().graphShowRegions === true).onChange((value) => {
-					void this.saveSettings({ graphShowRegions: value });
+				toggle.setValue(this.showRegions).onChange((value) => {
+					this.showRegions = value;
 					this.regionsPlacedAt = 0;
+					this.regionsStale = true;
 					this.requestFrame();
 				});
 				this.syncControls.push(() => {
-					toggle.setValue(this.settings().graphShowRegions === true);
+					toggle.setValue(this.showRegions);
 				});
 			});
 		const showRegions = () => regions.settingEl.toggle(this.layoutStyle === 'meaning');

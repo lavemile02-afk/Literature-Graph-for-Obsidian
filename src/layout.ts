@@ -133,6 +133,18 @@ export interface LayoutUpdate {
 const STEP_INTERVAL = 16;
 /** Alpha kept while a node is dragged, so the others follow it. */
 const DRAG_ALPHA_TARGET = 0.3;
+/**
+ * The layout is frozen once no work has moved more than `FREEZE_SHARE` of
+ * the graph's width (and at least `FREEZE_MOVE`, in graph units; a work's
+ * radius is 4 or more) for `FREEZE_STEPS` steps in a row: a tenth of a pixel
+ * or less when the whole graph is in view. What is left of its cooling would
+ * not show, and would only keep the processor busy (measured on 9,700 works:
+ * still after 7 s, cooled after 19 s). Dragging a work or changing a force
+ * starts it again.
+ */
+export const FREEZE_MOVE = 0.05;
+export const FREEZE_SHARE = 1e-4;
+export const FREEZE_STEPS = 20;
 
 const ends = (l: LayoutLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
 
@@ -236,6 +248,9 @@ export class LayoutLoop {
 	private graph = 0;
 	private timer: number | null = null;
 	private readonly dragged = new Set<number>();
+	/** Positions sent last, and how many steps in a row nothing moved visibly (see `FREEZE_MOVE`). */
+	private last: Float32Array | null = null;
+	private stillSteps = 0;
 
 	constructor(
 		private readonly post: (update: LayoutUpdate) => void,
@@ -243,12 +258,15 @@ export class LayoutLoop {
 	) {}
 
 	handle(message: LayoutMessage): void {
+		// Any message may set the works moving: count the still steps again.
+		this.stillSteps = 0;
 		switch (message.type) {
 			case 'start': {
 				this.graph = message.graph;
 				this.nodes = message.nodes.map((n) => ({ ...n }));
 				this.links = message.links.map((l) => ({ ...l }));
 				this.dragged.clear();
+				this.last = null;
 				this.style = message.style ?? 'default';
 				this.sim = createStyleSimulation(this.style, this.nodes, this.links, message.forces).alpha(message.alpha);
 				break;
@@ -287,6 +305,7 @@ export class LayoutLoop {
 				this.timer = null;
 				this.sim = null;
 				this.nodes = [];
+				this.last = null;
 				return;
 		}
 		this.schedule(0);
@@ -315,6 +334,24 @@ export class LayoutLoop {
 			positions[i * 2] = n.x ?? 0;
 			positions[i * 2 + 1] = n.y ?? 0;
 		});
+		// Frozen once nothing moves visibly any more (never while a work is dragged).
+		const last = this.last;
+		if (last && last.length === positions.length && this.dragged.size === 0) {
+			let most = 0;
+			let min = Infinity;
+			let max = -Infinity;
+			for (let i = 0; i < positions.length; i++) {
+				const p = positions[i] ?? 0;
+				most = Math.max(most, Math.abs(p - (last[i] ?? 0)));
+				min = Math.min(min, p);
+				max = Math.max(max, p);
+			}
+			const still = Math.max(FREEZE_MOVE, (max - min) * FREEZE_SHARE);
+			this.stillSteps = most < still ? this.stillSteps + 1 : 0;
+			if (this.stillSteps >= FREEZE_STEPS) sim.alpha(0);
+		}
+		// (The array sent is handed over to the other side: keep a copy.)
+		this.last = positions.slice();
 		const moving = this.moving;
 		this.post({ graph: this.graph, positions, moving });
 		if (moving) this.schedule(Math.max(0, STEP_INTERVAL - (this.timers.now() - started)));
