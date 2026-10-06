@@ -319,6 +319,8 @@ export class LiteratureGraphView extends ItemView {
 	private meaningModelCache: { key: string; vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null } | null = null;
 	/** The works (their ids) whose meaning was last computed: a graph shown again with the same works is not computed again. */
 	private meaningFor: string | null = null;
+	/** Whether the layout running was given each work's nearest works in meaning (Meaning layout). */
+	private laidOutWithKin = false;
 	private meaningRun = 0;
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
@@ -616,7 +618,7 @@ export class LiteratureGraphView extends ItemView {
 		);
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
 		this.watchActivity();
-		await Promise.all([this.positions.load(), this.ghosts.load()]);
+		await Promise.all([this.positions.load(), this.ghosts.load(), this.meaningCache.load()]);
 		await this.loadData();
 	}
 
@@ -904,6 +906,8 @@ export class LiteratureGraphView extends ItemView {
 		this.outsideEdges.setLinks(this.links.filter(outside));
 		this.updateFocusEdges();
 
+		// The meaning of the works, when the cache has it: colors and places from the start.
+		this.meaningFromCache();
 		this.applyColorGroups();
 		if (this.local && this.nodes.length <= MAX_FILTER_LABELS) for (const node of this.nodes) this.ensureLabel(node);
 		// Labels of the vault's works; others get one on hover.
@@ -917,6 +921,7 @@ export class LiteratureGraphView extends ItemView {
 		const anchors = meaning ? this.meaningAnchors() : null;
 		// (The kin found for these same nodes, if the meaning is known.)
 		const kin = meaning && this.meaningKin.length === this.nodes.length ? this.meaningKin : null;
+		this.laidOutWithKin = kin !== null;
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
@@ -1009,7 +1014,93 @@ export class LiteratureGraphView extends ItemView {
 		const words = tokenize([this.index.vaultWork(file)?.title || file.basename, ...keywords, body].join('\n'));
 		const entry = { mtime: file.stat.mtime, words, text: fingerprint(words.join(' ')) };
 		this.noteWords.set(file.path, entry);
+		this.meaningCache.setNote(file.path, file.stat.mtime, file.stat.size, keywordsProperty(this.settings()), entry.text);
 		return entry;
+	}
+
+	/**
+	 * The fingerprint of a note's words without reading it: from memory, or
+	 * from the meaning cache while the note is unchanged; null if unknown.
+	 */
+	private knownNoteText(file: TFile): string | null {
+		const kept = this.noteWords.get(file.path);
+		if (kept && kept.mtime === file.stat.mtime) return kept.text;
+		return this.meaningCache.noteText(file.path, file.stat.mtime, file.stat.size, keywordsProperty(this.settings())) ?? null;
+	}
+
+	/** The literature notes of the vault, in a fixed order (what meaning is learned from). */
+	private literatureFiles(): TFile[] {
+		return this.app.vault
+			.getMarkdownFiles()
+			.filter((f) => this.index.isLiterature(f))
+			.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	}
+
+	/** The fingerprint of what meaning is learned from, kept while nothing it depends on changed. */
+	private modelKeyMemo: { signature: string; key: string } | null = null;
+
+	/**
+	 * The fingerprint of what meaning is learned from (see `meaningModel`):
+	 * the words of the literature notes and what OpenAlex says of the works
+	 * they cite. Null when a note changed and must be read first.
+	 */
+	private knownModelKey(files: TFile[]): string | null {
+		const property = keywordsProperty(this.settings());
+		const signature = `${this.openAlex.revision}\n${property}\n${files.map((f) => `${f.path}\t${f.stat.mtime}\t${f.stat.size}`).join('\n')}`;
+		if (this.modelKeyMemo?.signature === signature) return this.modelKeyMemo.key;
+		const sources: string[] = [];
+		for (const file of files) {
+			const text = this.knownNoteText(file);
+			if (text === null) return null;
+			sources.push(`${file.path}\t${text}`);
+		}
+		for (const id of this.citedByVault(files)) sources.push(`${id}\t${fingerprint(this.openAlexText(id))}`);
+		sources.push(property);
+		const key = fingerprint(sources.join('\n'));
+		this.modelKeyMemo = { signature, key };
+		return key;
+	}
+
+	/** What the meaning of the works shown is computed for: the works, and whether their nearest works are needed. */
+	private meaningWorks(needKin: boolean): string {
+		return `${this.nodes.map((n) => n.data.id).join('\n')}\n${needKin ? 'kin' : ''}`;
+	}
+
+	/**
+	 * Gives the works shown their meaning straight from the cache, before the
+	 * graph is drawn and laid out (when the notes it was learned from are
+	 * unchanged): the graph opens in its colors and is laid out once. The
+	 * works not in the cache (new, or changed) are left to `computeMeaning`, a
+	 * moment later.
+	 */
+	private meaningFromCache(): void {
+		if ((!this.byMeaning() && this.layoutStyle !== 'meaning') || !this.meaningCache.isLoaded) return;
+		const needKin = this.layoutStyle === 'meaning';
+		const works = this.meaningWorks(needKin);
+		if (this.meaningFor === works) return;
+		const model = this.knownModelKey(this.literatureFiles());
+		if (model === null || !this.meaningCache.hasModel(model)) return;
+		const places = new Map<string, [number, number]>();
+		let complete = true;
+		for (const node of this.nodes) {
+			const text = node.data.file ? this.knownNoteText(node.data.file) : fingerprint(this.outsideText(node));
+			const place = text === null ? undefined : this.meaningCache.place(node.data.id, text);
+			if (place === undefined) complete = false;
+			else if (place) places.set(node.data.id, place);
+		}
+		// (Not complete: `computeMeaning` still runs, for the others.)
+		if (complete) this.meaningFor = works;
+		this.meaningById = places;
+		this.meaningKin = needKin ? nearestInPlane(this.nodes.map((n) => places.get(n.data.id) ?? null), MEANING_NEIGHBORS) : [];
+	}
+
+	/** The text of a work outside the vault: what OpenAlex says of it, or its reference, and what was written in its ghost note. */
+	private outsideText(node: SimNode): string {
+		const id = node.data.openAlexId;
+		const ghost = id ? this.ghosts.get({ id, doi: node.data.doi }) : this.ghosts.get({ doi: node.data.doi, entry: node.data.entry });
+		return id
+			? `${this.openAlexText(id, node.data.title)}\n${ghost ?? ''}`
+			: `${node.data.title} ${node.data.entry?.text ?? ''} ${ghost ?? ''}`;
 	}
 
 	/**
@@ -1057,11 +1148,7 @@ export class LiteratureGraphView extends ItemView {
 			const note = await this.noteText(file);
 			return { text: note.text, words: () => note.words };
 		}
-		const id = node.data.openAlexId;
-		const ghost = id ? this.ghosts.get({ id, doi: node.data.doi }) : this.ghosts.get({ doi: node.data.doi, entry: node.data.entry });
-		const text = id
-			? `${this.openAlexText(id, node.data.title)}\n${ghost ?? ''}`
-			: `${node.data.title} ${node.data.entry?.text ?? ''} ${ghost ?? ''}`;
+		const text = this.outsideText(node);
 		return { text: fingerprint(text), words: () => tokenize(text) };
 	}
 
@@ -1081,7 +1168,7 @@ export class LiteratureGraphView extends ItemView {
 		// By the works shown, not by the graph object: showing the same works
 		// again (the Meaning layout does, once the meaning is known) builds a
 		// new object, and must not start the computation again.
-		const works = `${this.nodes.map((n) => n.data.id).join('\n')}\n${needKin ? 'kin' : ''}`;
+		const works = this.meaningWorks(needKin);
 		if (this.meaningFor === works) return;
 		this.meaningFor = works;
 		const run = ++this.meaningRun;
@@ -1097,10 +1184,15 @@ export class LiteratureGraphView extends ItemView {
 				};
 				channel.port2.postMessage(null);
 			});
-		const files = this.app.vault
-			.getMarkdownFiles()
-			.filter((f) => this.index.isLiterature(f))
-			.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+		// Long loops give the hand back every 30 ms or so, not after each item:
+		// each pause waits behind the frames being drawn.
+		let lastPause = performance.now();
+		const breathe = async () => {
+			if (performance.now() - lastPause < 30) return;
+			await pause();
+			lastPause = performance.now();
+		};
+		const files = this.literatureFiles();
 		const cited = this.citedByVault(files);
 		const ids = [...new Set([...nodes.flatMap((n) => (n.data.openAlexId ? [n.data.openAlexId] : [])), ...cited])];
 		try {
@@ -1116,14 +1208,13 @@ export class LiteratureGraphView extends ItemView {
 		this.setStatus(`${this.summary} · Computing the meaning of the works…`);
 		await this.meaningCache.load();
 		// What the meaning is learned from, as one fingerprint.
-		const sources: string[] = [];
+		// The notes changed since they were last read are read now.
 		for (const file of files) {
-			sources.push(`${file.path}\t${(await this.noteText(file)).text}`);
-			await pause();
+			if (this.knownNoteText(file) !== null) continue;
+			await this.noteText(file);
+			await breathe();
 		}
-		for (const id of cited) sources.push(`${id}\t${fingerprint(this.openAlexText(id))}`);
-		sources.push(keywordsProperty(this.settings()));
-		const model = fingerprint(sources.join('\n'));
+		const model = this.knownModelKey(files) ?? '';
 		if (run !== this.meaningRun) return;
 		this.meaningCache.useModel(model);
 		// Places from the cache; the others are computed.
@@ -1136,7 +1227,7 @@ export class LiteratureGraphView extends ItemView {
 			const place = this.meaningCache.place(node.data.id, text);
 			if (place === undefined) missing.push({ node, text, words });
 			else if (place) places.set(node.data.id, place);
-			if (i % 500 === 499) await pause();
+			await breathe();
 		}
 		if (run !== this.meaningRun) return;
 		if (missing.length > 0) {
@@ -1148,17 +1239,20 @@ export class LiteratureGraphView extends ItemView {
 				const place = vector && plane ? placeIn(plane, vector) : null;
 				this.meaningCache.setPlace(node.data.id, text, place);
 				if (place) places.set(node.data.id, place);
-				if (i % 200 === 199) await pause();
+				await breathe();
 			}
 			if (run !== this.meaningRun) return;
 		}
+		// Works placed now that were not before (from the cache, when the graph was shown).
+		const newly = nodes.filter((n) => places.has(n.data.id) && !this.meaningById.has(n.data.id)).length;
 		this.meaningById = places;
 		// The Meaning layout draws each work to its nearest works in the plane (by node index).
 		this.meaningKin = needKin ? nearestInPlane(nodes.map((n) => places.get(n.data.id) ?? null), MEANING_NEIGHBORS) : [];
 		this.setStatus(this.summary);
 		this.applyTopicColors();
-		// The Meaning layout places the works by their meaning, now known.
-		if (this.layoutStyle === 'meaning') this.showCurrent();
+		// The Meaning layout places the works by their meaning, now known; a
+		// few new works (2 % or less) are not worth laying the graph out again.
+		if (this.layoutStyle === 'meaning' && (newly > nodes.length * 0.02 || !this.laidOutWithKin)) this.showCurrent();
 	}
 
 	/**

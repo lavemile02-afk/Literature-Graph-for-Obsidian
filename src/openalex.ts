@@ -231,8 +231,12 @@ export class OpenAlexClient {
 		return this.loaded;
 	}
 
+	/** Goes up at each change of the cache: what was computed from it may have changed. */
+	revision = 0;
+
 	/** Writes the cache file a little after the last change. */
 	private scheduleSave(): void {
+		this.revision++;
 		if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
 		this.saveTimer = window.setTimeout(() => {
 			this.saveTimer = null;

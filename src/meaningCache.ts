@@ -9,11 +9,22 @@ interface PlaceEntry {
 	place: [number, number] | null;
 }
 
+/** The fingerprint of a note's words, while the file and the keywords property are the same. */
+interface NoteEntry {
+	mtime: number;
+	size: number;
+	/** The keywords property read with the note. */
+	property: string;
+	text: string;
+}
+
 interface CacheFile {
 	version: number;
 	/** What the meaning was learned from (see `graphView.ts`): another key, other places. */
 	model: string;
 	places: Record<string, PlaceEntry>;
+	/** Fingerprints of the notes of the vault, so that opening the graph needs not read them all again. */
+	notes?: Record<string, NoteEntry>;
 }
 
 /**
@@ -26,6 +37,8 @@ interface CacheFile {
 export class MeaningCache {
 	private cache: CacheFile = { version: CACHE_VERSION, model: '', places: {} };
 	private loaded: Promise<void> | null = null;
+	/** Whether the file was read (the cache can then be used without waiting). */
+	isLoaded = false;
 	private dirty = false;
 	private readonly write = debounce(() => void this.flush(), 2000, true);
 
@@ -45,14 +58,36 @@ export class MeaningCache {
 			} catch (error) {
 				console.error('Literature Graph: could not read the meaning cache', error);
 			}
+			this.isLoaded = true;
 		})();
 		return this.loaded;
+	}
+
+	/** Whether the places kept were computed with this meaning. */
+	hasModel(model: string): boolean {
+		return this.cache.model === model;
 	}
 
 	/** Starts over when the meaning was learned from something else (the notes of the vault changed). */
 	useModel(model: string): void {
 		if (this.cache.model === model) return;
-		this.cache = { version: CACHE_VERSION, model, places: {} };
+		// (The fingerprints of the notes do not depend on the meaning: they stay.)
+		this.cache = { version: CACHE_VERSION, model, places: {}, notes: this.cache.notes };
+		this.changed();
+	}
+
+	/** The fingerprint of a note's words, if the note (its date and size) and the keywords property are the same as when it was kept. */
+	noteText(path: string, mtime: number, size: number, property: string): string | undefined {
+		const entry = this.cache.notes?.[path];
+		return entry && entry.mtime === mtime && entry.size === size && entry.property === property ? entry.text : undefined;
+	}
+
+	/** Keeps the fingerprint of a note's words (written a little later). */
+	setNote(path: string, mtime: number, size: number, property: string, text: string): void {
+		const notes = (this.cache.notes ??= {});
+		const entry = notes[path];
+		if (entry && entry.mtime === mtime && entry.size === size && entry.property === property && entry.text === text) return;
+		notes[path] = { mtime, size, property, text };
 		this.changed();
 	}
 
