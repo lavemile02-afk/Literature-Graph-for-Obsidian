@@ -52,6 +52,10 @@ export interface LiteratureGraphSettings {
 	graphColorBy: string;
 	/** Size of the points of the graph, times their usual size (0.25 to 3). */
 	graphPointScale: number;
+	/** The point size chosen for each style of layout (style → size); a style without one uses its default (see `defaultPointScale`). */
+	graphPointScales: Record<string, number>;
+	/** Meaning layouts: how strongly citations pull too, from 0 to 1. */
+	graphCitationPull: number;
 	/** Topic colors: brightness, from -20 (darker) to 20 (lighter) around the theme's, and intensity (saturation), in percent. */
 	graphTopicBrightness: number;
 	graphTopicIntensity: number;
@@ -111,6 +115,8 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphColorGroups: '',
 	graphColorBy: 'groups',
 	graphPointScale: 1,
+	graphPointScales: {},
+	graphCitationPull: 0,
 	graphTopicBrightness: 0,
 	graphTopicIntensity: 100,
 	graphLayout: 'default',

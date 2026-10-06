@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { alignTo, blendWithNeighbors, centered, mapOfMeaning, meaningTree, nearestVectors, normalized, packVector, placeAmong, unpackVector, withoutLines } from '../src/meaningMap';
+import { alignTo, blendWithNeighbors, centered, mapOfMeaning, meaningTree, nearestVectors, normalized, packVector, placeAmong, radialDendrogram, unpackVector, withoutLines } from '../src/meaningMap';
 
 const v = (...xs: number[]) => normalized(xs) as Float32Array;
 
@@ -69,4 +69,19 @@ test('grows a tree of the most alike works', () => {
 test('leaves the reference lists out of a note', () => {
 	const text = ['# Title', 'Peat holds water.', '', '## References', 'Price, J. (2003). A.', 'Smith, B. (2001). B,', 'cut in two.', 'Waddington, J. (2015). C.', '', '## Annex', 'More text.'].join('\n');
 	assert.equal(withoutLines(text, [4, 5, 7]), ['# Title', 'Peat holds water.', '', '## References', '', '## Annex', 'More text.'].join('\n'));
+});
+
+test('draws a radial dendrogram: groups, subgroups, then works on a circle', () => {
+	const places: [number, number][] = [[1, 0], [1, 0.1], [0, 1], [0.1, 1], [-1, 0]];
+	const group = [0, 0, 1, 1, 2];
+	const d = radialDendrogram(places, group, 3, (works) => [works], 10, 2);
+	// Every work on the circle.
+	for (const p of d.places) assert.ok(p && Math.abs(Math.hypot(p[0], p[1]) - d.radius) < 1e-9);
+	// Three groups from the middle, three subgroups, five works.
+	assert.equal(d.hubs.filter((h) => h.level === 1).length, 3);
+	assert.equal(d.links.filter((l) => l.from === -1).length, 3);
+	assert.equal(d.links.filter((l) => l.work).length, 5);
+	// Works of one group are side by side on the circle.
+	const angle = (i: number) => Math.atan2(d.places[i]?.[1] ?? 0, d.places[i]?.[0] ?? 0);
+	assert.ok(Math.abs(angle(0) - angle(1)) < Math.abs(angle(0) - angle(2)));
 });

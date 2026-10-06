@@ -300,3 +300,106 @@ export function withoutLines(text: string, entryLines: number[]): string {
 	});
 	return lines.filter((_, i) => !drop.has(i)).join('\n');
 }
+
+/** A radial dendrogram of works (see `radialDendrogram`). */
+export interface RadialDendrogram {
+	/** The place of each work on the outer circle (null: a work without meaning). */
+	places: ([number, number] | null)[];
+	/** The inner nodes: the groups (level 1, one per group, in the order of the groups) and their subgroups (level 2). */
+	hubs: { x: number; y: number; level: 1 | 2; group: number }[];
+	/** The branches: [from, to], each a hub (index into `hubs`), the middle (-1), or a work (`work`; `end`: the first or last work of its subgroup on the circle). */
+	links: { from: number; to: number; work: boolean; end?: boolean }[];
+	/** Radius of the inner row of works. */
+	radius: number;
+}
+
+/**
+ * A radial dendrogram of the works: the middle branches into the groups of
+ * meaning (`group`, from `meaningGroups`), each group into subgroups
+ * (k-means of its works on the map), and each subgroup into its works, which
+ * stand on a circle, in the order of the map (the groups, their subgroups
+ * and their works by angle around the middle of the map), so neighbor
+ * meanings are neighbors on the circle. `spacing` is the room of one work
+ * along the circle; `gap` (in works) separates two groups, a quarter of it
+ * two subgroups.
+ */
+export function radialDendrogram(
+	places: ([number, number] | null)[],
+	group: number[],
+	groupCount: number,
+	subgroupsOf: (works: number[]) => number[][],
+	spacing: number,
+	gap: number,
+): RadialDendrogram {
+	const angle = (p: [number, number] | null | undefined) => (p ? Math.atan2(p[1], p[0]) : 0);
+	const mean = (list: number[]): [number, number] => {
+		let x = 0;
+		let y = 0;
+		for (const i of list) {
+			x += places[i]?.[0] ?? 0;
+			y += places[i]?.[1] ?? 0;
+		}
+		return [x / (list.length || 1), y / (list.length || 1)];
+	};
+	const members: number[][] = Array.from({ length: groupCount }, () => []);
+	places.forEach((p, i) => {
+		const g = group[i] ?? -1;
+		if (p && g >= 0 && g < groupCount) members[g]?.push(i);
+	});
+	const order = members.map((list, g) => ({ g, list, a: angle(mean(list)) })).filter((o) => o.list.length > 0).sort((x, y) => x.a - y.a);
+	// The works in order, with the gaps, as slots along the circle.
+	type Slot = { work: number; group: number; sub: number } | null;
+	const slots: Slot[] = [];
+	const subgroups: { group: number; works: number[] }[] = [];
+	for (const { g, list } of order) {
+		if (slots.length > 0) for (let k = 0; k < gap; k++) slots.push(null);
+		const subs = subgroupsOf(list)
+			.filter((s) => s.length > 0)
+			.map((s) => ({ s, a: angle(mean(s)) }))
+			.sort((x, y) => x.a - y.a);
+		subs.forEach(({ s }, k) => {
+			if (k > 0) for (let q = 0; q < Math.max(1, Math.round(gap / 4)); q++) slots.push(null);
+			const sub = subgroups.length;
+			const sorted = [...s].sort((x, y) => angle(places[x]) - angle(places[y]));
+			subgroups.push({ group: g, works: sorted });
+			for (const w of sorted) slots.push({ work: w, group: g, sub });
+		});
+	}
+	// Several rows of works, so the circle stays of a size one can take in
+	// (one row of 10,000 works would be very wide): consecutive works fill a
+	// column across the rows, then the next column.
+	const rows = Math.max(1, Math.round(Math.sqrt(slots.length / 400)));
+	const columns = Math.ceil(slots.length / rows);
+	const radius = Math.max(1, (columns * spacing) / (2 * Math.PI));
+	const out: ([number, number] | null)[] = places.map(() => null);
+	const slotAngle = (k: number) => (2 * Math.PI * Math.floor(k / rows)) / Math.max(1, columns) - Math.PI / 2;
+	const angles = new Map<number, number[]>();
+	const subAngles = new Map<number, number[]>();
+	slots.forEach((slot, k) => {
+		if (!slot) return;
+		const a = slotAngle(k);
+		const r = radius + (k % rows) * spacing;
+		out[slot.work] = [r * Math.cos(a), r * Math.sin(a)];
+		angles.set(slot.group, [...(angles.get(slot.group) ?? []), a]);
+		subAngles.set(slot.sub, [...(subAngles.get(slot.sub) ?? []), a]);
+	});
+	// The middle angle of a run of angles (they follow each other along the circle).
+	const middle = (list: number[]) => ((list[0] ?? 0) + (list[list.length - 1] ?? 0)) / 2;
+	const hubs: RadialDendrogram['hubs'] = [];
+	const links: RadialDendrogram['links'] = [];
+	const groupHub = new Map<number, number>();
+	for (const { g } of order) {
+		const a = middle(angles.get(g) ?? [0]);
+		groupHub.set(g, hubs.length);
+		links.push({ from: -1, to: hubs.length, work: false });
+		hubs.push({ x: 0.35 * radius * Math.cos(a), y: 0.35 * radius * Math.sin(a), level: 1, group: g });
+	}
+	subgroups.forEach((sub, k) => {
+		const a = middle(subAngles.get(k) ?? [0]);
+		const hub = hubs.length;
+		links.push({ from: groupHub.get(sub.group) ?? -1, to: hub, work: false });
+		hubs.push({ x: 0.7 * radius * Math.cos(a), y: 0.7 * radius * Math.sin(a), level: 2, group: sub.group });
+		sub.works.forEach((w, i) => links.push({ from: hub, to: w, work: true, end: i === 0 || i === sub.works.length - 1 }));
+	});
+	return { places: out, hubs, links, radius };
+}

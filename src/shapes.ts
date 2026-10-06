@@ -203,6 +203,9 @@ export function detectCommunities(n: number, edges: [number, number][]): Int32Ar
 /** Room per work on an island, in world units (its radius grows with the square root of its size). */
 const ISLAND_ROOM = 22;
 
+/** The "Citation pull" of the meaning layouts, from 0 to 1. */
+const citationPull = (forces: Forces) => Math.min(1, Math.max(0, Number(forces.citation) || 0));
+
 /**
  * Centers of the islands: the largest in the middle, the others around it on
  * a spiral, each far enough from the previous ones for its size.
@@ -372,7 +375,7 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 	// work without any text follows the works it is linked to.
 	const bothPlaced = (l: LayoutLink) => placed(ends(l)[0]) && placed(ends(l)[1]);
 	const sim = forceSimulation<LayoutNode, LayoutLink>(nodes)
-		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (bothPlaced(l) ? 0.01 : 0.3) / weakestDegree(l)))
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (bothPlaced(l) ? 0.01 + 0.5 * citationPull(forces) : 0.3) / weakestDegree(l)))
 		.force(
 			'kin',
 			forceLink<LayoutNode, KinLink>(kinLinks)
@@ -419,9 +422,11 @@ export function createTreeSimulation(nodes: LayoutNode[], links: LayoutLink[], f
 		}
 	});
 	const branchEnds = (l: KinLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
-	const lean = (n: LayoutNode) => (Array.isArray(n.anchor) ? 0.02 : 0);
+	// "Meaning attraction": how firmly each work keeps to its place on the map.
+	const attraction = Math.max(0, Number.isFinite(forces.meaning) ? forces.meaning : 1);
+	const lean = (n: LayoutNode) => (Array.isArray(n.anchor) ? Math.min(0.2, 0.02 * attraction) : 0);
 	return forceSimulation<LayoutNode, LayoutLink>(nodes)
-		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => 0.005 / weakestDegree(l)))
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => (0.005 + 0.5 * citationPull(forces)) / weakestDegree(l)))
 		.force(
 			'branch',
 			forceLink<LayoutNode, KinLink>(branches)
@@ -441,3 +446,23 @@ export function createTreeSimulation(nodes: LayoutNode[], links: LayoutLink[], f
 
 /** Meaning tree: how far the repulsion reaches, so the branches open without pushing the whole tree apart. */
 const TREE_REPEL_RANGE = 400;
+
+/**
+ * The Meaning dendrogram layout: each work with a meaning is pinned where
+ * the radial dendrogram puts it (`anchor`, see `radialDendrogram` in
+ * `meaningMap.ts`); the works without one gather near the middle.
+ */
+export function createDendrogramSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
+	countDegrees(nodes, links);
+	for (const n of nodes) {
+		if (!n.anchor) continue;
+		n.fx = n.x = n.anchor[0];
+		n.fy = n.y = n.anchor[1];
+	}
+	return forceSimulation<LayoutNode, LayoutLink>(nodes)
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 0.3)).distanceMax(MEANING_REPEL_RANGE))
+		.force('x', forceX<LayoutNode>(0).strength(0.05))
+		.force('y', forceY<LayoutNode>(0).strength(0.05))
+		.force('collide', collide())
+		.stop();
+}

@@ -43,10 +43,36 @@ export function hslColor(hue: number, saturation: number, lightness: number): nu
  * The color of a place in the plane: its angle gives the hue, all around
  * the wheel; works near the middle (a mix of everything) are paler.
  */
-export function colorOfPlace([x, y]: [number, number], lightness: number, intensity = 1): number {
-	const hue = (Math.atan2(y, x) * 180) / Math.PI;
+export function colorOfPlace([x, y]: [number, number], lightness: number, intensity = 1, hueOf: (angle: number) => number = (a) => (a * 180) / Math.PI): number {
+	const hue = hueOf(Math.atan2(y, x));
 	const saturation = (0.35 + 0.5 * Math.min(1, Math.hypot(x, y) / 1.5)) * intensity;
 	return hslColor(hue, Math.min(1, saturation), lightness);
+}
+
+/**
+ * The hue (degrees) of an angle on the map, so that hues are spread evenly
+ * over the works of `angles` (the works the map was learned on): the share
+ * of those works at a smaller angle, times 360. Works crowded on one side of
+ * the map would otherwise take only part of the color wheel.
+ */
+export function evenHues(angles: number[]): (angle: number) => number {
+	const sorted = [...angles].sort((a, b) => a - b);
+	const n = sorted.length;
+	if (n < 2) return (a) => (a * 180) / Math.PI;
+	return (a) => {
+		let lo = 0;
+		let hi = n;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if ((sorted[mid] ?? 0) < a) lo = mid + 1;
+			else hi = mid;
+		}
+		// Between the two angles around it, in proportion.
+		const before = sorted[lo - 1] ?? (sorted[n - 1] ?? 0) - 2 * Math.PI;
+		const after = sorted[lo] ?? (sorted[0] ?? 0) + 2 * Math.PI;
+		const share = after > before ? (a - before) / (after - before) : 0;
+		return ((lo - 1 + share + 0.5) / n) * 360;
+	};
 }
 
 /** Colors mixed by weight (their average in RGB); null without any weight. */

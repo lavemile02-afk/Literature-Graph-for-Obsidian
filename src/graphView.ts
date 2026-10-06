@@ -31,9 +31,9 @@ import {
 	setUpAnimation,
 	signals,
 } from './animations';
-import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
+import { colorOfPlace, colorsFromSharedKeywords, evenHues, mainTopics, topicName, WorkTopics } from './topics';
 import { ballCenters, fingerprint, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
-import { alignTo, blendWithNeighbors, mapOfMeaning, meaningTree, placeAmong, withoutLines } from './meaningMap';
+import { alignTo, blendWithNeighbors, mapOfMeaning, meaningTree, placeAmong, radialDendrogram, RadialDendrogram, withoutLines } from './meaningMap';
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
@@ -175,8 +175,15 @@ const MEANING_TEXT_LIMIT = 200_000;
 const MEANING_DIMENSIONS = 64;
 /** How many works nearest in meaning each work is drawn to, in the Meaning layout. */
 const MEANING_NEIGHBORS = 6;
+/** Meaning layout: two works are drawn together only if their vectors of meaning are at least this alike (cosine; two works at random: about 0.1). */
+const KIN_MIN_SIMILARITY = 0.3;
 /** Meaning tree: each work is joined to the nearest of this many works near it on the map, then the tree is kept (see `meaningTree`). */
 const TREE_CANDIDATES = 30;
+/** An abstract this long (characters) makes the meaning of a work outside the vault reliable; so does this much text written in its ghost note. */
+const MIN_ABSTRACT_LENGTH = 200;
+const MIN_GHOST_TEXT = 300;
+/** A work without a reliable text of its own takes this much (times its own) of the meaning of the works of the vault it is linked to. */
+const WEAK_TEXT_WEIGHT = 2;
 const TREE_NEIGHBORS = 10;
 
 /**
@@ -230,6 +237,12 @@ const EDGE_FADE_MIN = 0.3;
 /** Arrowhead size, in pixels on screen; arrowheads are hidden when zoomed out past this scale. */
 const ARROW_SIZE = 4;
 const ARROW_MIN_SCALE = 0.5;
+
+/** The point size of a style of layout until the user sets one: the Meaning tree's is double (decision of the user), the others the general one. */
+function defaultPointScale(style: LayoutStyle, settings: LiteratureGraphSettings): number {
+	const general = Number(settings.graphPointScale) || 1;
+	return style === 'tree' ? Math.min(3, 2 * general) : general;
+}
 
 function radiusOf(node: GraphNode): number {
 	// (Doubled on 2026-09-30, at the user's request: the works are seen better from far.)
@@ -519,6 +532,7 @@ export class LiteratureGraphView extends ItemView {
 			linkDistance: number(s.graphLinkDistance, 60),
 			center: number(s.graphCenter, 0.02),
 			meaning: number(s.graphMeaningAttraction, 1),
+			citation: number(s.graphCitationPull, 0),
 		};
 	}
 
@@ -958,11 +972,18 @@ export class LiteratureGraphView extends ItemView {
 		this.readYears();
 		this.buildTimeAxis();
 		const meaning = this.meaningLayout();
-		const anchors = this.layoutStyle === 'meaning' ? this.meaningAnchors() : this.layoutStyle === 'tree' ? this.treeAnchors() : null;
+		const anchors =
+			this.layoutStyle === 'meaning'
+				? this.meaningAnchors()
+				: this.layoutStyle === 'tree'
+					? this.treeAnchors()
+					: this.layoutStyle === 'dendrogram'
+						? this.dendrogramAnchors()
+						: null;
 		// (The kin found for these same nodes, if the meaning is known.)
 		const kin = meaning && this.meaningKin.length === this.nodes.length ? this.meaningKin : null;
 		this.laidOutWithKin = kin !== null;
-		// The branches of the semantic tree (each link once).
+		// The branches of the semantic tree (each link once), or of the dendrogram.
 		this.treeEdges.setLinks(
 			this.layoutStyle === 'tree' && kin
 				? kin.flatMap((list, i) => {
@@ -972,7 +993,9 @@ export class LiteratureGraphView extends ItemView {
 							return source && target ? [{ data: { source: source.data.id, target: target.data.id, sources: new Set<EdgeSource>() }, source, target }] : [];
 						});
 					})
-				: [],
+				: this.layoutStyle === 'dendrogram'
+					? this.dendrogramLinks()
+					: [],
 		);
 		this.layout?.send({
 			type: 'start',
@@ -1125,22 +1148,35 @@ export class LiteratureGraphView extends ItemView {
 		return this.layoutStyle === 'meaning' ? 'kin' : this.layoutStyle === 'tree' ? 'tree' : '';
 	}
 
-	/** Whether the layout places the works by their meaning. */
+	/** Whether the layout places the works by their meaning (Meaning, Meaning tree, Meaning dendrogram). */
 	private meaningLayout(): boolean {
-		return this.kinKind() !== '';
+		return this.kinKind() !== '' || this.layoutStyle === 'dendrogram';
 	}
 
 	/** Each work's nearest works in meaning, for the layout: on the map (Meaning), or the links of the semantic tree (Meaning tree). */
 	private kinOf(kind: KinKind, nodes: SimNode[], places: Map<string, [number, number]>): [number, number][][] {
 		if (kind === '') return [];
 		const placed = nodes.map((n) => places.get(n.data.id) ?? null);
-		if (kind === 'kin') return nearestInPlane(placed, MEANING_NEIGHBORS);
+		const vectors = nodes.map((n) => this.meaningVectors.get(n.data.id) ?? null);
 		const candidates = nearestInPlane(placed, TREE_CANDIDATES).map((list) => list.map(([j]) => j));
-		const tree = meaningTree(
-			nodes.map((n) => this.meaningVectors.get(n.data.id) ?? null),
-			candidates,
-			TREE_NEIGHBORS,
-		);
+		if (kind === 'kin') {
+			// The works most alike in meaning (their vectors) among those near on the
+			// map, only past a threshold: weak resemblances are noise, not meaning.
+			if (vectors.every((v) => v === null)) return nearestInPlane(placed, MEANING_NEIGHBORS);
+			return candidates.map((list, i) => {
+				const a = vectors[i];
+				if (!a) return [];
+				const scored = list.flatMap((j): [number, number][] => {
+					const b = vectors[j];
+					if (!b) return [];
+					let s = 0;
+					for (let d = 0; d < a.length; d++) s += (a[d] ?? 0) * (b[d] ?? 0);
+					return s >= KIN_MIN_SIMILARITY ? [[j, s]] : [];
+				});
+				return scored.sort((x, y) => y[1] - x[1]).slice(0, MEANING_NEIGHBORS);
+			});
+		}
+		const tree = meaningTree(vectors, candidates, TREE_NEIGHBORS);
 		const kin: [number, number][][] = nodes.map(() => []);
 		for (const [a, b, similarity] of tree) kin[a]?.push([b, similarity]);
 		return kin;
@@ -1259,8 +1295,13 @@ export class LiteratureGraphView extends ItemView {
 			if (!id || !vector) continue;
 			for (const ref of this.openAlex.cachedWork(id)?.references ?? []) citers.set(ref, [...(citers.get(ref) ?? []), vector]);
 		}
-		const ids = [...files.map((f) => f.path), ...cited];
-		const blended = ids.map((id, i) => (i < files.length ? (own[i] ?? null) : blendWithNeighbors(own[i] ?? null, citers.get(id) ?? [])));
+		// The map is learned on the works whose meaning is reliable only (the
+		// notes of the vault, and cited works with an abstract); the others are
+		// placed among them afterwards (`placeWork`), like any work outside the
+		// corpus: semi-supervised, as the user asked.
+		const ids = [...files.map((f) => f.path), ...cited.filter((id) => this.reliableOutside(id, null))];
+		const index = new Map([...files.map((f) => f.path), ...cited].map((id, i) => [id, i]));
+		const blended = ids.map((id, i) => (i < files.length ? (own[i] ?? null) : blendWithNeighbors(own[index.get(id) ?? -1] ?? null, citers.get(id) ?? [])));
 		const present = ids.flatMap((id, i) => {
 			const vector = blended[i];
 			return vector ? [{ id, vector }] : [];
@@ -1283,6 +1324,20 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/**
+	 * Whether the meaning of a work outside the vault is reliable enough to
+	 * learn the map from (decision of the user): it has an abstract (on
+	 * OpenAlex, or written in its ghost note). A title and a few keywords are
+	 * not enough.
+	 */
+	private reliableOutside(id: string | null, node: SimNode | null): boolean {
+		if (id && (this.openAlex.cachedAbstract(id) ?? '').length >= MIN_ABSTRACT_LENGTH) return true;
+		if (!node) return false;
+		const ghost = this.ghosts.get(id ? { id, doi: node.data.doi } : { doi: node.data.doi, entry: node.data.entry }) ?? '';
+		const body = ghost.replace(/^---\n[\s\S]*?\n---\n?/, '');
+		return body.replace(/^#.*$/gm, '').trim().length >= MIN_GHOST_TEXT;
+	}
+
+	/**
 	 * A work's vector and place: as in the corpus of the map for a work of the
 	 * corpus; otherwise its own vector (with the meaning of the works of the
 	 * vault it is linked to, for a work outside the vault), placed among its
@@ -1292,6 +1347,8 @@ export class LiteratureGraphView extends ItemView {
 		const known = model.corpus.get(node.data.id);
 		if (known) return known;
 		const own = project(vectorize(words(), model.vocabulary), model.basis);
+		// A work whose own text says little leans more on the works of the vault it is linked to.
+		const weight = this.reliableOutside(node.data.openAlexId, node) ? 1 : WEAK_TEXT_WEIGHT;
 		const vector = node.data.file
 			? own
 			: blendWithNeighbors(
@@ -1300,6 +1357,7 @@ export class LiteratureGraphView extends ItemView {
 						const note = model.corpus.get(path);
 						return note ? [note.vector] : [];
 					}),
+					weight,
 				);
 		return { vector, place: vector ? placeAmong(vector, model.vectors, model.places) : null };
 	}
@@ -1455,9 +1513,74 @@ export class LiteratureGraphView extends ItemView {
 		const placed = this.nodes.filter((n) => this.meaningById.has(n.data.id)).length;
 		const radius = this.nodes.reduce((s, n) => s + n.radius * this.pointSize(), 0) / Math.max(1, this.nodes.length);
 		const scale = 5 * (radius * 1.25 + 1) * Math.sqrt(Math.max(1, placed));
+		// The regions: the same groups of meaning as in the Meaning layout.
+		const groups = this.groupsOfMeaning();
+		this.buildRegions(groups, groups.counts.map((c) => (radius * 1.25 + 1) * 3 * Math.sqrt(c)));
 		return this.nodes.map((n) => {
 			const place = this.meaningById.get(n.data.id);
 			return place ? [place[0] * scale, place[1] * scale] : null;
+		});
+	}
+
+	private hueMemo: { key: string; hue: (angle: number) => number } | null = null;
+
+	/** Hues spread evenly over the works of the map (see `evenHues`), the same for every graph. */
+	private hueOf(): (angle: number) => number {
+		const key = this.meaningCache.corpusKey;
+		if (this.hueMemo?.key !== key) this.hueMemo = { key, hue: evenHues(this.meaningCache.corpusAngles()) };
+		return this.hueMemo.hue;
+	}
+
+	/** The groups of meaning of the works shown (k-means on the map; see `meaningGroups`). */
+	private groupsOfMeaning(): MeaningGroups {
+		const places = this.nodes.map((n) => this.meaningById.get(n.data.id) ?? null);
+		const placed = places.filter(Boolean).length;
+		return meaningGroups(places, Math.max(3, Math.min(MEANING_MAX_GROUPS, Math.round(Math.sqrt(placed) / 6))));
+	}
+
+	/** The dendrogram shown (Meaning dendrogram layout), for its branches and the names of its groups. */
+	private dendrogram: RadialDendrogram | null = null;
+
+	/**
+	 * Where each work goes in the Meaning dendrogram layout: on the circle of
+	 * the radial dendrogram of the groups of meaning, their subgroups and
+	 * their works (see `radialDendrogram`). "Meaning attraction" widens the
+	 * gaps between the groups.
+	 */
+	private dendrogramAnchors(): ([number, number] | null)[] {
+		const places = this.nodes.map((n) => this.meaningById.get(n.data.id) ?? null);
+		const groups = this.groupsOfMeaning();
+		const radius = this.nodes.reduce((s, n) => s + n.radius * this.pointSize(), 0) / Math.max(1, this.nodes.length);
+		const subgroupsOf = (works: number[]) => {
+			const sub = meaningGroups(
+				works.map((i) => places[i] ?? null),
+				Math.max(1, Math.min(10, Math.round(Math.sqrt(works.length) / 3))),
+			);
+			const lists: number[][] = sub.centers.map(() => []);
+			works.forEach((w, k) => lists[sub.group[k] ?? 0]?.push(w));
+			return lists;
+		};
+		const gap = Math.round(3 + 6 * Math.max(0, this.forces.meaning));
+		this.dendrogram = radialDendrogram(places, groups.group, groups.centers.length, subgroupsOf, (radius * 1.25 + 1) * 2.4, gap);
+		// Names in proportion to the whole dendrogram, read at its branches.
+		const size = this.dendrogram.radius * 0.18;
+		this.buildRegions(groups, groups.counts.map(() => size));
+		return this.dendrogram.places;
+	}
+
+	/** The branches of the dendrogram shown, as links between works and pseudo-nodes standing for its middle and inner nodes. */
+	private dendrogramLinks(): SimLink[] {
+		const d = this.dendrogram;
+		if (!d) return [];
+		const point = (x: number, y: number, id: string) => ({ x, y, radius: 0, data: { id } }) as unknown as SimNode;
+		const middle = point(0, 0, 'dendrogram:middle');
+		const hubs = d.hubs.map((h, i) => point(h.x, h.y, `dendrogram:${i}`));
+		// The branches, and to each subgroup's first and last works (a bracket): the twigs to every work would fill the disc.
+		return d.links.flatMap((l) => {
+			if (l.work && !l.end) return [];
+			const source = l.from < 0 ? middle : hubs[l.from];
+			const target = l.work ? this.nodes[l.to] : hubs[l.to];
+			return source && target ? [{ data: { source: source.data.id, target: target.data.id, sources: new Set<EdgeSource>() }, source, target }] : [];
 		});
 	}
 
@@ -1477,7 +1600,7 @@ export class LiteratureGraphView extends ItemView {
 		const s = this.settings();
 		const lightness = Math.min(0.9, Math.max(0.15, this.topicLightness() + (Number(s.graphTopicBrightness) || 0) / 100));
 		const intensity = Math.max(0.1, (Number(s.graphTopicIntensity) || 100) / 100);
-		return colorOfPlace(place, lightness, intensity);
+		return colorOfPlace(place, lightness, intensity, this.hueOf());
 	}
 
 	/**
@@ -1537,7 +1660,7 @@ export class LiteratureGraphView extends ItemView {
 	 */
 	private placeRegions(now: number): boolean {
 		const regions = this.regions;
-		const shown = !!regions && this.layoutStyle === 'meaning' && this.showRegions;
+		const shown = !!regions && this.meaningLayout() && this.showRegions;
 		this.regionLayer.visible = shown;
 		if (!shown || !regions) return false;
 		// Hidden during the idle animation, where the works are elsewhere for a while.
@@ -1558,12 +1681,20 @@ export class LiteratureGraphView extends ItemView {
 			ys[g]?.push(n.y);
 		});
 		const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
+		const hubOf = new Map((this.layoutStyle === 'dendrogram' ? (this.dendrogram?.hubs ?? []) : []).filter((h) => h.level === 1).map((h) => [h.group, h]));
 		regions.parts.forEach(({ circle, label, sub, color }, g) => {
 			const gx = xs[g] ?? [];
 			const gy = ys[g] ?? [];
 			circle.clear();
 			label.visible = gx.length > 0;
 			if (sub) sub.visible = gx.length > 0;
+			// The dendrogram: each group named at its branch, without a circle.
+			const hub = hubOf.get(g);
+			if (hub) {
+				sub?.position.set(hub.x, hub.y + label.style.fontSize * 0.2 + (sub?.height ?? 0));
+				label.position.set(hub.x, hub.y);
+				return;
+			}
 			if (gx.length === 0) return;
 			const cx = median([...gx]);
 			const cy = median([...gy]);
@@ -1602,7 +1733,8 @@ export class LiteratureGraphView extends ItemView {
 		const colored = new Map<SimNode, number>();
 		for (const node of this.nodes) {
 			const place = this.meaningById.get(node.data.id);
-			node.topicColor = place ? colorOfPlace(place, lightness, intensity) : null;
+			const hue = this.hueOf();
+			node.topicColor = place ? colorOfPlace(place, lightness, intensity, hue) : null;
 			if (node.topicColor !== null && node.data.file) colored.set(node, node.topicColor);
 		}
 		// Works of the vault without any words: from the notes sharing their links.
@@ -1621,7 +1753,7 @@ export class LiteratureGraphView extends ItemView {
 				return place ? [place] : [];
 			});
 			const middle: [number, number] = [places.reduce((a, p) => a + p[0], 0) / (places.length || 1), places.reduce((a, p) => a + p[1], 0) / (places.length || 1)];
-			return { name: topicName(id, info), works, color: places.length > 0 ? colorOfPlace(middle, lightness, intensity) : 0x888888 };
+			return { name: topicName(id, info), works, color: places.length > 0 ? colorOfPlace(middle, lightness, intensity, this.hueOf()) : 0x888888 };
 		});
 		this.renderTopicLegend();
 		this.invalidate();
@@ -2675,7 +2807,7 @@ export class LiteratureGraphView extends ItemView {
 					.onChange((value) => {
 						this.layoutStyle = isLayoutStyle(value) ? value : 'default';
 						// The regions are off again when the Meaning layout is left.
-						if (this.layoutStyle !== 'meaning') this.showRegions = false;
+						if (!this.meaningLayout()) this.showRegions = false;
 						for (const sync of this.syncControls) sync();
 						// A new layout from the positions shown: the works move to their new places.
 						this.showCurrent();
@@ -2701,13 +2833,13 @@ export class LiteratureGraphView extends ItemView {
 					toggle.setValue(this.showRegions);
 				});
 			});
-		const showRegions = () => regions.settingEl.toggle(this.layoutStyle === 'meaning');
+		const showRegions = () => regions.settingEl.toggle(this.meaningLayout());
 		showRegions();
 		this.syncControls.push(showRegions);
-		// Only in the Meaning layout.
+		// Only in the meaning layouts.
 		const meaningAttraction = new Setting(body)
 			.setName('Meaning attraction')
-			.setDesc('Works of one meaning gather in balls; works between two meanings, between their balls. Higher: denser balls, more decided groups.')
+			.setDesc('How firmly works keep to their meaning. Meaning: denser balls, more decided groups. Meaning tree: branches closer to the map of meaning. Dendrogram: wider gaps between groups.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(0, 5, 0.1)
@@ -2718,9 +2850,25 @@ export class LiteratureGraphView extends ItemView {
 						relayoutSoon();
 					}),
 			);
-		const showMeaningAttraction = () => meaningAttraction.settingEl.toggle(this.layoutStyle === 'meaning');
-		showMeaningAttraction();
-		this.syncControls.push(showMeaningAttraction);
+		const citationPull = new Setting(body)
+			.setName('Citation pull')
+			.setDesc('How strongly citations pull too, besides meaning: a work whose text says little is drawn to the works it is linked to. 0: meaning alone.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 1, 0.05)
+					.setValue(this.forces.citation ?? 0)
+					.onChange((value) => {
+						this.forces.citation = value;
+						void this.saveSettings({ graphCitationPull: value });
+						relayoutSoon();
+					}),
+			);
+		const showMeaningForces = () => {
+			meaningAttraction.settingEl.toggle(this.meaningLayout());
+			citationPull.settingEl.toggle(this.meaningLayout() && this.layoutStyle !== 'dendrogram');
+		};
+		showMeaningForces();
+		this.syncControls.push(showMeaningForces);
 		new Setting(body)
 			.setName(CITED_BY_GRAPH)
 			.setDesc('Instead of the works your works cite, the works outside your vault that cite them (often newer), from OpenAlex. Minimum citations: how many of your works they cite. Kept for every graph.')
@@ -2741,16 +2889,17 @@ export class LiteratureGraphView extends ItemView {
 			.addSlider((slider) => {
 				slider
 					.setLimits(0.25, 3, 0.05)
-					.setValue(Number(this.settings().graphPointScale) || 1)
+					.setValue(this.pointSize())
 					.onChange((value) => {
 						this.invalidate();
 						this.requestFrame();
-						void this.saveSettings({ graphPointScale: value });
+						// Kept for this style of layout only (decision of the user).
+						void this.saveSettings({ graphPointScales: { ...this.settings().graphPointScales, [this.layoutStyle]: value } });
 						// The spacing follows the size: the layout starts again, from where the works are.
 						relayoutSoon();
 					});
 				this.syncControls.push(() => {
-					slider.setValue(Number(this.settings().graphPointScale) || 1);
+					slider.setValue(this.pointSize());
 				});
 			});
 		const timeline = new Setting(body).setName('Timeline');
@@ -3033,7 +3182,8 @@ export class LiteratureGraphView extends ItemView {
 		// The chronological layout shows only the lines of the highlighted work
 		// (decision of the user); the Meaning layout, a faint trace of them: its
 		// long lines across the clouds would otherwise veil their colors.
-		const styleFade = this.layoutStyle === 'chronological' ? 0 : this.layoutStyle === 'meaning' ? MEANING_EDGE_FADE : this.layoutStyle === 'tree' ? 0 : 1;
+		const styleFade =
+			this.layoutStyle === 'chronological' || this.layoutStyle === 'tree' || this.layoutStyle === 'dendrogram' ? 0 : this.layoutStyle === 'meaning' ? MEANING_EDGE_FADE : 1;
 		const zoomFade = idleFade * Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
 		this.vaultEdges.style(theme.line, styleFade * lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.outsideEdges.style(theme.line, styleFade * lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
@@ -3190,7 +3340,9 @@ export class LiteratureGraphView extends ItemView {
 
 	/** The "Point size" chosen (0.25 to 3). */
 	private pointSize(): number {
-		return Math.min(3, Math.max(0.25, Number(this.settings().graphPointScale) || 1));
+		const s = this.settings();
+		const chosen = Number(s.graphPointScales?.[this.layoutStyle]);
+		return Math.min(3, Math.max(0.25, chosen || defaultPointScale(this.layoutStyle, s)));
 	}
 
 	/**

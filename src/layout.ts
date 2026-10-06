@@ -30,6 +30,7 @@ import {
 	createLayersSimulation,
 	createMeaningSimulation,
 	createTreeSimulation,
+	createDendrogramSimulation,
 } from './shapes';
 
 export interface LayoutNode extends SimulationNodeDatum {
@@ -55,8 +56,14 @@ export interface Forces {
 	repel: number;
 	linkDistance: number;
 	center: number;
-	/** How strongly works close in meaning draw together, in the Meaning layout (1: as by default). */
+	/** How strongly works close in meaning draw together, in the meaning layouts (1: as by default). */
 	meaning: number;
+	/**
+	 * In the meaning layouts, how strongly citations pull too (0: barely, as
+	 * by default; 1: as strongly as in the default layout): meaning and
+	 * citations together place a work whose text says little.
+	 */
+	citation?: number;
 }
 
 /**
@@ -64,9 +71,10 @@ export interface Forces {
  * Obsidian's graph view), "atom" (each work of the vault a nucleus with a
  * circle of the works it cites, see `atoms.ts`), and the shapes of
  * `shapes.ts`: "chronological", "islands", "layers", "circle", "meaning"
- * (groups of meaning in balls) and "tree" (the semantic tree).
+ * (groups of meaning in balls), "tree" (the semantic tree) and
+ * "dendrogram" (groups, subgroups and works on a circle).
  */
-export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'meaning' | 'tree';
+export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'meaning' | 'tree' | 'dendrogram';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	default: 'Default graph',
 	atom: 'Atom graph',
@@ -76,6 +84,7 @@ export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	circle: 'Circle',
 	meaning: 'Meaning',
 	tree: 'Meaning tree',
+	dendrogram: 'Meaning dendrogram',
 };
 
 export function isLayoutStyle(value: unknown): value is LayoutStyle {
@@ -99,6 +108,8 @@ function createStyleSimulation(style: LayoutStyle, nodes: LayoutNode[], links: L
 			return createMeaningSimulation(nodes, links, forces);
 		case 'tree':
 			return createTreeSimulation(nodes, links, forces);
+		case 'dendrogram':
+			return createDendrogramSimulation(nodes, links, forces);
 		default:
 			return createSimulation(nodes, links, forces);
 	}

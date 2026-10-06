@@ -2,8 +2,11 @@ import { App, debounce } from 'obsidian';
 import { writePluginFile } from './pluginFiles';
 import { packVector, unpackVector } from './meaningMap';
 
-/** 2: places on the UMAP map, and the vectors of meaning (version 1 had places in the plane of the two main directions). */
-const CACHE_VERSION = 2;
+/**
+ * 3: the UMAP map learned on the works of reliable meaning only (2: on all
+ * the corpus; 1: places in the plane of the two main directions).
+ */
+const CACHE_VERSION = 3;
 
 /** A work's place in the plane of meaning, and the fingerprint of the text it comes from. */
 interface PlaceEntry {
@@ -116,6 +119,16 @@ export class MeaningCache {
 	setPlace(id: string, text: string, place: [number, number] | null, vector: Float32Array | null = null): void {
 		this.cache.places[id] = vector ? { text, place, vector: packVector(vector) } : { text, place };
 		this.changed();
+	}
+
+	/** The angles of the works of the corpus on the map kept (for even hues, see `evenHues`). */
+	corpusAngles(): number[] {
+		return Object.values(this.cache.corpus ?? {}).map(([x, y]) => Math.atan2(y, x));
+	}
+
+	/** The meaning the map kept was learned with. */
+	get corpusKey(): string {
+		return this.cache.corpusModel ?? '';
 	}
 
 	/** Where a work of the corpus was on the last map learned. */
