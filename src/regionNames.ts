@@ -45,6 +45,14 @@ const TOPIC_LIFT = 1.2;
 const MIN_KEYWORD_WORKS = 3;
 /** …and this share of the region's works (at least 2): a keyword of a few works is too narrow for a whole region. */
 const MIN_KEYWORD_COVERAGE = 0.08;
+/**
+ * A keyword or term of more than this share of all the works names no region:
+ * OpenAlex gives many works very broad keywords ("Environmental science",
+ * "Biology", "Geography"), which say no more than a stop word. With few
+ * regions, a region's own term may cover more: the share allowed is at least
+ * 1.5 regions' worth.
+ */
+const MAX_TERM_SHARE = 0.1;
 
 const key = (term: string) => term.trim().toLowerCase();
 const display = (term: string) => {
@@ -79,13 +87,30 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 		if (g >= 0 && g < count) members[g]?.push(i);
 	});
 
-	// A: centers of meaning, and the meaning of each keyword.
+	// A: centers of meaning, and the meaning of each keyword, both as their
+	// difference from the mean meaning of all the works: the vectors share a
+	// large part, so the mean of a keyword of thousands of works ("Ecology",
+	// "Environmental science") would otherwise resemble every region.
+	const all = works.flatMap((w) => (w.vector ? [w.vector] : []));
+	const overall = meanVector(all);
 	const vectorsOf = (list: number[]) =>
 		list.flatMap((i) => {
 			const v = works[i]?.vector;
 			return v ? [v] : [];
 		});
-	const centers = members.map((list) => meanVector(vectorsOf(list)));
+	const meaningOf = (list: number[]) => {
+		const v = meanVector(vectorsOf(list));
+		if (!v || !overall) return v;
+		// The mean of unit vectors is shorter than 1; compare it to the overall mean at the same length.
+		const raw = vectorsOf(list);
+		const d = v.length;
+		const sum = new Float32Array(d);
+		for (const x of raw) for (let j = 0; j < d; j++) sum[j] = (sum[j] ?? 0) + (x[j] ?? 0) / raw.length;
+		const whole = new Float32Array(d);
+		for (const x of all) for (let j = 0; j < d; j++) whole[j] = (whole[j] ?? 0) + (x[j] ?? 0) / all.length;
+		return meanVector([sum.map((x, j) => x - (whole[j] ?? 0))]);
+	};
+	const centers = members.map((list) => meaningOf(list));
 	const withKeyword = new Map<string, number[]>();
 	const shown = new Map<string, string>();
 	works.forEach((w, i) => {
@@ -93,21 +118,29 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 		for (const k of w.keywords) if (!shown.has(key(k))) shown.set(key(k), k);
 	});
 	const keywordMeaning = new Map<string, Float32Array>();
+	const describedWorks = works.filter((w) => w.keywords.length > 0).length;
+	const maxShare = Math.max(MAX_TERM_SHARE, 1.5 / Math.max(1, count));
 	for (const [k, list] of withKeyword) {
-		if (list.length < MIN_KEYWORD_WORKS) continue;
-		const v = meanVector(vectorsOf(list));
+		if (list.length < MIN_KEYWORD_WORKS || list.length > maxShare * describedWorks) continue;
+		const v = meaningOf(list);
 		if (v) keywordMeaning.set(k, v);
 	}
+	const keywordWorks = works.filter((w) => w.keywords.length > 0).length;
 	const candidatesA: { g: number; k: string; score: number }[] = [];
 	members.forEach((list, g) => {
 		const center = centers[g];
 		if (!center) return;
+		// Shares among the works that have keywords: a region may hold many works
+		// known only from a reference list, which have none.
+		const withKeywords = list.filter((i) => (works[i]?.keywords.length ?? 0) > 0).length;
 		const inRegion = new Map<string, number>();
 		for (const i of list) for (const k of new Set((works[i]?.keywords ?? []).map(key))) inRegion.set(k, (inRegion.get(k) ?? 0) + 1);
 		for (const [k, v] of keywordMeaning) {
 			const here = inRegion.get(k) ?? 0;
-			const coverage = here / (list.length || 1);
-			if (here < 2 || coverage < MIN_KEYWORD_COVERAGE) continue;
+			const coverage = here / (withKeywords || 1);
+			// More frequent in the region than among all the works: typical of it.
+			const lift = coverage / ((withKeyword.get(k)?.length ?? here) / (keywordWorks || 1));
+			if (here < 2 || coverage < MIN_KEYWORD_COVERAGE || lift < TOPIC_LIFT) continue;
 			const own = dot(center, v);
 			let other = -1;
 			centers.forEach((c, h) => {
@@ -127,15 +160,17 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 	}
 
 	// B: the over-represented topic covering enough of the region.
-	const total = works.length || 1;
+	// (Shares among the works that have topics, as for the keywords.)
+	const total = works.filter((w) => w.topics.length > 0).length || 1;
 	const topicCount = new Map<string, number>();
 	for (const w of works) for (const t of new Set(w.topics)) topicCount.set(t, (topicCount.get(t) ?? 0) + 1);
 	const topics = members.map((list) => {
 		const here = new Map<string, number>();
 		for (const i of list) for (const t of new Set(works[i]?.topics ?? [])) here.set(t, (here.get(t) ?? 0) + 1);
+		const withTopics = list.filter((i) => (works[i]?.topics.length ?? 0) > 0).length;
 		let best: { t: string; score: number } | null = null;
 		for (const [t, c] of here) {
-			const coverage = c / (list.length || 1);
+			const coverage = c / (withTopics || 1);
 			const lift = coverage / ((topicCount.get(t) ?? c) / total);
 			if (coverage < TOPIC_COVERAGE || lift < TOPIC_LIFT) continue;
 			const score = coverage * Math.log(1 + lift);
@@ -153,6 +188,7 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 	});
 	const everywhere = new Map<string, number>();
 	for (const counts of perRegion) for (const [t, c] of counts) everywhere.set(t, (everywhere.get(t) ?? 0) + c);
+	const withTerms = works.filter((_, i) => termsOf(i).length > 0).length;
 	const meanSize = perRegion.reduce((s, c) => s + [...c.values()].reduce((a, b) => a + b, 0), 0) / (count || 1);
 	const termNames = new Map<string, string>();
 	works.forEach((w) => {
@@ -161,14 +197,15 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 
 	return members.map((list, g): RegionName => {
 		const topic = topics[g] ?? null;
-		const title = titles[g] || (topic ?? '');
+		let title = titles[g] || (topic ?? '');
 		const counts = perRegion[g] ?? new Map<string, number>();
 		const size = [...counts.values()].reduce((a, b) => a + b, 0) || 1;
 		const scored = [...counts]
-			.filter(([, c]) => c >= Math.max(2, list.length * 0.05))
+			.filter(([t, c]) => c >= Math.max(2, list.filter((i) => termsOf(i).length > 0).length * 0.05) && (everywhere.get(t) ?? c) <= maxShare * withTerms)
 			.map(([t, c]) => ({ t, score: (c / size) * Math.log(1 + meanSize / (everywhere.get(t) ?? c)) * (t.includes(' ') ? 1.5 : 1) }))
 			.sort((a, b) => b.score - a.score || (a.t < b.t ? -1 : 1));
-		const taken = [key(title), ...(topic ? [key(topic)] : [])];
+		// (An empty name takes nothing: every term would "contain" it.)
+		const taken = [key(title), ...(topic ? [key(topic)] : [])].filter(Boolean);
 		const terms: string[] = [];
 		for (const { t } of scored) {
 			if (terms.length >= 3) break;
@@ -176,6 +213,8 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 			if (taken.some((x) => x.includes(t) || t.includes(x)) || terms.some((x) => key(x).includes(t) || t.includes(key(x)))) continue;
 			terms.push(display(termNames.get(t) ?? t));
 		}
+		// Nothing else names the region: its most typical term does.
+		if (!title) title = terms.shift() ?? '';
 		return { title, topic: topic && topic !== title ? topic : null, terms };
 	});
 }

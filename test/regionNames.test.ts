@@ -37,3 +37,45 @@ test('names each region by its meaning, its topic and its typical terms', () => 
 	assert.ok(!names[0]?.terms.some((t) => /straw|peatland restoration/i.test(t)));
 	assert.ok(names[1]?.terms.includes('CO2 flux'));
 });
+
+test('names a region of works mostly known only from reference lists', () => {
+	const works: NamedWork[] = [];
+	const group: number[] = [];
+	// 10 described works, 40 known only by a title: their keywords and topics still name the region.
+	for (let i = 0; i < 50; i++) {
+		const described = i < 10;
+		works.push({
+			vector: unit(1, 0.01 * i, 0),
+			keywords: described ? ['Wetland ecology', 'Restoration ecology'] : [],
+			topics: described ? ['Ecology and Vegetation Dynamics Studies'] : [],
+			titleTerms: ['wetlands', 'restoration'],
+		});
+		group.push(0);
+	}
+	for (let i = 0; i < 50; i++) {
+		works.push({ vector: unit(0, 1, 0.01 * i), keywords: ['Methane'], topics: ['Methane'], titleTerms: ['methane'] });
+		group.push(1);
+	}
+	const [first] = regionNames(works, group, 2);
+	assert.ok(first?.title, 'the region has a name');
+	assert.equal(first?.topic, 'Ecology and Vegetation Dynamics Studies');
+	assert.ok((first?.terms.length ?? 0) > 0, 'and typical terms');
+});
+
+test('never names a region by a keyword most works have', () => {
+	const works: NamedWork[] = [];
+	const group: number[] = [];
+	const subjects = ['Water table', 'Methane', 'Sphagnum', 'Fire', 'Salt marsh', 'Beaver', 'Drainage', 'Holocene', 'Nitrogen', 'Carbon'];
+	subjects.forEach((subject, g) => {
+		for (let i = 0; i < 20; i++) {
+			const v = new Float32Array(10).fill(0.01);
+			v[g] = 1;
+			// Every work also has the broad keyword, scored lower by OpenAlex but present.
+			works.push({ vector: v, keywords: ['Environmental science', subject], topics: [], titleTerms: [] });
+			group.push(g);
+		}
+	});
+	const names = regionNames(works, group, subjects.length);
+	assert.deepEqual(names.map((n) => n.title), subjects);
+	assert.ok(names.every((n) => !n.terms.includes('Environmental science')));
+});
