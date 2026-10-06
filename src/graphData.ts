@@ -26,6 +26,8 @@ export interface GraphNode {
 	title: string;
 	/** Number of works of the graph that cite this one. */
 	citedBy: number;
+	/** In the cited-by graph: how many works of the vault this work outside it cites. */
+	cites?: number;
 	/** For a work known only from a reference list: the entry as written, and its year. */
 	entry?: { text: string; year: string };
 }
@@ -65,6 +67,12 @@ export interface GraphOptions {
 	allNotes?: boolean;
 	/** Where citations may come from; a source set to false is left out (all by default). */
 	edgeSources?: Partial<Record<EdgeSource, boolean>>;
+	/**
+	 * The cited-by graph: at depth 1 (and 2), the works outside the vault that
+	 * cite works of the vault (from OpenAlex), rather than those they cite;
+	 * `minCitations` is then how many works of the vault such a work cites.
+	 */
+	citedBy?: boolean;
 }
 
 /**
@@ -123,6 +131,60 @@ function mostCited(counts: Map<string, number>, min: number, limit: number): { k
 	const eligible = [...counts.entries()].filter(([, n]) => n >= min).sort((a, b) => b[1] - a[1]);
 	const kept = eligible.slice(0, Math.max(0, limit)).map(([k]) => k);
 	return { kept, leftOut: eligible.length - kept.length };
+}
+
+/**
+ * The cited-by graph's works outside the vault: those citing works of the
+ * vault, listed by OpenAlex (once; see `OpenAlexClient.citingAll`), kept if
+ * they cite at least `minCitations` works of the vault, the ones citing the
+ * most first. Their own references are not fetched: no depth 2.
+ */
+async function citedByStage(
+	g: GraphBuilder,
+	openAlex: OpenAlexClient,
+	pathById: Map<string, string>,
+	options: GraphOptions,
+	language: 'en' | 'fr',
+	progress: GraphProgress,
+): Promise<LiteratureGraph> {
+	if (!g.allowed('openalex')) return g.snapshot();
+	try {
+		await openAlex.citingAll([...pathById.keys()], {}, (done, total) =>
+			progress.onStatus(`Listing the works that cite your works on OpenAlex: ${done} of ${total}…`),
+		);
+	} catch (error) {
+		console.error('Literature Graph: OpenAlex request failed', error);
+	}
+	/** Citing work → the notes of the vault it cites. */
+	const cites = new Map<string, string[]>();
+	for (const [id, path] of pathById) {
+		for (const citing of openAlex.cachedCiting(id) ?? []) {
+			if (pathById.has(citing) || openAlex.isMissing(citing)) continue;
+			cites.set(citing, [...(cites.get(citing) ?? []), path]);
+		}
+	}
+	const counts = new Map([...cites].map(([id, paths]) => [id, paths.length]));
+	const kept = mostCited(counts, options.minCitations, options.maxNodes - g.nodes.size);
+	g.leftOut += kept.leftOut;
+	for (const id of kept.kept) {
+		const work = openAlex.cachedWork(id);
+		const paths = cites.get(id) ?? [];
+		g.nodes.set(id, {
+			id,
+			depth: 1,
+			file: null,
+			doi: work?.doi ?? null,
+			openAlexId: id,
+			label: work ? workCitation(work, language) : UNKNOWN_WORK,
+			title: work?.title ?? '',
+			citedBy: 0,
+			cites: paths.length,
+		});
+		for (const path of paths) g.addEdge(id, path, 'openalex');
+	}
+	const graph = g.snapshot();
+	progress.onStage(graph);
+	return graph;
 }
 
 /**
@@ -209,6 +271,7 @@ export async function buildGraph(
 	}
 	progress.onStage(g.snapshot());
 	if (options.depth < 1) return g.snapshot();
+	if (options.citedBy) return citedByStage(g, openAlex, pathById, options, language, progress);
 	if (openAlex.isRateLimited) {
 		progress.onStatus('OpenAlex refuses requests for now: works outside the vault come from the cache only');
 	}

@@ -15,7 +15,7 @@ import { LayoutRunner } from './layoutRunner';
 import { openFileAtLine } from './navigation';
 import type { GhostNoteStore } from './ghostNotes';
 import type { PositionStore } from './positions';
-import { cachedInfo, explainSuggestion, rankSuggestions } from './relevance';
+import { cachedInfo, CitingWork, explainSuggestion, rankCitingWorks, rankSuggestions, Suggestion } from './relevance';
 import { appearanceOrder, fitSphere, Sphere } from './sphere';
 import {
 	AnimationSetup,
@@ -37,7 +37,7 @@ import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { WORK_VIEW, WorkState } from './workView';
-import type { OpenAlexClient } from './openalex';
+import { OpenAlexClient, workCitation } from './openalex';
 import type { LiteratureGraphSettings } from './settings';
 
 export const GRAPH_VIEW = 'literature-graph-graph';
@@ -211,7 +211,9 @@ const ARROW_MIN_SCALE = 0.5;
 
 function radiusOf(node: GraphNode): number {
 	// (Doubled on 2026-09-30, at the user's request: the works are seen better from far.)
-	const r = node.depth === 0 ? 8 + Math.sqrt(node.citedBy) * 4.4 : 4 + Math.sqrt(node.citedBy) * 2.4;
+	// (A work citing the vault, in the cited-by graph: by how many works of the vault it cites.)
+	const count = Math.max(node.citedBy, node.cites ?? 0);
+	const r = node.depth === 0 ? 8 + Math.sqrt(count) * 4.4 : 4 + Math.sqrt(count) * 2.4;
 	return Math.min(MAX_NODE_RADIUS, r);
 }
 
@@ -415,8 +417,16 @@ export class LiteratureGraphView extends ItemView {
 	private suggestionsEl: HTMLElement | null = null;
 	/** How many suggestions the list shows; "Show more" adds SUGGESTIONS_PAGE. */
 	private suggestionsShown = SUGGESTIONS_PAGE;
-	/** The list shows all works outside the vault, or only those OpenAlex does not know. */
-	private suggestionsMissing = false;
+	/**
+	 * What the list shows: all works outside the vault, only those OpenAlex
+	 * does not know, or the works citing the works of the vault.
+	 */
+	private suggestionsTab: 'all' | 'missing' | 'citing' = 'all';
+	/** While the works citing the vault are being listed on OpenAlex: how far along. */
+	private citingProgress: [number, number] | null = null;
+	private citingProgressEl: HTMLElement | null = null;
+	/** The ranked works citing the vault, kept while the cache and the vault's works are the same. */
+	private citingMemo: { key: string; ranked: Suggestion[] } | null = null;
 	/** The graph shown now (the local part of it, in local mode). */
 	private shownGraph: LiteratureGraph | null = null;
 	private summary = '';
@@ -467,6 +477,7 @@ export class LiteratureGraphView extends ItemView {
 			maxNodes: maxNodesOf(s.graphMaxNodes),
 			localWorks: true,
 			allNotes: s.graphAllNotes === true,
+			citedBy: s.graphCitedBy === true,
 			edgeSources: {
 				link: s.graphEdgeLinks !== false,
 				bibliography: s.graphEdgeBibliographies !== false,
@@ -2036,43 +2047,53 @@ export class LiteratureGraphView extends ItemView {
 		setIcon(close, 'x');
 		close.addEventListener('click', () => this.toggleSuggestions(false));
 		const tabs = list.createDiv({ cls: 'literature-graph-suggestions-tabs' });
-		for (const [missing, name] of [
-			[false, 'All works'],
-			[true, 'Not on OpenAlex'],
+		for (const [which, name, tip] of [
+			['all', 'All works', 'Works outside your vault that your works cite'],
+			['missing', 'Not on OpenAlex', 'Works your notes cite that OpenAlex does not know, to find by hand'],
+			['citing', 'Citing your works', 'Works outside your vault that cite your works (often newer), from OpenAlex'],
 		] as const) {
 			const tab = tabs.createDiv({ cls: 'literature-graph-suggestions-tab', text: name });
-			tab.toggleClass('is-active', this.suggestionsMissing === missing);
+			setTooltip(tab, tip);
+			tab.toggleClass('is-active', this.suggestionsTab === which);
 			tab.addEventListener('click', () => {
-				this.suggestionsMissing = missing;
+				this.suggestionsTab = which;
 				this.suggestionsShown = SUGGESTIONS_PAGE;
 				list.scrollTop = 0;
 				this.renderSuggestions();
 			});
 		}
+		const missing = this.suggestionsTab === 'missing';
+		const citing = this.suggestionsTab === 'citing';
+		if (citing && !this.renderCitingHeader(list)) return;
 		const graph = this.shownGraph;
-		const all = graph ? rankSuggestions(graph, cachedInfo(this.openAlex)) : [];
+		const all = citing ? this.citingSuggestions() : graph ? rankSuggestions(graph, cachedInfo(this.openAlex)) : [];
 		// Works OpenAlex does not know: known only from a reference list (or by a
 		// DOI it does not have), to be found by hand.
-		const ranked = this.suggestionsMissing ? all.filter((s) => s.node.openAlexId === null) : all;
+		const ranked = missing ? all.filter((s) => s.node.openAlexId === null) : all;
 		if (ranked.length === 0) {
 			list.createDiv({
 				cls: 'literature-graph-suggestions-empty',
-				text: this.suggestionsMissing
-					? 'Every work outside your vault in this graph is on OpenAlex.'
-					: 'No works outside your vault in this graph. Show depth 1 or 2 in the graph settings.',
+				text: citing
+					? 'OpenAlex knows no work citing your works.'
+					: missing
+						? 'Every work outside your vault in this graph is on OpenAlex.'
+						: 'No works outside your vault in this graph. Show depth 1 or 2 in the graph settings.',
 			});
 			return;
 		}
 		list.createDiv({
 			cls: 'literature-graph-suggestions-desc',
-			text: this.suggestionsMissing
-				? `${ranked.length} works cited in your notes that OpenAlex does not know, most relevant first, with their reference as written in your notes, to find them by hand.`
-				: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
+			text: citing
+				? `${ranked.length} works outside your vault cite your works; those citing the most of them first. Hover a work to see which (and where it is, in the cited-by graph); click it to see its note-to-be.`
+				: missing
+					? `${ranked.length} works cited in your notes that OpenAlex does not know, most relevant first, with their reference as written in your notes, to find them by hand.`
+					: 'Works outside your vault, most cited by your works first. Hover a work to see why, and where it is in the graph; click it to see its note-to-be.',
 		});
 		const byId = new Map(this.nodes.map((n) => [n.data.id, n]));
 		ranked.slice(0, this.suggestionsShown).forEach((suggestion, i) => {
-			const node = byId.get(suggestion.node.id);
-			if (!node) return;
+			// (A work citing your works is listed even when the graph does not show it.)
+			const node = byId.get(suggestion.node.id) ?? null;
+			if (!node && !citing) return;
 			const row = list.createDiv({ cls: 'literature-graph-suggestion' });
 			row.createSpan({ cls: 'literature-graph-suggestion-rank', text: `${i + 1}` });
 			const text = row.createDiv({ cls: 'literature-graph-suggestion-text' });
@@ -2080,7 +2101,7 @@ export class LiteratureGraphView extends ItemView {
 			// (Without the emphasis marks of the converted notes: "*Title*", "**17:**".)
 			const reference =
 				suggestion.node.entry?.text.replace(/\*+/g, '') ?? (suggestion.node.doi ? `https://doi.org/${suggestion.node.doi}` : '');
-			if (this.suggestionsMissing && reference) {
+			if (missing && reference) {
 				text.createDiv({ cls: 'literature-graph-suggestion-reference', text: reference });
 				this.buildMissingActions(text, reference, suggestion.node.title || reference);
 			} else if (suggestion.node.title) {
@@ -2089,7 +2110,7 @@ export class LiteratureGraphView extends ItemView {
 			row.createSpan({ cls: 'literature-graph-suggestion-score', text: suggestion.score.toFixed(1) });
 			setTooltip(row, [`Score ${suggestion.score}`, ...explainSuggestion(suggestion)].join('\n'), { placement: 'right' });
 			row.addEventListener('mouseenter', () => this.setHovered(node));
-			row.addEventListener('click', (e) => this.openNode(node, e));
+			row.addEventListener('click', (e) => this.openWork(suggestion.node, e));
 		});
 		if (ranked.length > this.suggestionsShown) {
 			const more = list.createEl('button', {
@@ -2102,6 +2123,105 @@ export class LiteratureGraphView extends ItemView {
 			});
 		}
 		list.scrollTop = scroll;
+	}
+
+	/** The OpenAlex ids of the works of the vault (the literature notes OpenAlex knows). */
+	private vaultOpenAlexIds(): string[] {
+		return (this.fullGraph?.nodes ?? []).flatMap((n) => (n.depth === 0 && n.file && this.index.isLiterature(n.file) && n.openAlexId ? [n.openAlexId] : []));
+	}
+
+	/**
+	 * The top of the "Citing your works" tab: when the works citing the
+	 * vault were listed, and a button to list them again; or, while they are
+	 * being listed, how far along. Lists them first if some works of the vault
+	 * were never looked up. Returns whether the list can be shown.
+	 */
+	private renderCitingHeader(list: HTMLElement): boolean {
+		const ids = this.vaultOpenAlexIds();
+		if (ids.length === 0) {
+			list.createDiv({ cls: 'literature-graph-suggestions-empty', text: 'None of your works is known to OpenAlex yet (they need a DOI).' });
+			return false;
+		}
+		const unlisted = ids.filter((id) => this.openAlex.cachedCiting(id) === undefined);
+		if (unlisted.length > 0 && !this.citingProgress && this.settings().openAlexEnabled && !this.openAlex.isRateLimited) void this.listCiting(false);
+		if (this.citingProgress) {
+			const [done, total] = this.citingProgress;
+			this.citingProgressEl = list.createDiv({ cls: 'literature-graph-suggestions-desc', text: `Finding the works that cite your works on OpenAlex: ${done} of ${total}…` });
+			return false;
+		}
+		const times = ids.flatMap((id) => {
+			const at = this.openAlex.citingListedAt(id);
+			return at === undefined ? [] : [at];
+		});
+		const status = list.createDiv({ cls: 'literature-graph-suggestions-desc literature-graph-suggestions-status' });
+		status.createSpan({
+			text: times.length > 0 ? `Listed on ${new Date(Math.min(...times)).toLocaleDateString()}. ` : 'Not listed yet. ',
+		});
+		const refresh = status.createEl('a', { text: 'List again', href: '#' });
+		setTooltip(refresh, 'Ask OpenAlex again for the works citing each of your works, to find those published since (about one request per work of your vault)');
+		refresh.addEventListener('click', (e) => {
+			e.preventDefault();
+			void this.listCiting(true);
+		});
+		if (unlisted.length > 0 && !this.settings().openAlexEnabled) status.createSpan({ text: ' OpenAlex is turned off in the settings.' });
+		return true;
+	}
+
+	/** Lists the works citing the works of the vault on OpenAlex (only those never looked up, or all with `refresh`), then shows them. */
+	private async listCiting(refresh: boolean): Promise<void> {
+		if (this.citingProgress) return;
+		const ids = this.vaultOpenAlexIds();
+		this.citingProgress = [0, ids.length];
+		this.renderSuggestions();
+		try {
+			await this.openAlex.citingAll(ids, { refresh }, (done, total) => {
+				this.citingProgress = [done, total];
+				this.citingProgressEl?.setText(`Finding the works that cite your works on OpenAlex: ${done} of ${total}…`);
+			});
+		} finally {
+			this.citingProgress = null;
+		}
+		this.renderSuggestions();
+		// The cited-by graph shows them too.
+		if (this.options.citedBy) void this.loadData();
+	}
+
+	/** The works outside the vault citing works of the vault, best first (see `rankCitingWorks`). */
+	private citingSuggestions(): Suggestion[] {
+		const vault = (this.fullGraph?.nodes ?? []).filter((n) => n.depth === 0 && n.openAlexId);
+		const key = `${this.openAlex.revision}\n${this.settings().citationLanguage}\n${vault.map((n) => n.openAlexId).join('\n')}`;
+		if (this.citingMemo?.key === key) return this.citingMemo.ranked;
+		const byOpenAlexId = new Map(vault.map((n) => [n.openAlexId ?? '', n]));
+		const cites = new Map<string, GraphNode[]>();
+		for (const n of vault) {
+			for (const id of this.openAlex.cachedCiting(n.openAlexId ?? '') ?? []) {
+				if (byOpenAlexId.has(id) || this.openAlex.isMissing(id)) continue;
+				cites.set(id, [...(cites.get(id) ?? []), n]);
+			}
+		}
+		const language = this.settings().citationLanguage;
+		const works = [...cites].map(([id, list]): CitingWork => {
+			const work = this.openAlex.cachedWork(id);
+			return {
+				node: {
+					id,
+					depth: 1,
+					file: null,
+					doi: work?.doi ?? null,
+					openAlexId: id,
+					label: work ? workCitation(work, language) : 'Unknown work',
+					title: work?.title ?? '',
+					citedBy: 0,
+					cites: list.length,
+				},
+				cites: list,
+				year: work?.year ?? null,
+				citedByCount: work?.citedByCount ?? null,
+			};
+		});
+		const ranked = rankCitingWorks(works);
+		this.citingMemo = { key, ranked };
+		return ranked;
 	}
 
 	/** Buttons of a work OpenAlex does not know: copy its reference, or search for it on the web. */
@@ -2246,6 +2366,19 @@ export class LiteratureGraphView extends ItemView {
 						reloadSoon();
 					}),
 			);
+		new Setting(body)
+			.setName('Cited by graph')
+			.setDesc('Instead of the works your works cite, the works outside your vault that cite them (often newer), from OpenAlex. Minimum citations: how many of your works they cite. Kept for every graph.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.options.citedBy === true).onChange((value) => {
+					this.options.citedBy = value;
+					void this.saveSettings({ graphCitedBy: value });
+					reloadSoon();
+				});
+				this.syncControls.push(() => {
+					toggle.setValue(this.options.citedBy === true);
+				});
+			});
 		new Setting(body)
 			.setName('Works without a DOI')
 			.setDesc('Works of the reference lists that have no DOI, known only from your notes (depth 1).')
@@ -2943,7 +3076,11 @@ export class LiteratureGraphView extends ItemView {
 	 * note" in a new tab (see `workView.ts`), which becomes a note once written in.
 	 */
 	private openNode(node: SimNode, event: MouseEvent): void {
-		const data = node.data;
+		this.openWork(node.data, event);
+	}
+
+	/** Opens a work, shown in the graph or not (see `openNode`). */
+	private openWork(data: GraphNode, event: MouseEvent): void {
 		if (data.file) {
 			const newTab = event.button === 1 ? 'tab' : Keymap.isModEvent(event);
 			void openFileAtLine(this.app, data.file, 0, newTab);

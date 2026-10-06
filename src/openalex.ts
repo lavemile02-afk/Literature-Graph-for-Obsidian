@@ -15,6 +15,10 @@ const MIN_INTERVAL_MS = 110;
 /** Ids or DOIs per request (OpenAlex accepts up to 50 values in a filter). */
 const BATCH_SIZE = 50;
 const SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,referenced_works,cited_by_count,topics,keywords';
+/** The same without the references: for the many works citing the vault, whose own references are not needed. */
+const CITING_SELECT = 'id,doi,display_name,publication_year,authorships,primary_location,cited_by_count,topics,keywords';
+/** Works per page when listing the works citing a work (the most OpenAlex allows). */
+const PAGE_SIZE = 200;
 const CACHE_VERSION = 1;
 
 /** What the plugin keeps about a work. */
@@ -34,6 +38,8 @@ export interface WorkSummary {
 	topics?: WorkTopics;
 	/** Its keywords on OpenAlex (name, score), most relevant first; missing if fetched before keywords were asked for. */
 	keywords?: [string, number][];
+	/** Fetched without its references (as a work citing the vault): `references` is empty, and the work is fetched again when they are needed. */
+	partial?: true;
 }
 
 /**
@@ -82,6 +88,8 @@ interface CacheFile {
 	topics?: Record<string, TopicInfo>;
 	/** Work id → its abstract (for its vector of meaning; "" when OpenAlex has none). */
 	abstracts?: Record<string, string>;
+	/** Work of the vault (OpenAlex id) → every work citing it, and when they were listed (see `citingAll`). */
+	citing?: Record<string, { at: number; ids: string[] }>;
 }
 
 /** Works citing a work: the most cited ones first, with the total count. */
@@ -466,7 +474,8 @@ export class OpenAlexClient {
 	async worksByDois(dois: string[], onProgress?: (done: number, total: number) => void): Promise<WorkSummary[]> {
 		await this.load();
 		const wanted = dois.map(normalizeDoi);
-		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId)))];
+		// (A work cached without its references, as a work citing the vault, is fetched again.)
+		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId) || this.cache.works[this.cache.doiToId[d] ?? '']?.partial))];
 		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('doi', missing, onProgress));
 		return wanted
 			.map((d) => this.cache.doiToId[d])
@@ -474,11 +483,11 @@ export class OpenAlexClient {
 			.filter((w): w is WorkSummary => w !== undefined);
 	}
 
-	/** Works by OpenAlex id; works not cached are fetched when possible. */
+	/** Works by OpenAlex id; works not cached (or cached without their references) are fetched when possible. */
 	async worksByIds(ids: string[], onProgress?: (done: number, total: number) => void): Promise<WorkSummary[]> {
 		await this.load();
 		const known = this.cache.missingIds ?? {};
-		const missing = ids.filter((id) => !this.cache.works[id] && !known[id]);
+		const missing = ids.filter((id) => (!this.cache.works[id] || this.cache.works[id]?.partial) && !known[id]);
 		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('openalex_id', missing, onProgress));
 		return ids.map((id) => this.cache.works[id]).filter((w): w is WorkSummary => w !== undefined);
 	}
@@ -515,6 +524,61 @@ export class OpenAlexClient {
 			total: entry.total,
 			works: entry.ids.map((i) => this.cache.works[i]).filter((w): w is WorkSummary => w !== undefined),
 		};
+	}
+
+	/**
+	 * Lists every work citing each of these works (the works of the vault,
+	 * by OpenAlex id), page by page (200 works a page, one request each), and
+	 * keeps the lists in the cache. Only the works not listed yet are asked
+	 * for, or all of them with `refresh` (to find what was published since).
+	 * The citing works are cached without their references (`partial`). For
+	 * about 180 works of the vault cited by 20,000 works: some 300 requests,
+	 * 0.03 $ of OpenAlex's free daily budget.
+	 */
+	async citingAll(ids: string[], options: { refresh?: boolean } = {}, onProgress?: (done: number, total: number) => void): Promise<void> {
+		await this.load();
+		const lists = (this.cache.citing ??= {});
+		const wanted = [...new Set(ids)].filter((id) => options.refresh === true || !lists[id]);
+		if (wanted.length === 0 || !this.options().enabled) return;
+		await this.tryFetch(async () => {
+			for (let i = 0; i < wanted.length; i++) {
+				const id = wanted[i] ?? '';
+				onProgress?.(i, wanted.length);
+				const found: string[] = [];
+				let cursor: string | null = '*';
+				while (cursor) {
+					const data = (await this.request('/works', {
+						filter: `cites:${id}`,
+						'per-page': String(PAGE_SIZE),
+						cursor,
+						select: CITING_SELECT,
+					})) as { meta?: { next_cursor?: string | null }; results?: RawWork[] } | null;
+					const results = data?.results ?? [];
+					for (const raw of results) {
+						this.keepTopics(raw);
+						const work = summarize(raw);
+						found.push(work.id);
+						// A work already cached keeps its references.
+						if (!this.cache.works[work.id]) this.cache.works[work.id] = { ...work, partial: true };
+						if (work.doi && !(work.doi in this.cache.doiToId)) this.cache.doiToId[work.doi] = work.id;
+					}
+					cursor = results.length > 0 ? (data?.meta?.next_cursor ?? null) : null;
+				}
+				lists[id] = { at: Date.now(), ids: found };
+				this.scheduleSave();
+			}
+			onProgress?.(wanted.length, wanted.length);
+		});
+	}
+
+	/** The works citing a work, if they were listed (see `citingAll`). */
+	cachedCiting(id: string): string[] | undefined {
+		return this.cache.citing?.[id]?.ids;
+	}
+
+	/** When the works citing a work were listed (milliseconds), if they were. */
+	citingListedAt(id: string): number | undefined {
+		return this.cache.citing?.[id]?.at;
 	}
 
 	/**

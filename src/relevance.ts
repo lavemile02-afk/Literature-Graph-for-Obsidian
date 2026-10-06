@@ -155,6 +155,44 @@ export function explainSuggestion(s: Suggestion, names = true): string[] {
 	return lines;
 }
 
+/** A work outside the vault that cites works of the vault (see `OpenAlexClient.citingAll`). */
+export interface CitingWork {
+	node: GraphNode;
+	/** The works of the vault it cites. */
+	cites: GraphNode[];
+	year: number | null;
+	citedByCount: number | null;
+}
+
+/**
+ * The works outside the vault that cite works of the vault, best first: the
+ * reverse of the reading suggestions, to find the literature (often newer)
+ * that builds on the vault's. Score: 1 for each work of the vault it cites,
+ * plus the same small bonuses for recency and citations in all.
+ */
+export function rankCitingWorks(works: CitingWork[], thisYear = new Date().getFullYear()): Suggestion[] {
+	return works
+		.map((w): Suggestion => {
+			const age = w.year === null ? null : thisYear - w.year;
+			const score =
+				w.cites.length +
+				(age === null ? 0 : WEIGHTS.recency * Math.min(1, Math.max(0, 1 - age / WEIGHTS.recentYears))) +
+				WEIGHTS.citations * Math.min(1, Math.log10(1 + (w.citedByCount ?? 0)) / 4);
+			return {
+				node: w.node,
+				score: round(score),
+				vaultCiters: [],
+				citesVault: w.cites,
+				outsideCiters: 0,
+				coCited: 0,
+				coreSize: 0,
+				year: w.year,
+				citedByCount: w.citedByCount,
+			};
+		})
+		.sort((a, b) => b.score - a.score || b.citesVault.length - a.citesVault.length || a.node.label.localeCompare(b.node.label));
+}
+
 /** What the OpenAlex cache knows of a work (nothing is requested). */
 export function cachedInfo(openAlex: OpenAlexClient): (node: GraphNode) => WorkInfo | null {
 	return (node) => {

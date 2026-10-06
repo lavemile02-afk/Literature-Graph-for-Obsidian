@@ -68,6 +68,8 @@ export interface LiteratureGraphSettings {
 	graphAppearOneByOne: boolean;
 	/** Also show the notes outside the literature folder linked by citation links. */
 	graphAllNotes: boolean;
+	/** The cited-by graph: the works citing the vault's works rather than those they cite (see `graphData.ts`). */
+	graphCitedBy: boolean;
 	/** Citations of the graph found in citation links, reference lists, OpenAlex. */
 	graphEdgeLinks: boolean;
 	graphEdgeBibliographies: boolean;
@@ -114,6 +116,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	graphRotationSpeed: 5,
 	graphAppearOneByOne: true,
 	graphAllNotes: false,
+	graphCitedBy: false,
 	graphEdgeLinks: true,
 	graphEdgeBibliographies: true,
 	graphEdgeOpenAlex: true,
@@ -228,6 +231,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'All notes of the vault',
 						desc: 'Also show the notes outside the literature folder that cite works with citation links (such as drafts or course notes), and the notes they cite that way. Only citation links count, never wikilinks. Can be changed in the graph for the time it stays open.',
 						control: { type: 'toggle', key: 'graphAllNotes' },
+					},
+					{
+						name: 'Cited by graph',
+						desc: 'At depth 1 and 2, show the works outside the vault that cite the works of the vault (often newer literature, listed once by OpenAlex), instead of the works they cite. The minimum number of citations is then how many works of the vault they cite. Can be changed in the graph.',
+						control: { type: 'toggle', key: 'graphCitedBy' },
 					},
 					{
 						name: 'Citations from citation links',

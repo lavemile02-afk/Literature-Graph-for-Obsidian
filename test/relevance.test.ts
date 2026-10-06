@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GraphEdge, GraphNode, LiteratureGraph } from '../src/graphData';
-import { explainSuggestion, rankSuggestions, WorkInfo } from '../src/relevance';
+import { explainSuggestion, rankCitingWorks, rankSuggestions, WorkInfo } from '../src/relevance';
 
 const node = (id: string, depth: 0 | 1 | 2, openAlexId: string | null = null): GraphNode => ({
 	id,
@@ -59,4 +59,24 @@ test('explains a suggestion in words', () => {
 		'Published in 1990',
 		'Cited 5000 times in all (OpenAlex)',
 	]);
+});
+
+test('ranks first the works citing the most works of the vault', () => {
+	const [a, b, c] = [node('A', 0, 'WA'), node('B', 0, 'WB'), node('C', 0, 'WC')];
+	const ranked = rankCitingWorks(
+		[
+			{ node: node('W1', 1, 'W1'), cites: [a], year: 2025, citedByCount: 900 },
+			{ node: node('W2', 1, 'W2'), cites: [a, b, c], year: 1999, citedByCount: 0 },
+			{ node: node('W3', 1, 'W3'), cites: [a, b], year: null, citedByCount: null },
+			{ node: node('W4', 1, 'W4'), cites: [b], year: 2026, citedByCount: 0 },
+		],
+		2026,
+	);
+	assert.deepEqual(
+		ranked.map((s) => s.node.id),
+		['W2', 'W3', 'W1', 'W4'],
+	);
+	// One work of the vault cited weighs more than recency and citations together.
+	assert.ok((ranked[0]?.score ?? 0) >= 3 && (ranked[2]?.score ?? 0) < 2);
+	assert.match(explainSuggestion(ranked[0] ?? ranked[1]!).join('\n'), /Cites 3 works of your vault: A; B; C/);
 });
