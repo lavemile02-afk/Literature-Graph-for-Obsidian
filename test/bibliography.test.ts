@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bibliographyEntries, entryMatches, familyOf, isReferenceHeading, nameKey, parseEntry } from '../src/bibliography';
+import { isbnsIn } from '../src/citationIndex';
 
 test('recognizes reference-list headings in many forms', () => {
 	for (const heading of [
@@ -220,4 +221,11 @@ test('reads a reference list whose heading was lost, but not scattered citations
 	assert.ok(entries.every((e) => e.line >= 6));
 	// Fewer than five reference-like lines in a row are not a reference list.
 	assert.equal(bibliographyEntries(['# Text', ...refs.slice(0, 3)].join('\n')).length, 0);
+});
+
+test('finds the ISBN of a book in the DOI of its chapters', () => {
+	assert.deepEqual(isbnsIn('10.1016/b978-0-12-823981-0.00012-5'), ['9780128239810']);
+	assert.deepEqual(isbnsIn('10.1007/978-3-030-12345-6_5'), ['9783030123456']);
+	assert.deepEqual(isbnsIn('9781107015715, 9781139059152'), ['9781107015715', '9781139059152']);
+	assert.deepEqual(isbnsIn('10.1111/j.1654-1103.2003.tb02152.x'), []);
 });

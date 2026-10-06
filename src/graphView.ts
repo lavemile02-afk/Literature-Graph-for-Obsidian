@@ -2196,6 +2196,9 @@ export class LiteratureGraphView extends ItemView {
 		for (const n of vault) {
 			for (const id of this.openAlex.cachedCiting(n.openAlexId ?? '') ?? []) {
 				if (byOpenAlexId.has(id) || this.openAlex.isMissing(id)) continue;
+				// A chapter of a book of the vault is in the vault (see `CitationIndex.fileForDoi`).
+				const doi = this.openAlex.cachedWork(id)?.doi;
+				if (doi && this.index.fileForDoi(doi)) continue;
 				cites.set(id, [...(cites.get(id) ?? []), n]);
 			}
 		}

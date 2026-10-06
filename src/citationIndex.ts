@@ -13,6 +13,11 @@ export type CitedWork =
 	| { kind: 'doi'; doi: string }
 	| { kind: 'broken'; text: string };
 
+/** The 13-digit ISBNs in a text, digits only ("978-0-12-823981-0" and "b978-0-12-823981-0.00012-5" give "9780128239810"). */
+export function isbnsIn(text: string): string[] {
+	return [...new Set([...text.matchAll(/97[89](?:[-.\s]?\d){10}/g)].map((m) => m[0].replace(/\D/g, '')))];
+}
+
 /** Lower case, without the https://doi.org/ prefix. */
 export function normalizeDoi(doi: string): string {
 	return doi
@@ -52,6 +57,8 @@ export class CitationIndex extends Events {
 	/** Notes of the vault by DOI (from the DOI property, else the first doi.org URL). */
 	private readonly fileByDoi = new Map<string, string>();
 	private readonly doiByPath = new Map<string, string>();
+	/** The ISBNs (13 digits) of each note, from its ISBN property. */
+	private readonly isbnsByPath = new Map<string, string[]>();
 	/** Reference-list entries of each literature note, by path. */
 	private readonly bibByPath = new Map<string, BibEntry[]>();
 	/** Reference-list entries by "first author|year" and by DOI, to find who cites a work. */
@@ -138,6 +145,7 @@ export class CitationIndex extends Events {
 		if (links.length > 0) this.linksByPath.set(file.path, links);
 		else this.linksByPath.delete(file.path);
 		this.setDoi(file.path, this.doiOf(file, text));
+		this.setIsbns(file.path, this.isbnsOf(file));
 		const literature = this.isLiterature(file);
 		this.setBibliography(file.path, literature ? bibliographyEntries(text) : []);
 		this.setWorkKey(file.path, literature ? this.workKey(file) : null);
@@ -163,6 +171,7 @@ export class CitationIndex extends Events {
 		return [
 			(this.linksByPath.get(path) ?? []).map((l) => `${l.text}\u0000${l.url}`).join('\u0001'),
 			this.doiByPath.get(path) ?? '',
+			(this.isbnsByPath.get(path) ?? []).join(','),
 			(this.bibByPath.get(path) ?? []).map((e) => e.text).join('\u0001'),
 			this.workKeyByPath.get(path) ?? '',
 			this.descriptions.get(path) ?? '',
@@ -180,6 +189,7 @@ export class CitationIndex extends Events {
 	removeFile(path: string): void {
 		this.linksByPath.delete(path);
 		this.setDoi(path, null);
+		this.setIsbns(path, []);
 		this.setBibliography(path, []);
 		this.setWorkKey(path, null);
 		this.descriptions.delete(path);
@@ -194,6 +204,9 @@ export class CitationIndex extends Events {
 		const doi = this.doiByPath.get(oldPath) ?? null;
 		this.setDoi(oldPath, null);
 		this.setDoi(file.path, doi);
+		const isbns = this.isbnsByPath.get(oldPath) ?? [];
+		this.setIsbns(oldPath, []);
+		this.setIsbns(file.path, isbns);
 		const literature = this.isLiterature(file);
 		const entries = this.bibByPath.get(oldPath) ?? [];
 		this.setBibliography(oldPath, []);
@@ -311,11 +324,42 @@ export class CitationIndex extends Events {
 		if (doi && !this.fileByDoi.has(doi)) this.fileByDoi.set(doi, path);
 	}
 
-	/** The note of the vault with this DOI, if any. */
+	private isbnsOf(file: TFile): string[] {
+		const value = propertyValue(this.app.metadataCache.getFileCache(file)?.frontmatter, this.settings().isbnProperty);
+		const text = Array.isArray(value) ? value.join(' ') : typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+		return isbnsIn(text);
+	}
+
+	private setIsbns(path: string, isbns: string[]): void {
+		if (isbns.length > 0) this.isbnsByPath.set(path, isbns);
+		else this.isbnsByPath.delete(path);
+	}
+
+	/**
+	 * The note of the vault with this DOI, if any; or the note of a book this
+	 * DOI is part of: chapter DOIs often contain the book's ISBN
+	 * ("10.1016/b978-0-12-823981-0.00012-5"). Only a literature note without a
+	 * DOI of its own stands for its parts (the note of one chapter carries the
+	 * whole book's ISBN too), and an ISBN shared by two such notes stands for
+	 * nothing: no uncertain match.
+	 */
 	fileForDoi(doi: string): TFile | null {
-		const path = this.fileByDoi.get(normalizeDoi(doi));
+		const normalized = normalizeDoi(doi);
+		const path = this.fileByDoi.get(normalized) ?? this.bookOfPart(normalized);
 		const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
 		return file instanceof TFile ? file : null;
+	}
+
+	private bookOfPart(doi: string): string | null {
+		const isbns = isbnsIn(doi);
+		if (isbns.length === 0) return null;
+		const owners = new Set<string>();
+		for (const [path, own] of this.isbnsByPath) {
+			if (this.doiByPath.has(path) || !own.some((i) => isbns.includes(i))) continue;
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile && this.isLiterature(file)) owners.add(path);
+		}
+		return owners.size === 1 ? ([...owners][0] ?? null) : null;
 	}
 
 	/** The DOI of a note, if known. */

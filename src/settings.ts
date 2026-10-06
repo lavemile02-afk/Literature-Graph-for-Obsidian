@@ -24,6 +24,8 @@ export interface LiteratureGraphSettings {
 	useNoteNameAsCitation: boolean;
 	/** Property holding a work's DOI, used to recognize works cited by DOI. */
 	doiProperty: string;
+	/** Property holding a book's ISBN: a chapter whose DOI contains it is part of the book (see `CitationIndex.fileForDoi`). */
+	isbnProperty: string;
 	/** Property of a literature note that lists its keywords (written by "Write keywords to notes", editable by the user). */
 	keywordsProperty: string;
 	/** Look up bibliographic data on OpenAlex (network access). */
@@ -94,6 +96,7 @@ export const DEFAULT_SETTINGS: LiteratureGraphSettings = {
 	titleProperty: 'title',
 	useNoteNameAsCitation: false,
 	doiProperty: 'doi',
+	isbnProperty: 'isbn',
 	keywordsProperty: 'keywords',
 	openAlexEnabled: true,
 	openAlexEmail: '',
@@ -198,6 +201,11 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 						name: 'DOI property',
 						desc: 'Property that holds the DOI of a work, to find its references and citations on OpenAlex and to recognize it when cited by DOI.',
 						control: { type: 'text', key: 'doiProperty', placeholder: 'DOI' },
+					},
+					{
+						name: 'ISBN property',
+						desc: 'Property that holds the ISBN of a book. A note of a book without a DOI then stands for its chapters too, when their DOI contains its ISBN (as Elsevier and Springer chapter DOIs do).',
+						control: { type: 'text', key: 'isbnProperty', placeholder: 'ISBN' },
 					},
 					{
 						name: 'Keywords property',

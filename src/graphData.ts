@@ -143,6 +143,7 @@ async function citedByStage(
 	g: GraphBuilder,
 	openAlex: OpenAlexClient,
 	pathById: Map<string, string>,
+	vaultPath: (id: string) => string | null,
 	options: GraphOptions,
 	language: 'en' | 'fr',
 	progress: GraphProgress,
@@ -159,7 +160,13 @@ async function citedByStage(
 	const cites = new Map<string, string[]>();
 	for (const [id, path] of pathById) {
 		for (const citing of openAlex.cachedCiting(id) ?? []) {
-			if (pathById.has(citing) || openAlex.isMissing(citing)) continue;
+			if (openAlex.isMissing(citing)) continue;
+			// A work of the vault (or a chapter of one of its books) citing it: a citation inside the vault.
+			const own = vaultPath(citing);
+			if (own) {
+				g.addEdge(own, path, 'openalex');
+				continue;
+			}
 			cites.set(citing, [...(cites.get(citing) ?? []), path]);
 		}
 	}
@@ -246,6 +253,14 @@ export async function buildGraph(
 
 	// OpenAlex ids of the vault's works, and their references.
 	const pathById = new Map<string, string>();
+	/** The note of a work, by its OpenAlex id: a work of the vault, or a part (chapter) of a book of the vault (by DOI, see `CitationIndex.fileForDoi`). */
+	const vaultPath = (id: string): string | null => {
+		const known = pathById.get(id);
+		if (known) return known;
+		const doi = openAlex.cachedWork(id)?.doi;
+		const file = doi ? index.fileForDoi(doi) : null;
+		return file && index.isLiterature(file) ? file.path : null;
+	};
 	let vaultWorks: WorkSummary[] = [];
 	try {
 		progress.onStatus('Loading OpenAlex data for the works of the vault…');
@@ -262,7 +277,7 @@ export async function buildGraph(
 			const from = pathById.get(work.id);
 			if (!from) continue;
 			for (const ref of work.references) {
-				const to = pathById.get(ref);
+				const to = vaultPath(ref);
 				if (to) g.addEdge(from, to, 'openalex');
 			}
 		}
@@ -271,7 +286,7 @@ export async function buildGraph(
 	}
 	progress.onStage(g.snapshot());
 	if (options.depth < 1) return g.snapshot();
-	if (options.citedBy) return citedByStage(g, openAlex, pathById, options, language, progress);
+	if (options.citedBy) return citedByStage(g, openAlex, pathById, vaultPath, options, language, progress);
 	if (openAlex.isRateLimited) {
 		progress.onStatus('OpenAlex refuses requests for now: works outside the vault come from the cache only');
 	}
@@ -297,7 +312,7 @@ export async function buildGraph(
 	for (const work of vaultWorks) {
 		const from = pathById.get(work.id);
 		if (!from) continue;
-		for (const ref of work.references) if (!pathById.has(ref)) cite(counts1, citers1, from, ref, 'openalex');
+		for (const ref of work.references) if (!vaultPath(ref)) cite(counts1, citers1, from, ref, 'openalex');
 	}
 	// Works cited by DOI (citation links and reference lists) that are not notes
 	// of the vault. Their DOIs are looked up on OpenAlex first, so that a work
