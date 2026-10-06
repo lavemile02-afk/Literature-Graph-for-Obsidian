@@ -10,6 +10,7 @@ https://github.com/lavemile02-afk/Literature-Graph-for-Obsidian
 Literature Graph is released under the MIT License. It bundles, among others:
 - PixiJS (https://pixijs.com), MIT License, Copyright (c) 2013-2023 Mathew Groves, Chad Engler
 - d3-force (https://d3js.org/d3-force), ISC License, Copyright 2010-2021 Mike Bostock
+- umap-js (https://github.com/PAIR-code/umap-js), Apache License 2.0, Copyright 2019 Google LLC
 Its idle animations are adapted from thinking-orbs (https://github.com/Jakubantalik/thinking-orbs),
 MIT License, Copyright (c) 2026 Jakub Antalik.
 The licenses of all bundled packages are in THIRD-PARTY-NOTICES.md in the repository.

@@ -37,6 +37,7 @@
 	},
 	"dependencies": {
 		"d3-force": "^3.0.0",
-		"pixi.js": "^8.21.0"
+		"pixi.js": "^8.21.0",
+		"umap-js": "^1.4.0"
 	}
 }

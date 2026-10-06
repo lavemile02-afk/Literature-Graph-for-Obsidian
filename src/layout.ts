@@ -29,6 +29,7 @@ import {
 	createIslandsSimulation,
 	createLayersSimulation,
 	createMeaningSimulation,
+	createTreeSimulation,
 } from './shapes';
 
 export interface LayoutNode extends SimulationNodeDatum {
@@ -62,9 +63,10 @@ export interface Forces {
  * Styles of layout: "default" (every work repelling the others, as in
  * Obsidian's graph view), "atom" (each work of the vault a nucleus with a
  * circle of the works it cites, see `atoms.ts`), and the shapes of
- * `shapes.ts`: "chronological", "islands", "layers" and "circle".
+ * `shapes.ts`: "chronological", "islands", "layers", "circle", "meaning"
+ * (groups of meaning in balls) and "tree" (the semantic tree).
  */
-export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'meaning';
+export type LayoutStyle = 'default' | 'atom' | 'chronological' | 'islands' | 'layers' | 'circle' | 'meaning' | 'tree';
 export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	default: 'Default graph',
 	atom: 'Atom graph',
@@ -73,6 +75,7 @@ export const LAYOUT_STYLES: Record<LayoutStyle, string> = {
 	layers: 'Layers',
 	circle: 'Circle',
 	meaning: 'Meaning',
+	tree: 'Meaning tree',
 };
 
 export function isLayoutStyle(value: unknown): value is LayoutStyle {
@@ -94,6 +97,8 @@ function createStyleSimulation(style: LayoutStyle, nodes: LayoutNode[], links: L
 			return createCircleSimulation(nodes, links, forces);
 		case 'meaning':
 			return createMeaningSimulation(nodes, links, forces);
+		case 'tree':
+			return createTreeSimulation(nodes, links, forces);
 		default:
 			return createSimulation(nodes, links, forces);
 	}

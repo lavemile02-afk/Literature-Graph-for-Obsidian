@@ -399,3 +399,45 @@ export function createMeaningSimulation(nodes: LayoutNode[], links: LayoutLink[]
 		.stop();
 	return sim;
 }
+
+/**
+ * The Meaning tree layout: the semantic tree of the works (see
+ * `meaningTree` in `meaningMap.ts`), given as each work's `kin` (the links
+ * of the tree). The links of the tree are short and firm, so the works most
+ * alike line up in branches and twigs; each work leans a little towards its
+ * place on the map of meaning (`anchor`), which keeps the large branches
+ * where the map has them; the repulsion only reaches nearby works, so the
+ * branches spread without pushing the whole tree apart. Citations barely
+ * pull: the tree is about meaning.
+ */
+export function createTreeSimulation(nodes: LayoutNode[], links: LayoutLink[], forces: Forces): Sim {
+	countDegrees(nodes, links);
+	const branches: KinLink[] = [];
+	nodes.forEach((n, i) => {
+		for (const [j, similarity] of n.kin ?? []) {
+			if (j >= 0 && j < nodes.length && j !== i) branches.push({ source: i, target: j, similarity });
+		}
+	});
+	const branchEnds = (l: KinLink) => [l.source as LayoutNode, l.target as LayoutNode] as const;
+	const lean = (n: LayoutNode) => (Array.isArray(n.anchor) ? 0.02 : 0);
+	return forceSimulation<LayoutNode, LayoutLink>(nodes)
+		.force('link', forceLink<LayoutNode, LayoutLink>(links).distance(forces.linkDistance).strength((l) => 0.005 / weakestDegree(l)))
+		.force(
+			'branch',
+			forceLink<LayoutNode, KinLink>(branches)
+				.distance((l) => {
+					const [a, b] = branchEnds(l);
+					return (collideRadius(a) + collideRadius(b)) * 1.5;
+				})
+				.strength(1),
+		)
+		.force('charge', forceManyBody<LayoutNode>().strength(repel(forces, 1)).distanceMax(TREE_REPEL_RANGE))
+		// (The center force barely acts here: the map already holds the tree together.)
+		.force('x', forceX<LayoutNode>((n) => n.anchor?.[0] ?? 0).strength((n) => lean(n) + forces.center * 0.1))
+		.force('y', forceY<LayoutNode>((n) => n.anchor?.[1] ?? 0).strength((n) => lean(n) + forces.center * 0.1))
+		.force('collide', forceCollide<LayoutNode>(collideRadius).strength(0.8))
+		.stop();
+}
+
+/** Meaning tree: how far the repulsion reaches, so the branches open without pushing the whole tree apart. */
+const TREE_REPEL_RANGE = 400;

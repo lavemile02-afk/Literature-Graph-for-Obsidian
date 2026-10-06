@@ -15,6 +15,12 @@ const walk = (deps = {}) => {
 };
 walk(tree.dependencies);
 
+// Packages whose package.json names another license than their code and
+// LICENSE file: the license of the code wins.
+const LICENSE_FIXES = {
+	'umap-js': 'Apache-2.0 (its source files and LICENSE file; its package.json says MIT)',
+};
+
 // Code adapted from other projects (not packages), with its license.
 const ADAPTED = `
 ## thinking-orbs
@@ -54,7 +60,7 @@ for (const [name, version] of [...packages].sort(([a], [b]) => a.localeCompare(b
 	const dir = join('node_modules', name);
 	const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
 	const licenseFile = readdirSync(dir).find((f) => /^(licen[cs]e|copying)(\.|$)/i.test(f));
-	out += `\n## ${name} ${version}\n\nLicense: ${pkg.license ?? 'see below'}\n`;
+	out += `\n## ${name} ${version}\n\nLicense: ${LICENSE_FIXES[name] ?? pkg.license ?? 'see below'}\n`;
 	if (licenseFile && existsSync(join(dir, licenseFile))) {
 		out += `\n\`\`\`\n${readFileSync(join(dir, licenseFile), 'utf8').trim()}\n\`\`\`\n`;
 	}

@@ -32,10 +32,12 @@ import {
 	signals,
 } from './animations';
 import { colorOfPlace, colorsFromSharedKeywords, mainTopics, topicName, WorkTopics } from './topics';
-import { ballCenters, fingerprint, fitPlane, groupNames, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, placeIn, Plane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import { ballCenters, fingerprint, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
+import { alignTo, blendWithNeighbors, mapOfMeaning, meaningTree, placeAmong, withoutLines } from './meaningMap';
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
+import { NamedWork, regionNames } from './regionNames';
 import { WORK_VIEW, WorkState } from './workView';
 import { OpenAlexClient, workCitation } from './openalex';
 import { CITED_BY_GRAPH, LiteratureGraphSettings } from './settings';
@@ -173,6 +175,26 @@ const MEANING_TEXT_LIMIT = 200_000;
 const MEANING_DIMENSIONS = 64;
 /** How many works nearest in meaning each work is drawn to, in the Meaning layout. */
 const MEANING_NEIGHBORS = 6;
+/** Meaning tree: each work is joined to the nearest of this many works near it on the map, then the tree is kept (see `meaningTree`). */
+const TREE_CANDIDATES = 30;
+const TREE_NEIGHBORS = 10;
+
+/**
+ * What meaning is learned from (see `meaningModel`): the vocabulary and the
+ * main directions of the words, and the map of the corpus (the literature
+ * of the vault and the works it cites): each work's vector and place.
+ */
+/** Which nearest works in meaning a layout needs (see `kinKind`). */
+type KinKind = '' | 'kin' | 'tree';
+
+interface MeaningModel {
+	key: string;
+	vocabulary: Vocabulary;
+	basis: MeaningBasis;
+	corpus: Map<string, { vector: Float32Array; place: [number, number] }>;
+	vectors: Float32Array[];
+	places: [number, number][];
+}
 /** At most this many groups (balls) of meaning in the Meaning layout. */
 const MEANING_MAX_GROUPS = 24;
 /** How visible the citation lines stay in the Meaning layout (1: as usual). */
@@ -286,6 +308,8 @@ export class LiteratureGraphView extends ItemView {
 	private readonly world = new Container();
 	private readonly vaultEdges = new EdgeMesh();
 	private readonly outsideEdges = new EdgeMesh();
+	/** Meaning tree layout: the branches of the semantic tree, drawn instead of the citations. */
+	private readonly treeEdges = new EdgeMesh();
 	/** Arrows of the hovered work: to the works it cites, and from the works citing it. */
 	private readonly focusOutEdges = new EdgeMesh();
 	private readonly focusInEdges = new EdgeMesh();
@@ -295,7 +319,7 @@ export class LiteratureGraphView extends ItemView {
 	/** The regions of the Meaning layout: a circle and a name around each group of meaning (behind the works). */
 	private readonly regionLayer = new Container();
 	/** The group of meaning of each work (by node index) and each group's circle and name; see `buildRegions`. */
-	private regions: { group: number[]; parts: { circle: Graphics; label: Text; color: number }[] } | null = null;
+	private regions: { group: number[]; parts: { circle: Graphics; label: Text; sub: Text | null; color: number }[] } | null = null;
 	/** When the regions were last fitted to the works (they follow them a few times a second at most). */
 	private regionsPlacedAt = 0;
 	/** The works moved since the regions were last fitted to them. */
@@ -317,8 +341,12 @@ export class LiteratureGraphView extends ItemView {
 	private meaningById = new Map<string, [number, number]>();
 	/** The works nearest in meaning to each work (by node index, with their similarity), for the Meaning layout. */
 	private meaningKin: [number, number][][] = [];
-	/** What meaning is learned from: the literature notes of the vault (see `meaningModel`). */
-	private meaningModelCache: { key: string; vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null } | null = null;
+	/** The vectors of meaning of the works shown (by work id), for the semantic tree and the names of the regions. */
+	private meaningVectors = new Map<string, Float32Array>();
+	/** What meaning is learned from: the literature notes of the vault and the works they cite (see `meaningModel`). */
+	private meaningModelCache: MeaningModel | null = null;
+	/** The works of the vault each work is linked to by citation (see `meaningContext`), for the whole graph it was found in. */
+	private contextCache: { graph: LiteratureGraph; byId: Map<string, string[]> } | null = null;
 	/** The works (their ids) whose meaning was last computed: a graph shown again with the same works is not computed again. */
 	private meaningFor: string | null = null;
 	/** Whether the layout running was given each work's nearest works in meaning (Meaning layout). */
@@ -576,6 +604,7 @@ export class LiteratureGraphView extends ItemView {
 		this.world.addChild(
 			this.axisLayer,
 			this.regionLayer,
+			this.treeEdges.mesh,
 			this.outsideEdges.mesh,
 			this.vaultEdges.mesh,
 			this.focusInEdges.mesh,
@@ -600,7 +629,7 @@ export class LiteratureGraphView extends ItemView {
 		// Keywords edited in a note, or a ghost note edited: colors again, and the Meaning layout places its works again.
 		const topicsEdited = debounce(
 			() => {
-				if (!this.byMeaning() && this.layoutStyle !== 'meaning') return;
+				if (!this.byMeaning() && !this.meaningLayout()) return;
 				this.meaningFor = null;
 				this.applyColorGroups();
 			},
@@ -928,11 +957,23 @@ export class LiteratureGraphView extends ItemView {
 		// Years first: the chronological and circle layouts place the works by them.
 		this.readYears();
 		this.buildTimeAxis();
-		const meaning = this.layoutStyle === 'meaning';
-		const anchors = meaning ? this.meaningAnchors() : null;
+		const meaning = this.meaningLayout();
+		const anchors = this.layoutStyle === 'meaning' ? this.meaningAnchors() : this.layoutStyle === 'tree' ? this.treeAnchors() : null;
 		// (The kin found for these same nodes, if the meaning is known.)
 		const kin = meaning && this.meaningKin.length === this.nodes.length ? this.meaningKin : null;
 		this.laidOutWithKin = kin !== null;
+		// The branches of the semantic tree (each link once).
+		this.treeEdges.setLinks(
+			this.layoutStyle === 'tree' && kin
+				? kin.flatMap((list, i) => {
+						const source = this.nodes[i];
+						return list.flatMap(([j]) => {
+							const target = this.nodes[j];
+							return source && target ? [{ data: { source: source.data.id, target: target.data.id, sources: new Set<EdgeSource>() }, source, target }] : [];
+						});
+					})
+				: [],
+		);
 		this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
@@ -1019,7 +1060,9 @@ export class LiteratureGraphView extends ItemView {
 	private async noteText(file: TFile): Promise<{ words: string[]; text: string }> {
 		const cached = this.noteWords.get(file.path);
 		if (cached && cached.mtime === file.stat.mtime) return cached;
-		const text = (await this.app.vault.cachedRead(file)).slice(0, MEANING_TEXT_LIMIT);
+		// Without its reference lists: the authors and journals they name are not what the note is about.
+		const full = withoutLines(await this.app.vault.cachedRead(file), this.index.bibliographyOf(file).map((e) => e.line));
+		const text = full.slice(0, MEANING_TEXT_LIMIT);
 		const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '');
 		const keywords = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
 		const words = tokenize([this.index.vaultWork(file)?.title || file.basename, ...keywords, body].join('\n'));
@@ -1072,9 +1115,63 @@ export class LiteratureGraphView extends ItemView {
 		return key;
 	}
 
-	/** What the meaning of the works shown is computed for: the works, and whether their nearest works are needed. */
-	private meaningWorks(needKin: boolean): string {
-		return `${this.nodes.map((n) => n.data.id).join('\n')}\n${needKin ? 'kin' : ''}`;
+	/** What the meaning of the works shown is computed for: the works, and which nearest works the layout needs. */
+	private meaningWorks(kin: KinKind): string {
+		return `${this.nodes.map((n) => n.data.id).join('\n')}\n${kin}`;
+	}
+
+	/** Which nearest works in meaning the layout needs: none, the nearest works (Meaning), or the semantic tree (Meaning tree). */
+	private kinKind(): KinKind {
+		return this.layoutStyle === 'meaning' ? 'kin' : this.layoutStyle === 'tree' ? 'tree' : '';
+	}
+
+	/** Whether the layout places the works by their meaning. */
+	private meaningLayout(): boolean {
+		return this.kinKind() !== '';
+	}
+
+	/** Each work's nearest works in meaning, for the layout: on the map (Meaning), or the links of the semantic tree (Meaning tree). */
+	private kinOf(kind: KinKind, nodes: SimNode[], places: Map<string, [number, number]>): [number, number][][] {
+		if (kind === '') return [];
+		const placed = nodes.map((n) => places.get(n.data.id) ?? null);
+		if (kind === 'kin') return nearestInPlane(placed, MEANING_NEIGHBORS);
+		const candidates = nearestInPlane(placed, TREE_CANDIDATES).map((list) => list.map(([j]) => j));
+		const tree = meaningTree(
+			nodes.map((n) => this.meaningVectors.get(n.data.id) ?? null),
+			candidates,
+			TREE_NEIGHBORS,
+		);
+		const kin: [number, number][][] = nodes.map(() => []);
+		for (const [a, b, similarity] of tree) kin[a]?.push([b, similarity]);
+		return kin;
+	}
+
+	/**
+	 * The works of the vault a work is linked to by citation in the whole graph
+	 * (those citing it, or, in the "Cited By" graph, those it cites), sorted:
+	 * their meaning goes into its own (see `blendWithNeighbors`).
+	 */
+	private meaningContext(id: string): string[] {
+		const graph = this.fullGraph;
+		if (!graph) return [];
+		if (this.contextCache?.graph !== graph) {
+			const depth = new Map(graph.nodes.map((n) => [n.id, n.depth]));
+			const byId = new Map<string, Set<string>>();
+			const add = (work: string, note: string) => byId.set(work, (byId.get(work) ?? new Set<string>()).add(note));
+			for (const e of graph.edges) {
+				const from = depth.get(e.source);
+				const to = depth.get(e.target);
+				if (from === 0 && to !== 0) add(e.target, e.source);
+				else if (to === 0 && from !== 0) add(e.source, e.target);
+			}
+			this.contextCache = { graph, byId: new Map([...byId].map(([k, v]) => [k, [...v].sort()])) };
+		}
+		return this.contextCache.byId.get(id) ?? [];
+	}
+
+	/** The fingerprint of what a work outside the vault means: its text, and the works of the vault it is linked to. */
+	private outsideKey(node: SimNode): string {
+		return fingerprint(`${this.outsideText(node)}\n${this.meaningContext(node.data.id).join('\n')}`);
 	}
 
 	/**
@@ -1085,24 +1182,31 @@ export class LiteratureGraphView extends ItemView {
 	 * moment later.
 	 */
 	private meaningFromCache(): void {
-		if ((!this.byMeaning() && this.layoutStyle !== 'meaning') || !this.meaningCache.isLoaded) return;
-		const needKin = this.layoutStyle === 'meaning';
-		const works = this.meaningWorks(needKin);
+		if ((!this.byMeaning() && !this.meaningLayout()) || !this.meaningCache.isLoaded) return;
+		const kind = this.kinKind();
+		const works = this.meaningWorks(kind);
 		if (this.meaningFor === works) return;
 		const model = this.knownModelKey(this.literatureFiles());
 		if (model === null || !this.meaningCache.hasModel(model)) return;
 		const places = new Map<string, [number, number]>();
+		const vectors = new Map<string, Float32Array>();
 		let complete = true;
 		for (const node of this.nodes) {
-			const text = node.data.file ? this.knownNoteText(node.data.file) : fingerprint(this.outsideText(node));
+			const text = node.data.file ? this.knownNoteText(node.data.file) : this.outsideKey(node);
 			const place = text === null ? undefined : this.meaningCache.place(node.data.id, text);
-			if (place === undefined) complete = false;
-			else if (place) places.set(node.data.id, place);
+			if (place === undefined || text === null) {
+				complete = false;
+				continue;
+			}
+			if (place) places.set(node.data.id, place);
+			const vector = this.meaningCache.vector(node.data.id, text);
+			if (vector) vectors.set(node.data.id, vector);
 		}
 		// (Not complete: `computeMeaning` still runs, for the others.)
 		if (complete) this.meaningFor = works;
 		this.meaningById = places;
-		this.meaningKin = needKin ? nearestInPlane(this.nodes.map((n) => places.get(n.data.id) ?? null), MEANING_NEIGHBORS) : [];
+		this.meaningVectors = vectors;
+		this.meaningKin = this.kinOf(kind, this.nodes, places);
 	}
 
 	/** The text of a work outside the vault: what OpenAlex says of it, or its reference, and what was written in its ghost note. */
@@ -1116,35 +1220,88 @@ export class LiteratureGraphView extends ItemView {
 
 	/**
 	 * What meaning is learned from: the vocabulary, the main directions and
-	 * the plane of the colors, all from the literature notes of the vault and
+	 * the map, all from the corpus of the literature notes of the vault and
 	 * the works they cite (their texts from OpenAlex, without the ghost
-	 * notes), in a fixed order, whatever the graph shows. So a work keeps its
-	 * meaning, and its color, from one opening of the graph to the next, and
-	 * in every graph; it changes only when the text of the notes of the vault
-	 * changes (or they cite new works). Learned only when a work's place is
-	 * not in the cache (see `meaningCache.ts`).
+	 * notes), in a fixed order, whatever the graph shows. Each cited work
+	 * takes in the meaning of the notes citing it (`blendWithNeighbors`); the
+	 * map is UMAP's (`mapOfMeaning`), turned to match the last one learned
+	 * (`alignTo`). So a work keeps its meaning, and its color, from one
+	 * opening of the graph to the next, and in every graph. Learned only when
+	 * a work's place is not in the cache (see `meaningCache.ts`).
 	 */
 	private async meaningModel(
 		files: TFile[],
 		cited: string[],
 		key: string,
 		pause: () => Promise<void>,
-	): Promise<{ vocabulary: Vocabulary; basis: MeaningBasis; plane: Plane | null }> {
+		breathe: () => Promise<void>,
+	): Promise<MeaningModel> {
 		if (this.meaningModelCache?.key === key) return this.meaningModelCache;
 		const words: string[][] = [];
 		for (const file of files) words.push((await this.noteText(file)).words);
-		for (let i = 0; i < cited.length; i++) {
-			words.push(tokenize(this.openAlexText(cited[i] ?? '')));
-			if (i % 500 === 499) await pause();
+		for (const id of cited) {
+			words.push(tokenize(this.openAlexText(id)));
+			await breathe();
 		}
 		const vocabulary = vocabularyOf(words);
 		await pause();
-		const vectors = words.map((w) => vectorize(w, vocabulary));
+		const sparse = words.map((w) => vectorize(w, vocabulary));
 		await pause();
-		const basis = await meaningBasis(vectors, vocabulary.idf.length, MEANING_DIMENSIONS, pause);
-		const plane = fitPlane(vectors.map((v) => project(v, basis)));
-		this.meaningModelCache = { key, vocabulary, basis, plane };
+		const basis = await meaningBasis(sparse, vocabulary.idf.length, MEANING_DIMENSIONS, pause);
+		const own = sparse.map((v) => project(v, basis));
+		// The notes citing each cited work (from their references on OpenAlex).
+		const noteVector = new Map(files.map((f, i) => [f.path, own[i] ?? null]));
+		const citers = new Map<string, Float32Array[]>();
+		for (const file of files) {
+			const doi = this.index.doiForFile(file);
+			const id = doi ? this.openAlex.cachedIdForDoi(doi) : null;
+			const vector = noteVector.get(file.path);
+			if (!id || !vector) continue;
+			for (const ref of this.openAlex.cachedWork(id)?.references ?? []) citers.set(ref, [...(citers.get(ref) ?? []), vector]);
+		}
+		const ids = [...files.map((f) => f.path), ...cited];
+		const blended = ids.map((id, i) => (i < files.length ? (own[i] ?? null) : blendWithNeighbors(own[i] ?? null, citers.get(id) ?? [])));
+		const present = ids.flatMap((id, i) => {
+			const vector = blended[i];
+			return vector ? [{ id, vector }] : [];
+		});
+		this.setStatus(`${this.summary} · Learning the meaning of ${present.length} works…`);
+		const vectors = present.map((p) => p.vector);
+		// The map kept for this same meaning (works only new to the graph are
+		// placed among its works); otherwise a new one, turned to match the last.
+		const kept = present.map((p) => this.meaningCache.corpusPlace(p.id));
+		let places: [number, number][];
+		if (this.meaningCache.hasCorpusFor(key) && kept.every((p) => p !== null)) {
+			places = kept;
+		} else {
+			places = alignTo(await mapOfMeaning(vectors, breathe), kept);
+			this.meaningCache.setCorpus(Object.fromEntries(present.map((p, i) => [p.id, places[i] ?? [0, 0]])), key);
+		}
+		const corpus = new Map(present.map((p, i) => [p.id, { vector: p.vector, place: places[i] ?? ([0, 0] as [number, number]) }]));
+		this.meaningModelCache = { key, vocabulary, basis, corpus, vectors, places };
 		return this.meaningModelCache;
+	}
+
+	/**
+	 * A work's vector and place: as in the corpus of the map for a work of the
+	 * corpus; otherwise its own vector (with the meaning of the works of the
+	 * vault it is linked to, for a work outside the vault), placed among its
+	 * nearest works of the corpus.
+	 */
+	private placeWork(node: SimNode, words: () => string[], model: MeaningModel): { vector: Float32Array | null; place: [number, number] | null } {
+		const known = model.corpus.get(node.data.id);
+		if (known) return known;
+		const own = project(vectorize(words(), model.vocabulary), model.basis);
+		const vector = node.data.file
+			? own
+			: blendWithNeighbors(
+					own,
+					this.meaningContext(node.data.id).flatMap((path) => {
+						const note = model.corpus.get(path);
+						return note ? [note.vector] : [];
+					}),
+				);
+		return { vector, place: vector ? placeAmong(vector, model.vectors, model.places) : null };
 	}
 
 	/**
@@ -1160,7 +1317,7 @@ export class LiteratureGraphView extends ItemView {
 			return { text: note.text, words: () => note.words };
 		}
 		const text = this.outsideText(node);
-		return { text: fingerprint(text), words: () => tokenize(text) };
+		return { text: this.outsideKey(node), words: () => tokenize(text) };
 	}
 
 	/**
@@ -1175,11 +1332,11 @@ export class LiteratureGraphView extends ItemView {
 	private async computeMeaning(): Promise<void> {
 		const graph = this.shownGraph;
 		if (!graph) return;
-		const needKin = this.layoutStyle === 'meaning';
+		const kind = this.kinKind();
 		// By the works shown, not by the graph object: showing the same works
 		// again (the Meaning layout does, once the meaning is known) builds a
 		// new object, and must not start the computation again.
-		const works = this.meaningWorks(needKin);
+		const works = this.meaningWorks(kind);
 		if (this.meaningFor === works) return;
 		this.meaningFor = works;
 		const run = ++this.meaningRun;
@@ -1228,28 +1385,31 @@ export class LiteratureGraphView extends ItemView {
 		const model = this.knownModelKey(files) ?? '';
 		if (run !== this.meaningRun) return;
 		this.meaningCache.useModel(model);
-		// Places from the cache; the others are computed.
+		// Places and vectors from the cache; the others are computed.
 		const places = new Map<string, [number, number]>();
+		const vectors = new Map<string, Float32Array>();
 		const missing: { node: SimNode; text: string; words: () => string[] }[] = [];
-		for (let i = 0; i < nodes.length; i++) {
-			const node = nodes[i];
-			if (!node) continue;
+		for (const node of nodes) {
 			const { text, words } = await this.workText(node);
 			const place = this.meaningCache.place(node.data.id, text);
 			if (place === undefined) missing.push({ node, text, words });
-			else if (place) places.set(node.data.id, place);
+			else {
+				if (place) places.set(node.data.id, place);
+				const vector = this.meaningCache.vector(node.data.id, text);
+				if (vector) vectors.set(node.data.id, vector);
+			}
 			await breathe();
 		}
 		if (run !== this.meaningRun) return;
 		if (missing.length > 0) {
-			const { vocabulary, basis, plane } = await this.meaningModel(files, cited, model, pause);
-			for (let i = 0; i < missing.length; i++) {
-				const { node, text, words } = missing[i] ?? { node: null, text: '', words: () => [] };
-				if (!node) continue;
-				const vector = project(vectorize(words(), vocabulary), basis);
-				const place = vector && plane ? placeIn(plane, vector) : null;
-				this.meaningCache.setPlace(node.data.id, text, place);
+			const learned = await this.meaningModel(files, cited, model, pause, breathe);
+			if (run !== this.meaningRun) return;
+			this.setStatus(`${this.summary} · Placing the works on the map of meaning…`);
+			for (const { node, text, words } of missing) {
+				const { vector, place } = this.placeWork(node, words, learned);
+				this.meaningCache.setPlace(node.data.id, text, place, vector);
 				if (place) places.set(node.data.id, place);
+				if (vector) vectors.set(node.data.id, vector);
 				await breathe();
 			}
 			if (run !== this.meaningRun) return;
@@ -1257,13 +1417,14 @@ export class LiteratureGraphView extends ItemView {
 		// Works placed now that were not before (from the cache, when the graph was shown).
 		const newly = nodes.filter((n) => places.has(n.data.id) && !this.meaningById.has(n.data.id)).length;
 		this.meaningById = places;
-		// The Meaning layout draws each work to its nearest works in the plane (by node index).
-		this.meaningKin = needKin ? nearestInPlane(nodes.map((n) => places.get(n.data.id) ?? null), MEANING_NEIGHBORS) : [];
+		this.meaningVectors = vectors;
+		// The meaning layouts draw each work to its nearest works (by node index).
+		this.meaningKin = this.kinOf(kind, nodes, places);
 		this.setStatus(this.summary);
 		this.applyTopicColors();
-		// The Meaning layout places the works by their meaning, now known; a
+		// The meaning layouts place the works by their meaning, now known; a
 		// few new works (2 % or less) are not worth laying the graph out again.
-		if (this.layoutStyle === 'meaning' && (newly > nodes.length * 0.02 || !this.laidOutWithKin)) this.showCurrent();
+		if (this.meaningLayout() && (newly > nodes.length * 0.02 || !this.laidOutWithKin)) this.showCurrent();
 	}
 
 	/**
@@ -1283,6 +1444,21 @@ export class LiteratureGraphView extends ItemView {
 		const balls = ballCenters(groups, (radius * 1.25 + 1) * 1.6);
 		this.buildRegions(groups, balls.radii);
 		return groupTargets(places, groups, balls.centers, this.forces.meaning);
+	}
+
+	/**
+	 * Where each work is drawn to in the Meaning tree layout: its place on the
+	 * map, at a scale that leaves room for every work (the tree's links then
+	 * gather the branches).
+	 */
+	private treeAnchors(): ([number, number] | null)[] {
+		const placed = this.nodes.filter((n) => this.meaningById.has(n.data.id)).length;
+		const radius = this.nodes.reduce((s, n) => s + n.radius * this.pointSize(), 0) / Math.max(1, this.nodes.length);
+		const scale = 5 * (radius * 1.25 + 1) * Math.sqrt(Math.max(1, placed));
+		return this.nodes.map((n) => {
+			const place = this.meaningById.get(n.data.id);
+			return place ? [place[0] * scale, place[1] * scale] : null;
+		});
 	}
 
 	/** The keywords of a work: its keywords property for a note of the vault, else its keywords on OpenAlex (cached). */
@@ -1317,28 +1493,33 @@ export class LiteratureGraphView extends ItemView {
 		const theme = this.theme;
 		if (!theme) return;
 		const count = groups.centers.length;
-		// Terms of each work: its keywords, and the words of its title.
-		const terms = this.nodes.map((n) => {
+		// What names a region (see `regionNames.ts`): the meaning, keywords, topics and titles of its works.
+		const info = (id: string) => this.openAlex.topicInfo(id);
+		const works = this.nodes.map((n): NamedWork => {
 			const id = n.data.openAlexId;
 			const title = (id ? this.openAlex.cachedWork(id)?.title : null) ?? n.data.title;
-			return [...this.workKeywords(n), ...titleTerms(title)];
+			return {
+				vector: this.meaningVectors.get(n.data.id) ?? null,
+				keywords: this.workKeywords(n),
+				topics: (this.workTopics(n) ?? []).map(([topic]) => topicName(topic, info)),
+				titleTerms: titleTerms(title),
+			};
 		});
-		const names = groupNames(terms, groups.group, count);
-		const info = (id: string) => this.openAlex.topicInfo(id);
+		const names = regionNames(works, groups.group, count);
 		const parts = groups.centers.map((center, g) => {
-			let name = names[g] ?? null;
-			if (!name) {
-				const topics = this.nodes.flatMap((n, i) => (groups.group[i] === g ? [this.workTopics(n)] : []));
-				const top = mainTopics(topics, 1)[0];
-				name = top ? topicName(top.id, info) : '';
-			}
+			const name = names[g] ?? { title: '', topic: null, terms: [] };
 			const color = this.placeColor(center);
 			const circle = new Graphics();
 			const fontSize = Math.max(36, (radii[g] ?? 100) * 0.22);
-			const label = new Text({ text: name, style: { fontSize, fontWeight: '600', fill: color, fontFamily: theme.fontFamily } });
+			const label = new Text({ text: name.title, style: { fontSize, fontWeight: '600', fill: color, fontFamily: theme.fontFamily } });
 			label.anchor.set(0.5, 1);
+			// Below the name, smaller: OpenAlex's topic and the typical terms.
+			const below = [name.topic, name.terms.join(' · ')].filter((line): line is string => !!line);
+			const sub = below.length > 0 ? new Text({ text: below.join('\n'), style: { fontSize: fontSize * 0.45, fill: color, fontFamily: theme.fontFamily, align: 'center' } }) : null;
+			sub?.anchor.set(0.5, 1);
 			layer.addChild(circle, label);
-			return { circle, label, color };
+			if (sub) layer.addChild(sub);
+			return { circle, label, sub, color };
 		});
 		this.regions = { group: groups.group, parts };
 		this.regionsPlacedAt = 0;
@@ -1377,11 +1558,12 @@ export class LiteratureGraphView extends ItemView {
 			ys[g]?.push(n.y);
 		});
 		const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
-		regions.parts.forEach(({ circle, label, color }, g) => {
+		regions.parts.forEach(({ circle, label, sub, color }, g) => {
 			const gx = xs[g] ?? [];
 			const gy = ys[g] ?? [];
 			circle.clear();
 			label.visible = gx.length > 0;
+			if (sub) sub.visible = gx.length > 0;
 			if (gx.length === 0) return;
 			const cx = median([...gx]);
 			const cy = median([...gy]);
@@ -1389,14 +1571,17 @@ export class LiteratureGraphView extends ItemView {
 			// Wide enough for four in five of its works.
 			const r = (d[Math.floor(d.length * 0.8)] ?? d[d.length - 1] ?? 0) + label.style.fontSize * 0.3;
 			circle.circle(cx, cy, r).fill({ color, alpha: 0.05 }).stroke({ width: Math.max(2, r / 120), color, alpha: 0.45 });
-			label.position.set(cx, cy - r - label.style.fontSize * 0.15);
+			// The name above the circle, its topic and terms between them.
+			const gap = label.style.fontSize * 0.15;
+			sub?.position.set(cx, cy - r - gap);
+			label.position.set(cx, cy - r - gap - (sub ? sub.height + gap : 0));
 		});
 		return false;
 	}
 
 	private applyTopicColors(): void {
 		// Meaning serves the colors and the Meaning layout.
-		if (!this.byMeaning() && this.layoutStyle !== 'meaning') {
+		if (!this.byMeaning() && !this.meaningLayout()) {
 			for (const node of this.nodes) node.topicColor = null;
 			this.topicLegend = [];
 			this.renderTopicLegend();
@@ -2836,6 +3021,7 @@ export class LiteratureGraphView extends ItemView {
 						: undefined;
 			this.vaultEdges.update(EDGE_WIDTH / scale, arrow, hidden);
 			this.outsideEdges.update(EDGE_WIDTH / scale, arrow, hidden);
+			this.treeEdges.update(EDGE_WIDTH / scale, 0, hidden);
 			this.focusOutEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
 			this.focusInEdges.update(FOCUS_EDGE_WIDTH / scale, arrow);
 		}
@@ -2847,10 +3033,13 @@ export class LiteratureGraphView extends ItemView {
 		// The chronological layout shows only the lines of the highlighted work
 		// (decision of the user); the Meaning layout, a faint trace of them: its
 		// long lines across the clouds would otherwise veil their colors.
-		const styleFade = this.layoutStyle === 'chronological' ? 0 : this.layoutStyle === 'meaning' ? MEANING_EDGE_FADE : 1;
+		const styleFade = this.layoutStyle === 'chronological' ? 0 : this.layoutStyle === 'meaning' ? MEANING_EDGE_FADE : this.layoutStyle === 'tree' ? 0 : 1;
 		const zoomFade = idleFade * Math.min(1, Math.max(EDGE_FADE_MIN, (scale - EDGE_FADE_FROM) / (EDGE_FADE_TO - EDGE_FADE_FROM)));
 		this.vaultEdges.style(theme.line, styleFade * lerp(theme.line.alpha * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
 		this.outsideEdges.style(theme.line, styleFade * lerp(theme.line.alpha * 0.45 * zoomFade, DIMMED_EDGE_ALPHA * zoomFade));
+		// The branches are the shape of the tree: they fade less when zoomed out.
+		const treeFade = idleFade * Math.max(0.7, zoomFade);
+		this.treeEdges.style(theme.line, lerp(theme.line.alpha * treeFade, DIMMED_EDGE_ALPHA * treeFade));
 		this.focusOutEdges.style(theme.focused, theme.focused.alpha * level);
 		this.focusInEdges.style(theme.incoming, theme.incoming.alpha * level);
 

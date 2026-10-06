@@ -1,12 +1,16 @@
 import { App, debounce } from 'obsidian';
 import { writePluginFile } from './pluginFiles';
+import { packVector, unpackVector } from './meaningMap';
 
-const CACHE_VERSION = 1;
+/** 2: places on the UMAP map, and the vectors of meaning (version 1 had places in the plane of the two main directions). */
+const CACHE_VERSION = 2;
 
 /** A work's place in the plane of meaning, and the fingerprint of the text it comes from. */
 interface PlaceEntry {
 	text: string;
 	place: [number, number] | null;
+	/** Its vector of meaning (see `packVector`), for the semantic tree and the names of the regions. */
+	vector?: string;
 }
 
 /** The fingerprint of a note's words, while the file and the keywords property are the same. */
@@ -25,6 +29,10 @@ interface CacheFile {
 	places: Record<string, PlaceEntry>;
 	/** Fingerprints of the notes of the vault, so that opening the graph needs not read them all again. */
 	notes?: Record<string, NoteEntry>;
+	/** Where the works of the corpus were on the last map learned: a new map is turned to match it (see `alignTo`). */
+	corpus?: Record<string, [number, number]>;
+	/** The meaning that map was learned with: the same meaning needs no new map. */
+	corpusModel?: string;
 }
 
 /**
@@ -72,7 +80,7 @@ export class MeaningCache {
 	useModel(model: string): void {
 		if (this.cache.model === model) return;
 		// (The fingerprints of the notes do not depend on the meaning: they stay.)
-		this.cache = { version: CACHE_VERSION, model, places: {}, notes: this.cache.notes };
+		this.cache = { version: CACHE_VERSION, model, places: {}, notes: this.cache.notes, corpus: this.cache.corpus, corpusModel: this.cache.corpusModel };
 		this.changed();
 	}
 
@@ -97,9 +105,33 @@ export class MeaningCache {
 		return entry && entry.text === text ? entry.place : undefined;
 	}
 
-	/** Keeps a work's place (written a little later). */
-	setPlace(id: string, text: string, place: [number, number] | null): void {
-		this.cache.places[id] = { text, place };
+	/** A work's vector of meaning, if it was kept with its place for this same text. */
+	vector(id: string, text: string): Float32Array | null | undefined {
+		const entry = this.cache.places[id];
+		if (!entry || entry.text !== text) return undefined;
+		return entry.vector ? unpackVector(entry.vector) : null;
+	}
+
+	/** Keeps a work's place and vector (written a little later). */
+	setPlace(id: string, text: string, place: [number, number] | null, vector: Float32Array | null = null): void {
+		this.cache.places[id] = vector ? { text, place, vector: packVector(vector) } : { text, place };
+		this.changed();
+	}
+
+	/** Where a work of the corpus was on the last map learned. */
+	corpusPlace(id: string): [number, number] | null {
+		return this.cache.corpus?.[id] ?? null;
+	}
+
+	/** Whether the map kept was learned with this meaning (then it needs not be learned again). */
+	hasCorpusFor(model: string): boolean {
+		return this.cache.corpusModel === model && this.cache.corpus !== undefined;
+	}
+
+	/** Keeps where the works of the corpus are on the map just learned with this meaning. */
+	setCorpus(places: Record<string, [number, number]>, model: string): void {
+		this.cache.corpus = places;
+		this.cache.corpusModel = model;
 		this.changed();
 	}
 
