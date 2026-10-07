@@ -180,6 +180,8 @@ const MEANING_NEIGHBORS = 6;
 const KIN_MIN_SIMILARITY = 0.3;
 /** Meaning tree: each work is joined to the nearest of this many works near it on the map, then the tree is kept (see `meaningTree`). */
 const TREE_CANDIDATES = 30;
+/** This many works (or 5 % of the graph) without their meaning yet: a loading screen. */
+const MANY_WORKS = 300;
 /** An abstract this long (characters) makes the meaning of a work outside the vault reliable; so does this much text written in its ghost note. */
 const MIN_ABSTRACT_LENGTH = 200;
 const MIN_GHOST_TEXT = 300;
@@ -595,6 +597,7 @@ export class LiteratureGraphView extends ItemView {
 		container.addClass('literature-graph-view');
 		this.statusEl = container.createDiv({ cls: 'literature-graph-view-status', text: 'Loading…' });
 		this.emptyEl = container.createDiv({ cls: 'literature-graph-empty is-hidden' });
+		this.loadingEl = container.createDiv({ cls: 'literature-graph-loading is-hidden' });
 		this.hintEl = container.createDiv({ cls: 'literature-graph-view-hint is-hidden' });
 		this.buildSearch(container);
 		this.buildSuggestions(container);
@@ -772,6 +775,40 @@ export class LiteratureGraphView extends ItemView {
 			el.createDiv({ cls: 'literature-graph-empty-text', text: message });
 		}
 		el.toggleClass('is-hidden', message === null);
+	}
+
+	/** The loading screen: shown while the meaning of many works is computed. */
+	private loadingEl: HTMLElement | null = null;
+	/** Works shown whose meaning is not in the cache (see `meaningFromCache`). */
+	private meaningMissing = 0;
+	/** Meaning layouts: the works are hidden until their meaning is known (it gives their places). */
+	private waitingForMeaning = false;
+
+	/**
+	 * Shows or hides the loading screen: what is being computed, that it
+	 * happens once, and that Obsidian may be slow meanwhile (decision of the
+	 * user: say so, so that a slow moment is not taken for a slow plugin).
+	 */
+	private setLoading(step: string | null, works = 0): void {
+		const el = this.loadingEl;
+		if (!el) return;
+		el.toggleClass('is-hidden', step === null);
+		if (step === null) return;
+		el.empty();
+		const card = el.createDiv({ cls: 'literature-graph-loading-card' });
+		card.createDiv({ cls: 'literature-graph-loading-title', text: works > 0 ? `Computing the meaning of ${works.toLocaleString()} works` : 'Computing the meaning of the works' });
+		card.createDiv({
+			text: this.waitingForMeaning
+				? 'The works appear once their meaning is known. This happens once; the result is kept for the next openings. Obsidian may be slow meanwhile.'
+				: 'Their colors appear once it is done. This happens once; the result is kept for the next openings. Obsidian may be slow meanwhile.',
+		});
+		card.createDiv({ cls: 'literature-graph-loading-step', text: step });
+	}
+
+	/** A step of the computation of meaning: in the status line, and on the loading screen if it is shown. */
+	private meaningStep(step: string): void {
+		this.setStatus(`${this.summary} · ${step}`);
+		if (this.loadingEl && !this.loadingEl.hasClass('is-hidden')) this.loadingEl.querySelector('.literature-graph-loading-step')?.setText(step);
 	}
 
 	private setStatus(message: string): void {
@@ -1005,7 +1042,18 @@ export class LiteratureGraphView extends ItemView {
 					? this.dendrogramLinks()
 					: [],
 		);
-		this.layout?.send({
+		// Many works without their meaning yet: a loading screen; in the
+		// meaning layouts, the works wait for it (their places come from it),
+		// rather than being drawn and laid out for nothing.
+		const heavy = (this.byMeaning() || this.meaningLayout()) && this.meaningMissing > Math.max(MANY_WORKS, this.nodes.length * 0.05);
+		this.waitingForMeaning = heavy && this.meaningLayout();
+		this.world.visible = !this.waitingForMeaning;
+		this.setLoading(heavy ? 'Reading the works…' : null, this.meaningMissing);
+		if (this.waitingForMeaning) {
+			// (A new graph number: positions still coming for the last graph are ignored.)
+			this.layoutGraph++;
+			this.layout?.send({ type: 'stop' });
+		} else this.layout?.send({
 			type: 'start',
 			graph: ++this.layoutGraph,
 			nodes: this.nodes.map((n) => ({ x: n.x, y: n.y, depth: n.data.depth, radius: n.radius * this.pointSize(), year: plausibleYear(this.years[n.index]), anchor: anchors?.[n.index] ?? null, kin: kin?.[n.index] ?? null })),
@@ -1233,9 +1281,13 @@ export class LiteratureGraphView extends ItemView {
 		if ((!this.byMeaning() && !this.meaningLayout()) || !this.meaningCache.isLoaded) return;
 		const kind = this.kinKind();
 		const works = this.meaningWorks(kind);
+		this.meaningMissing = 0;
 		if (this.meaningFor === works) return;
 		const model = this.knownModelKey(this.literatureFiles());
-		if (model === null || !this.meaningCache.hasModel(model)) return;
+		if (model === null || !this.meaningCache.hasModel(model)) {
+			this.meaningMissing = this.nodes.length;
+			return;
+		}
 		const places = new Map<string, [number, number]>();
 		const vectors = new Map<string, Float32Array>();
 		let complete = true;
@@ -1244,6 +1296,7 @@ export class LiteratureGraphView extends ItemView {
 			const place = text === null ? undefined : this.meaningCache.place(node.data.id, text);
 			if (place === undefined || text === null) {
 				complete = false;
+				this.meaningMissing++;
 				continue;
 			}
 			if (place) places.set(node.data.id, place);
@@ -1341,7 +1394,7 @@ export class LiteratureGraphView extends ItemView {
 			const vector = blended[i];
 			return vector ? [{ id, vector }] : [];
 		});
-		this.setStatus(`${this.summary} · Learning the meaning of ${present.length} works…`);
+		this.meaningStep(`Learning the meaning of ${present.length} works…`);
 		const vectors = present.map((p) => p.vector);
 		// The map kept for this same meaning (works only new to the graph are
 		// placed among its works); otherwise a new one, turned to match the last.
@@ -1496,7 +1549,7 @@ export class LiteratureGraphView extends ItemView {
 			console.error('Literature Graph: OpenAlex request failed', error);
 		}
 		if (run !== this.meaningRun) return;
-		this.setStatus(`${this.summary} · Computing the meaning of the works…`);
+		this.meaningStep('Computing the meaning of the works…');
 		await this.meaningCache.load();
 		// What the meaning is learned from, as one fingerprint.
 		// The notes changed since they were last read are read now.
@@ -1525,9 +1578,11 @@ export class LiteratureGraphView extends ItemView {
 		}
 		if (run !== this.meaningRun) return;
 		if (missing.length > 0) {
+			// Learning the meaning takes a while: say so, whatever the number of works.
+			if (this.meaningModelCache?.key !== model && this.loadingEl?.hasClass('is-hidden')) this.setLoading('Learning the meaning of your literature…', missing.length);
 			const learned = await this.meaningModel(files, cited, model, pause, breathe);
 			if (run !== this.meaningRun) return;
-			this.setStatus(`${this.summary} · Placing the works on the map of meaning…`);
+			this.meaningStep('Placing the works on the map of meaning…');
 			for (const { node, text, words } of missing) {
 				const { vector, place } = this.placeWork(node, words, learned);
 				this.meaningCache.setPlace(node.data.id, text, place, vector);
@@ -1544,10 +1599,11 @@ export class LiteratureGraphView extends ItemView {
 		// The meaning layouts draw each work to its nearest works (by node index).
 		this.meaningKin = this.kinOf(kind, nodes, places);
 		this.setStatus(this.summary);
+		this.setLoading(null);
 		this.applyTopicColors();
 		// The meaning layouts place the works by their meaning, now known; a
 		// few new works (2 % or less) are not worth laying the graph out again.
-		if (this.meaningLayout() && (newly > nodes.length * 0.02 || !this.laidOutWithKin)) this.showCurrent();
+		if (this.meaningLayout() && (this.waitingForMeaning || newly > nodes.length * 0.02 || !this.laidOutWithKin)) this.showCurrent();
 	}
 
 	/**
@@ -1759,20 +1815,44 @@ export class LiteratureGraphView extends ItemView {
 			ys[g]?.push(n.y);
 		});
 		const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
-		const hubOf = new Map((this.layoutStyle === 'dendrogram' ? (this.dendrogram?.hubs ?? []) : []).filter((h) => h.level === 1).map((h) => [h.group, h]));
+		const dendrogram = this.layoutStyle === 'dendrogram' ? this.dendrogram : null;
+		const arcOf = new Map((dendrogram?.arcs ?? []).map((a) => [a.group, a]));
 		regions.parts.forEach(({ circle, label, sub, color }, g) => {
 			const gx = xs[g] ?? [];
 			const gy = ys[g] ?? [];
 			circle.clear();
 			label.visible = gx.length > 0;
 			if (sub) sub.visible = gx.length > 0;
-			// The dendrogram: each group named at its branch, without a circle.
-			const hub = hubOf.get(g);
-			if (hub) {
-				sub?.position.set(hub.x, hub.y + label.style.fontSize * 0.2 + (sub?.height ?? 0));
-				label.position.set(hub.x, hub.y);
+			// The dendrogram: each group named outside the circle, across from its
+			// works, with its arc along the edge and a mark at each border.
+			const arc = arcOf.get(g);
+			if (dendrogram && arc) {
+				const edge = dendrogram.outer + label.style.fontSize * 0.6;
+				circle
+					.moveTo(edge * Math.cos(arc.from), edge * Math.sin(arc.from))
+					.arc(0, 0, edge, arc.from, arc.to)
+					.stroke({ width: label.style.fontSize * 0.15, color, alpha: 0.8 });
+				const inner = dendrogram.radius - label.style.fontSize * 0.4;
+				circle
+					.moveTo(inner * Math.cos(arc.from), inner * Math.sin(arc.from))
+					.lineTo((edge + label.style.fontSize * 0.4) * Math.cos(arc.from), (edge + label.style.fontSize * 0.4) * Math.sin(arc.from))
+					.stroke({ width: label.style.fontSize * 0.06, color: this.theme?.line.color ?? color, alpha: 0.9 });
+				const a = (arc.from + arc.to) / 2;
+				// Narrow arcs side by side: every other name further out, so neighbor names do not overlap.
+				const rank = dendrogram.arcs.indexOf(arc);
+				const narrow = (arc.to - arc.from) * edge < label.width * 1.2;
+				const r = edge + label.style.fontSize * (narrow && rank % 2 === 1 ? 3.2 : 0.8);
+				const right = Math.cos(a) >= 0;
+				label.anchor.set(right ? 0 : 1, 0.5);
+				label.position.set(r * Math.cos(a), r * Math.sin(a));
+				if (sub) {
+					sub.anchor.set(right ? 0 : 1, 0);
+					sub.position.set(r * Math.cos(a), r * Math.sin(a) + label.height * 0.5);
+				}
 				return;
 			}
+			label.anchor.set(0.5, 1);
+			sub?.anchor.set(0.5, 1);
 			if (gx.length === 0) return;
 			const cx = median([...gx]);
 			const cy = median([...gy]);

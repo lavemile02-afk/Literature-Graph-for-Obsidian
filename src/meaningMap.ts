@@ -309,8 +309,11 @@ export interface RadialDendrogram {
 	hubs: { x: number; y: number; level: 1 | 2; group: number }[];
 	/** The branches: [from, to], each a hub (index into `hubs`), the middle (-1), or a work (`work`; `end`: the first or last work of its subgroup on the circle). */
 	links: { from: number; to: number; work: boolean; end?: boolean }[];
-	/** Radius of the inner row of works. */
+	/** Radius of the inner row of works, and of the outer one. */
 	radius: number;
+	outer: number;
+	/** The arc of each group on the circle (angles in radians, from < to), in the order of the circle. */
+	arcs: { group: number; from: number; to: number }[];
 }
 
 /**
@@ -401,7 +404,13 @@ export function radialDendrogram(
 		hubs.push({ x: 0.7 * radius * Math.cos(a), y: 0.7 * radius * Math.sin(a), level: 2, group: sub.group });
 		sub.works.forEach((w, i) => links.push({ from: hub, to: w, work: true, end: i === 0 || i === sub.works.length - 1 }));
 	});
-	return { places: out, hubs, links, radius };
+	// Each group's arc, half a column beyond its first and last works.
+	const half = Math.PI / Math.max(1, columns);
+	const arcs = order.flatMap(({ g }) => {
+		const list = angles.get(g) ?? [];
+		return list.length > 0 ? [{ group: g, from: Math.min(...list) - half, to: Math.max(...list) + half }] : [];
+	});
+	return { places: out, hubs, links, radius, outer: radius + (rows - 1) * spacing, arcs };
 }
 
 /** The commonest small words of English and French, which tell the language of a text. */
