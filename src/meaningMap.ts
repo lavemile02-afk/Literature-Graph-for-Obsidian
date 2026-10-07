@@ -403,3 +403,26 @@ export function radialDendrogram(
 	});
 	return { places: out, hubs, links, radius };
 }
+
+/** The commonest small words of English and French, which tell the language of a text. */
+const FUNCTION_WORDS: Record<string, Set<string>> = {
+	en: new Set('the and of to in is for with that are was by this from which be as on it not were have'.split(' ')),
+	fr: new Set('le la les des une est pour dans avec que qui sur par pas ont aux cette sont du au en se ne il elle'.split(' ')),
+};
+
+/**
+ * The language of a text ("en" or "fr"), from its commonest small words, or
+ * "" when it is too short or not clearly one of them. Its meaning then
+ * comes partly from the works it cites (see `meaningModel`): words of two
+ * languages have nothing in common, so a note in the minority language of
+ * the vault would stand apart from works on the same subject.
+ */
+export function languageOf(text: string): string {
+	const counts: Record<string, number> = { en: 0, fr: 0 };
+	for (const word of text.slice(0, 50_000).toLowerCase().split(/[^a-zàâçéèêëîïôûùüÿœ]+/)) {
+		for (const [lang, words] of Object.entries(FUNCTION_WORDS)) if (words.has(word)) counts[lang] = (counts[lang] ?? 0) + 1;
+	}
+	const [best, second] = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+	if (!best || best[1] < 30 || best[1] < 1.5 * (second?.[1] ?? 0)) return '';
+	return best[0];
+}

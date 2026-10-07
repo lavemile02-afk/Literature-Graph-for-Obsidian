@@ -33,7 +33,7 @@ import {
 } from './animations';
 import { colorOfPlace, colorsFromSharedKeywords, evenHues, mainTopics, topicName, WorkTopics } from './topics';
 import { ballCenters, fingerprint, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
-import { alignTo, blendWithNeighbors, mapOfMeaning, meaningTree, placeAmong, radialDendrogram, RadialDendrogram, withoutLines } from './meaningMap';
+import { alignTo, blendWithNeighbors, languageOf, mapOfMeaning, meaningTree, placeAmong, radialDendrogram, RadialDendrogram, withoutLines } from './meaningMap';
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
@@ -185,6 +185,8 @@ const MIN_ABSTRACT_LENGTH = 200;
 const MIN_GHOST_TEXT = 300;
 /** A work without a reliable text of its own takes this much (times its own) of the meaning of the works of the vault it is linked to. */
 const WEAK_TEXT_WEIGHT = 2;
+/** A note in another language than most notes of the vault takes this much (times its own) of the meaning of the works it cites. */
+const OTHER_LANGUAGE_WEIGHT = 1;
 const TREE_NEIGHBORS = 10;
 
 /**
@@ -1058,7 +1060,7 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** Words of the notes of the vault, and their fingerprint, kept while a note does not change (reading a long note costs). */
-	private readonly noteWords = new Map<string, { mtime: number; words: string[]; text: string }>();
+	private readonly noteWords = new Map<string, { mtime: number; words: string[]; text: string; language: string }>();
 
 	/** What OpenAlex says of a work: its title, topics, keywords and abstract (from the cache). */
 	private openAlexText(id: string, title = ''): string {
@@ -1086,7 +1088,7 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** The words of a note of the vault (its title, keywords and whole text, without its other properties), and their fingerprint. */
-	private async noteText(file: TFile): Promise<{ words: string[]; text: string }> {
+	private async noteText(file: TFile): Promise<{ words: string[]; text: string; language: string }> {
 		const cached = this.noteWords.get(file.path);
 		if (cached && cached.mtime === file.stat.mtime) return cached;
 		// Without its reference lists: the authors and journals they name are not what the note is about.
@@ -1099,7 +1101,7 @@ export class LiteratureGraphView extends ItemView {
 		const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '');
 		const keywords = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
 		const words = tokenize([this.index.vaultWork(file)?.title || file.basename, ...keywords, body].join('\n'));
-		const entry = { mtime: file.stat.mtime, words, text: fingerprint(words.join(' ')) };
+		const entry = { mtime: file.stat.mtime, words, text: fingerprint(words.join(' ')), language: languageOf(body) };
 		this.noteWords.set(file.path, entry);
 		this.meaningCache.setNote(file.path, file.stat.mtime, file.stat.size, keywordsProperty(this.settings()), entry.text);
 		return entry;
@@ -1284,7 +1286,12 @@ export class LiteratureGraphView extends ItemView {
 	): Promise<MeaningModel> {
 		if (this.meaningModelCache?.key === key) return this.meaningModelCache;
 		const words: string[][] = [];
-		for (const file of files) words.push((await this.noteText(file)).words);
+		const languages: string[] = [];
+		for (const file of files) {
+			const note = await this.noteText(file);
+			words.push(note.words);
+			languages.push(note.language);
+		}
 		for (const id of cited) {
 			words.push(tokenize(this.openAlexText(id)));
 			await breathe();
@@ -1311,7 +1318,25 @@ export class LiteratureGraphView extends ItemView {
 		// corpus: semi-supervised, as the user asked.
 		const ids = [...files.map((f) => f.path), ...cited.filter((id) => this.reliableOutside(id, null))];
 		const index = new Map([...files.map((f) => f.path), ...cited].map((id, i) => [id, i]));
-		const blended = ids.map((id, i) => (i < files.length ? (own[i] ?? null) : blendWithNeighbors(own[index.get(id) ?? -1] ?? null, citers.get(id) ?? [])));
+		// A note in another language than most notes of the vault takes in the
+		// meaning of the works it cites (mostly in the language of the others):
+		// otherwise its words, shared with none of them, set it apart.
+		const tally = new Map<string, number>();
+		for (const l of languages) if (l) tally.set(l, (tally.get(l) ?? 0) + 1);
+		const main = [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+		const noteBlend = (file: TFile, i: number): Float32Array | null => {
+			const mine = own[i] ?? null;
+			if (!languages[i] || languages[i] === main) return mine;
+			const cites = this.citedWorksOf(file).flatMap((id) => {
+				const v = own[index.get(id) ?? -1];
+				return v ? [v] : [];
+			});
+			return blendWithNeighbors(mine, cites, OTHER_LANGUAGE_WEIGHT);
+		};
+		const blended = ids.map((id, i) => {
+			const file = files[i];
+			return file ? noteBlend(file, i) : blendWithNeighbors(own[index.get(id) ?? -1] ?? null, citers.get(id) ?? []);
+		});
 		const present = ids.flatMap((id, i) => {
 			const vector = blended[i];
 			return vector ? [{ id, vector }] : [];
@@ -1331,6 +1356,36 @@ export class LiteratureGraphView extends ItemView {
 		const corpus = new Map(present.map((p, i) => [p.id, { vector: p.vector, place: places[i] ?? ([0, 0] as [number, number]) }]));
 		this.meaningModelCache = { key, vocabulary, basis, corpus, vectors, places };
 		return this.meaningModelCache;
+	}
+
+	/**
+	 * What a note of the vault cites, as ids of the corpus of meaning: works by
+	 * their OpenAlex id (its references on OpenAlex, and the DOIs of its
+	 * reference list and citation links), notes of the vault by their path.
+	 */
+	private citedWorksOf(file: TFile): string[] {
+		const out = new Set<string>();
+		const doi = this.index.doiForFile(file);
+		const id = doi ? this.openAlex.cachedIdForDoi(doi) : null;
+		for (const ref of (id ? this.openAlex.cachedWork(id)?.references : null) ?? []) out.add(ref);
+		for (const entry of this.index.bibliographyOf(file)) {
+			const note = this.index.resolveEntry(entry, file.path);
+			if (note) out.add(note.path);
+			else if (entry.doi) {
+				const cited = this.openAlex.cachedIdForDoi(entry.doi);
+				if (cited) out.add(cited);
+			}
+		}
+		for (const link of this.index.linksFrom(file)) {
+			const work = this.index.resolve(link.target, link.text);
+			if (work.kind === 'note') out.add(work.file.path);
+			else if (work.kind === 'doi') {
+				const cited = this.openAlex.cachedIdForDoi(work.doi);
+				if (cited) out.add(cited);
+			}
+		}
+		out.delete(file.path);
+		return [...out];
 	}
 
 	/**

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { alignTo, blendWithNeighbors, centered, mapOfMeaning, meaningTree, nearestVectors, normalized, packVector, placeAmong, radialDendrogram, unpackVector, withoutLines } from '../src/meaningMap';
+import { alignTo, blendWithNeighbors, centered, languageOf, mapOfMeaning, meaningTree, nearestVectors, normalized, packVector, placeAmong, radialDendrogram, unpackVector, withoutLines } from '../src/meaningMap';
 
 const v = (...xs: number[]) => normalized(xs) as Float32Array;
 
@@ -84,4 +84,12 @@ test('draws a radial dendrogram: groups, subgroups, then works on a circle', () 
 	// Works of one group are side by side on the circle.
 	const angle = (i: number) => Math.atan2(d.places[i]?.[1] ?? 0, d.places[i]?.[0] ?? 0);
 	assert.ok(Math.abs(angle(0) - angle(1)) < Math.abs(angle(0) - angle(2)));
+});
+
+test('tells the language of a note', () => {
+	const fr = 'La tourbière est un milieu humide où la matière organique s\'accumule. Les sphaignes sont des mousses qui dominent la végétation de la tourbière, et le niveau de la nappe est près de la surface pour la plupart des espèces. '.repeat(3);
+	const en = 'The peatland is a wetland where organic matter accumulates. Sphagnum mosses dominate the vegetation of the bog, and the water table is near the surface for most of the species in the study. '.repeat(3);
+	assert.equal(languageOf(fr), 'fr');
+	assert.equal(languageOf(en), 'en');
+	assert.equal(languageOf('Peat.'), '');
 });
