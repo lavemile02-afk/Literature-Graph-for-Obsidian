@@ -486,6 +486,24 @@ export class LiteratureGraphView extends ItemView {
 	private layoutStyle: LayoutStyle = 'default';
 	/** Local mode: follow the citations of the center ("out"), the works citing it ("in"), or both. */
 	private direction: Direction = 'both';
+	/**
+	 * Brings every control of the panels in line with the view's state. A
+	 * slider set by code fires its change like a user's: while this runs,
+	 * `syncing` tells the controls not to act on it (the point size, set to
+	 * the size of the new layout, laid the graph out a second time).
+	 */
+	private syncAll(): void {
+		this.syncing = true;
+		try {
+			for (const sync of this.syncControls) sync();
+		} finally {
+			this.syncing = false;
+		}
+	}
+
+	/** True while `syncAll` sets the controls. */
+	private syncing = false;
+
 	/** Controls showing the view's state, updated when the state is restored. */
 	private syncControls: (() => void)[] = [];
 	/** Path of the note at the center of the local graph. */
@@ -560,7 +578,7 @@ export class LiteratureGraphView extends ItemView {
 		this.localDepth = Math.min(3, Math.max(1, Number(s.depth) || 1));
 		if (s.direction && s.direction in DIRECTIONS) this.direction = s.direction as Direction;
 		await super.setState(state, result);
-		for (const sync of this.syncControls) sync();
+		this.syncAll();
 		if (this.local !== wasLocal) {
 			this.contentEl.toggleClass('is-local', this.local);
 			// A local graph is small: start closer, as Obsidian's local graph does.
@@ -1935,7 +1953,7 @@ export class LiteratureGraphView extends ItemView {
 	/** Gives each note of the vault the color of its color group (settings). */
 	applyColorGroups(): void {
 		this.applyTopicColors();
-		for (const sync of this.syncControls) sync();
+		this.syncAll();
 		const s = this.settings();
 		const colorOf = colorFor(this.app, parseColorGroups(s.graphColorGroups), s.titleProperty);
 		for (const node of this.nodes) {
@@ -2966,7 +2984,7 @@ export class LiteratureGraphView extends ItemView {
 						this.layoutStyle = isLayoutStyle(value) ? value : 'default';
 						// The regions are off again when the Meaning layout is left.
 						if (!this.meaningLayout()) this.showRegions = false;
-						for (const sync of this.syncControls) sync();
+						this.syncAll();
 						// A new layout from the positions shown: the works move to their new places.
 						this.showCurrent();
 						this.layout?.send({ type: 'reheat', alpha: 1 });
@@ -3050,6 +3068,7 @@ export class LiteratureGraphView extends ItemView {
 					.setLimits(0.25, 3, 0.05)
 					.setValue(this.pointSize())
 					.onChange((value) => {
+						if (this.syncing) return;
 						this.invalidate();
 						this.requestFrame();
 						// Kept for this style of layout only (decision of the user).

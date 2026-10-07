@@ -182,7 +182,9 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 	});
 
 	// C: class-based TF-IDF of the terms (keywords and words of titles).
-	const termsOf = (i: number) => [...(works[i]?.keywords ?? []), ...(works[i]?.titleTerms ?? [])].map(key).filter((t) => t.length > 2);
+	// Each work's terms, read once (they are counted many times below).
+	const terms = works.map((w) => [...w.keywords, ...w.titleTerms].map(key).filter((t) => t.length > 2));
+	const termsOf = (i: number) => terms[i] ?? [];
 	const perRegion = members.map((list) => {
 		const counts = new Map<string, number>();
 		for (const i of list) for (const t of new Set(termsOf(i))) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -191,6 +193,9 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 	const everywhere = new Map<string, number>();
 	for (const counts of perRegion) for (const [t, c] of counts) everywhere.set(t, (everywhere.get(t) ?? 0) + c);
 	const withTerms = works.filter((_, i) => termsOf(i).length > 0).length;
+	// Per region, how many of its works have terms (computed once: counting
+	// it again for each candidate term froze Obsidian for a minute).
+	const regionWithTerms = members.map((list) => list.filter((i) => termsOf(i).length > 0).length);
 	const meanSize = perRegion.reduce((s, c) => s + [...c.values()].reduce((a, b) => a + b, 0), 0) / (count || 1);
 	const termNames = new Map<string, string>();
 	works.forEach((w) => {
@@ -203,7 +208,7 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 		const counts = perRegion[g] ?? new Map<string, number>();
 		const size = [...counts.values()].reduce((a, b) => a + b, 0) || 1;
 		const scored = [...counts]
-			.filter(([t, c]) => c >= Math.max(2, list.filter((i) => termsOf(i).length > 0).length * 0.05) && (everywhere.get(t) ?? c) <= maxShare * withTerms)
+			.filter(([t, c]) => c >= Math.max(2, (regionWithTerms[g] ?? 0) * 0.05) && (everywhere.get(t) ?? c) <= maxShare * withTerms)
 			.map(([t, c]) => ({ t, score: (c / size) * Math.log(1 + meanSize / (everywhere.get(t) ?? c)) * (t.includes(' ') ? 1.5 : 1) }))
 			.sort((a, b) => b.score - a.score || (a.t < b.t ? -1 : 1));
 		// (An empty name takes nothing: every term would "contain" it.)
