@@ -135,8 +135,19 @@ export class CitationIndex extends Events {
 		this.worksByKey.clear();
 		this.workKeyByPath.clear();
 		this.descriptions.clear();
-		for (const file of this.app.vault.getMarkdownFiles()) await this.indexFile(file, false);
-		this.markBuilt();
+		try {
+			for (const file of this.app.vault.getMarkdownFiles()) {
+				// A note that cannot be read (locked, damaged) is skipped, not the whole index.
+				try {
+					await this.indexFile(file, false);
+				} catch (error) {
+					console.error(`Literature Graph: could not read ${file.path}`, error);
+				}
+			}
+		} finally {
+			// What waits for the index (the graph) must never wait for ever.
+			this.markBuilt();
+		}
 		this.trigger('changed');
 	}
 

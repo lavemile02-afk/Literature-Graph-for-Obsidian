@@ -198,6 +198,28 @@ async function citedByStage(
  * Builds the literature graph, depth by depth (each stage is passed
  * to `progress.onStage` as soon as it is ready).
  */
+/**
+ * A pause about every 30 ms of work: the graph is built in a few seconds on
+ * a large vault, and Obsidian stays responsive meanwhile. A message rather
+ * than a timer: timers are slowed down while Obsidian's window is in the
+ * background.
+ */
+function breather(): () => Promise<void> {
+	let last = Date.now();
+	return async () => {
+		if (Date.now() - last < 30) return;
+		await new Promise<void>((resolve) => {
+			const channel = new MessageChannel();
+			channel.port1.onmessage = () => {
+				channel.port1.close();
+				resolve();
+			};
+			channel.port2.postMessage(null);
+		});
+		last = Date.now();
+	};
+}
+
 export async function buildGraph(
 	app: App,
 	index: CitationIndex,
@@ -206,6 +228,7 @@ export async function buildGraph(
 	options: GraphOptions,
 	progress: GraphProgress,
 ): Promise<LiteratureGraph> {
+	const breathe = breather();
 	const allowed = (source: EdgeSource) => options.edgeSources?.[source] !== false;
 	const g = new GraphBuilder(allowed);
 	const language = settings.citationLanguage;
@@ -228,6 +251,7 @@ export async function buildGraph(
 	}
 	const allFiles = [...files, ...others];
 	for (const file of allFiles) {
+		await breathe();
 		const title = propertyValue(app.metadataCache.getFileCache(file)?.frontmatter, settings.titleProperty);
 		g.nodes.set(file.path, {
 			id: file.path,
@@ -241,6 +265,7 @@ export async function buildGraph(
 		});
 	}
 	for (const file of allFiles) {
+		await breathe();
 		for (const link of index.linksFrom(file)) {
 			const work = index.resolve(link.target, link.text);
 			if (work.kind === 'note') g.addEdge(file.path, work.file.path, 'link');
@@ -319,6 +344,7 @@ export async function buildGraph(
 	// found both ways is one node.
 	const citedDois = new Map<string, { doi: string; source: EdgeSource }[]>();
 	for (const file of allFiles) {
+		await breathe();
 		citedDois.set(file.path, [
 			...index
 				.linksFrom(file)
@@ -338,6 +364,7 @@ export async function buildGraph(
 		console.error('Literature Graph: OpenAlex request failed', error);
 	}
 	for (const file of allFiles) {
+		await breathe();
 		for (const { doi, source } of citedDois.get(file.path) ?? []) {
 			// A DOI of a reference list that OpenAlex does not know is most often
 			// damaged by the conversion (doi.org would not find it either): the
@@ -379,6 +406,7 @@ export async function buildGraph(
 			return candidates.reduce((a, b) => ((counts1.get(b.id) ?? 0) > (counts1.get(a.id) ?? 0) ? b : a)).id;
 		};
 		for (const file of files) {
+			await breathe();
 			for (const entry of index.bibliographyOf(file)) {
 				if ((entry.doi && !openAlex.isUnknownDoi(entry.doi)) || index.resolveEntry(entry, file.path)) continue;
 				const key = entryKey(entry);

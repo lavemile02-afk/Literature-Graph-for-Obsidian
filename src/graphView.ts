@@ -38,7 +38,7 @@ import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { bibliographyEntries } from './bibliography';
-import { NamedWork, regionNames } from './regionNames';
+import { NamedWork, RegionName, regionNames } from './regionNames';
 import { WORK_VIEW, WorkState } from './workView';
 import { OpenAlexClient, workCitation } from './openalex';
 import { CITED_BY_GRAPH, LiteratureGraphSettings } from './settings';
@@ -180,6 +180,12 @@ const MEANING_NEIGHBORS = 6;
 const KIN_MIN_SIMILARITY = 0.3;
 /** Meaning tree: each work is joined to the nearest of this many works near it on the map, then the tree is kept (see `meaningTree`). */
 const TREE_CANDIDATES = 30;
+/** Region names are drawn at this size (pixels), then scaled to their size in the graph. */
+const REGION_TEXT_SIZE = 64;
+/** After a failure to list the works citing the vault, wait this long (ms) before trying again by itself. */
+const CITING_RETRY_MS = 10 * 60 * 1000;
+/** The idle animation draws a frame at most this often (ms): 30 frames a second. */
+const IDLE_FRAME_MS = 32;
 /** This many works (or 5 % of the graph) without their meaning yet: a loading screen. */
 const MANY_WORKS = 300;
 /** An abstract this long (characters) makes the meaning of a work outside the vault reliable; so does this much text written in its ghost note. */
@@ -337,7 +343,7 @@ export class LiteratureGraphView extends ItemView {
 	/** The regions of the Meaning layout: a circle and a name around each group of meaning (behind the works). */
 	private readonly regionLayer = new Container();
 	/** The group of meaning of each work (by node index) and each group's circle and name; see `buildRegions`. */
-	private regions: { group: number[]; parts: { circle: Graphics; label: Text; sub: Text | null; color: number }[] } | null = null;
+	private regions: { group: number[]; parts: { circle: Graphics; label: Text; sub: Text | null; color: number; size: number }[] } | null = null;
 	/** When the regions were last fitted to the works (they follow them a few times a second at most). */
 	private regionsPlacedAt = 0;
 	/** The works moved since the regions were last fitted to them. */
@@ -367,6 +373,14 @@ export class LiteratureGraphView extends ItemView {
 	private contextCache: { graph: LiteratureGraph; byId: Map<string, string[]> } | null = null;
 	/** The works (their ids) whose meaning was last computed: a graph shown again with the same works is not computed again. */
 	private meaningFor: string | null = null;
+	/** Goes up whenever the meaning of the works shown is set anew (what is remembered from it then no longer holds). */
+	private meaningVersion = 0;
+	/** The meaning version and the works it was complete for (see `meaningFromCache`). */
+	private meaningComplete: string | null = null;
+	/** The nearest works last found (see `kinOf`). */
+	private kinMemo: { key: string; places: Map<string, [number, number]>; kin: [number, number][][] } | null = null;
+	/** The names of the regions last found, for the same groups and meaning (see `nameRegions`). */
+	private namesMemo: { key: string; names: RegionName[] } | null = null;
 	/** Whether the layout running was given each work's nearest works in meaning (Meaning layout). */
 	private laidOutWithKin = false;
 	private meaningRun = 0;
@@ -445,6 +459,8 @@ export class LiteratureGraphView extends ItemView {
 	private timelineDesc: HTMLElement | null = null;
 	private timelineTimer: number | null = null;
 	private frameId: number | null = null;
+	/** When the idle animation last drew a frame (see `IDLE_FRAME_MS`). */
+	private lastIdleFrame = 0;
 	private frameWindow: Window | null = null;
 	/** Whether frames stopped because the view was hidden; they resume when it shows again. */
 	private paused = false;
@@ -471,6 +487,8 @@ export class LiteratureGraphView extends ItemView {
 	/** While the works citing the vault are being listed on OpenAlex: how far along. */
 	private citingProgress: [number, number] | null = null;
 	private citingProgressEl: HTMLElement | null = null;
+	/** When listing the works citing the vault last failed (it is not tried again by itself for a while). */
+	private citingFailedAt = 0;
 	/** The ranked works citing the vault, kept while the cache and the vault's works are the same. */
 	private citingMemo: { key: string; ranked: Suggestion[] } | null = null;
 	/** The graph shown now (the local part of it, in local mode). */
@@ -669,6 +687,7 @@ export class LiteratureGraphView extends ItemView {
 			() => {
 				if (!this.byMeaning() && !this.meaningLayout()) return;
 				this.meaningFor = null;
+				this.meaningVersion++;
 				this.applyColorGroups();
 			},
 			1000,
@@ -1234,6 +1253,16 @@ export class LiteratureGraphView extends ItemView {
 	/** Each work's nearest works in meaning, for the layout: on the map (Meaning), or the links of the semantic tree (Meaning tree). */
 	private kinOf(kind: KinKind, nodes: SimNode[], places: Map<string, [number, number]>): [number, number][][] {
 		if (kind === '') return [];
+		// The same works with the same meaning: the same nearest works.
+		const key = `${this.meaningVersion}\n${kind}\n${nodes.length}\n${nodes[0]?.data.id ?? ''}\n${nodes[nodes.length - 1]?.data.id ?? ''}`;
+		if (this.kinMemo?.key === key && this.kinMemo.places === places) return this.kinMemo.kin;
+		const kin = this.findKin(kind, nodes, places);
+		this.kinMemo = { key, places, kin };
+		return kin;
+	}
+
+	/** The nearest works for `kinOf` (computed, not remembered). */
+	private findKin(kind: KinKind, nodes: SimNode[], places: Map<string, [number, number]>): [number, number][][] {
 		const placed = nodes.map((n) => places.get(n.data.id) ?? null);
 		const vectors = nodes.map((n) => this.meaningVectors.get(n.data.id) ?? null);
 		const candidates = nearestInPlane(placed, TREE_CANDIDATES).map((list) => list.map(([j]) => j));
@@ -1301,6 +1330,14 @@ export class LiteratureGraphView extends ItemView {
 		const works = this.meaningWorks(kind);
 		this.meaningMissing = 0;
 		if (this.meaningFor === works) return;
+		// The same works as the meaning last given (another layout, point size,
+		// attraction...): only their nearest works may change, not their meaning.
+		const ids = this.meaningWorks('');
+		if (this.meaningComplete === `${this.meaningVersion}\n${ids}`) {
+			this.meaningFor = works;
+			this.meaningKin = this.kinOf(kind, this.nodes, this.meaningById);
+			return;
+		}
 		const model = this.knownModelKey(this.literatureFiles());
 		if (model === null || !this.meaningCache.hasModel(model)) {
 			this.meaningMissing = this.nodes.length;
@@ -1322,7 +1359,11 @@ export class LiteratureGraphView extends ItemView {
 			if (vector) vectors.set(node.data.id, vector);
 		}
 		// (Not complete: `computeMeaning` still runs, for the others.)
-		if (complete) this.meaningFor = works;
+		this.meaningVersion++;
+		if (complete) {
+			this.meaningFor = works;
+			this.meaningComplete = `${this.meaningVersion}\n${ids}`;
+		}
 		this.meaningById = places;
 		this.meaningVectors = vectors;
 		this.meaningKin = this.kinOf(kind, this.nodes, places);
@@ -1612,6 +1653,8 @@ export class LiteratureGraphView extends ItemView {
 		}
 		// Works placed now that were not before (from the cache, when the graph was shown).
 		const newly = nodes.filter((n) => places.has(n.data.id) && !this.meaningById.has(n.data.id)).length;
+		this.meaningVersion++;
+		this.meaningComplete = `${this.meaningVersion}\n${nodes.map((n) => n.data.id).join('\n')}\n`;
 		this.meaningById = places;
 		this.meaningVectors = vectors;
 		// The meaning layouts draw each work to its nearest works (by node index).
@@ -1760,17 +1803,10 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** Names and draws the regions of the groups kept by `buildRegions`, if not done yet. */
-	private nameRegions(): void {
-		const kept = this.regionGroups;
-		if (!kept || this.regions) return;
-		const { groups, radii } = kept;
-		const layer = this.regionLayer;
-		const theme = this.theme;
-		if (!theme) return;
-		const count = groups.centers.length;
-		// What names a region (see `regionNames.ts`): the meaning, keywords, topics and titles of its works.
+	/** What names a region (see `regionNames.ts`): the meaning, keywords, topics and titles of the works shown. */
+	private namedWorks(): NamedWork[] {
 		const info = (id: string) => this.openAlex.topicInfo(id);
-		const works = this.nodes.map((n): NamedWork => {
+		return this.nodes.map((n): NamedWork => {
 			const id = n.data.openAlexId;
 			const title = (id ? this.openAlex.cachedWork(id)?.title : null) ?? n.data.title;
 			return {
@@ -1780,21 +1816,40 @@ export class LiteratureGraphView extends ItemView {
 				titleTerms: titleTerms(title),
 			};
 		});
-		const names = regionNames(works, groups.group, count);
+	}
+
+	private nameRegions(): void {
+		const kept = this.regionGroups;
+		if (!kept || this.regions) return;
+		const { groups, radii } = kept;
+		const layer = this.regionLayer;
+		const theme = this.theme;
+		if (!theme) return;
+		const count = groups.centers.length;
+		// The same groups of the same works with the same meaning: the same names (naming takes a moment).
+		const memoKey = `${this.meaningVersion}
+${count}
+${groups.group.join(',')}`;
+		const names = this.namesMemo?.key === memoKey ? this.namesMemo.names : regionNames(this.namedWorks(), groups.group, count);
+		this.namesMemo = { key: memoKey, names };
 		const parts = groups.centers.map((center, g) => {
 			const name = names[g] ?? { title: '', topic: null, terms: [] };
 			const color = this.placeColor(center);
 			const circle = new Graphics();
 			const fontSize = Math.max(36, (radii[g] ?? 100) * 0.22);
-			const label = new Text({ text: name.title, style: { fontSize, fontWeight: '600', fill: color, fontFamily: theme.fontFamily } });
+			// Drawn at a fixed size and scaled up: a text drawn at its size in the
+			// graph (hundreds of pixels) took a quarter of a second, and much memory.
+			const label = new Text({ text: name.title, style: { fontSize: REGION_TEXT_SIZE, fontWeight: '600', fill: color, fontFamily: theme.fontFamily } });
+			label.scale.set(fontSize / REGION_TEXT_SIZE);
 			label.anchor.set(0.5, 1);
 			// Below the name, smaller: OpenAlex's topic and the typical terms.
 			const below = [name.topic, name.terms.join(' · ')].filter((line): line is string => !!line);
-			const sub = below.length > 0 ? new Text({ text: below.join('\n'), style: { fontSize: fontSize * 0.45, fill: color, fontFamily: theme.fontFamily, align: 'center' } }) : null;
+			const sub = below.length > 0 ? new Text({ text: below.join('\n'), style: { fontSize: REGION_TEXT_SIZE, fill: color, fontFamily: theme.fontFamily, align: 'center' } }) : null;
+			sub?.scale.set((fontSize * 0.45) / REGION_TEXT_SIZE);
 			sub?.anchor.set(0.5, 1);
 			layer.addChild(circle, label);
 			if (sub) layer.addChild(sub);
-			return { circle, label, sub, color };
+			return { circle, label, sub, color, size: fontSize };
 		});
 		this.regions = { group: groups.group, parts };
 		this.regionsPlacedAt = 0;
@@ -1835,7 +1890,7 @@ export class LiteratureGraphView extends ItemView {
 		const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 		const dendrogram = this.layoutStyle === 'dendrogram' ? this.dendrogram : null;
 		const arcOf = new Map((dendrogram?.arcs ?? []).map((a) => [a.group, a]));
-		regions.parts.forEach(({ circle, label, sub, color }, g) => {
+		regions.parts.forEach(({ circle, label, sub, color, size }, g) => {
 			const gx = xs[g] ?? [];
 			const gy = ys[g] ?? [];
 			circle.clear();
@@ -1845,21 +1900,21 @@ export class LiteratureGraphView extends ItemView {
 			// works, with its arc along the edge and a mark at each border.
 			const arc = arcOf.get(g);
 			if (dendrogram && arc) {
-				const edge = dendrogram.outer + label.style.fontSize * 0.6;
+				const edge = dendrogram.outer + size * 0.6;
 				circle
 					.moveTo(edge * Math.cos(arc.from), edge * Math.sin(arc.from))
 					.arc(0, 0, edge, arc.from, arc.to)
-					.stroke({ width: label.style.fontSize * 0.15, color, alpha: 0.8 });
-				const inner = dendrogram.radius - label.style.fontSize * 0.4;
+					.stroke({ width: size * 0.15, color, alpha: 0.8 });
+				const inner = dendrogram.radius - size * 0.4;
 				circle
 					.moveTo(inner * Math.cos(arc.from), inner * Math.sin(arc.from))
-					.lineTo((edge + label.style.fontSize * 0.4) * Math.cos(arc.from), (edge + label.style.fontSize * 0.4) * Math.sin(arc.from))
-					.stroke({ width: label.style.fontSize * 0.06, color: this.theme?.line.color ?? color, alpha: 0.9 });
+					.lineTo((edge + size * 0.4) * Math.cos(arc.from), (edge + size * 0.4) * Math.sin(arc.from))
+					.stroke({ width: size * 0.06, color: this.theme?.line.color ?? color, alpha: 0.9 });
 				const a = (arc.from + arc.to) / 2;
 				// Narrow arcs side by side: every other name further out, so neighbor names do not overlap.
 				const rank = dendrogram.arcs.indexOf(arc);
 				const narrow = (arc.to - arc.from) * edge < label.width * 1.2;
-				const r = edge + label.style.fontSize * (narrow && rank % 2 === 1 ? 3.2 : 0.8);
+				const r = edge + size * (narrow && rank % 2 === 1 ? 3.2 : 0.8);
 				const right = Math.cos(a) >= 0;
 				label.anchor.set(right ? 0 : 1, 0.5);
 				label.position.set(r * Math.cos(a), r * Math.sin(a));
@@ -1876,10 +1931,10 @@ export class LiteratureGraphView extends ItemView {
 			const cy = median([...gy]);
 			const d = gx.map((x, j) => Math.hypot(x - cx, (gy[j] ?? 0) - cy)).sort((a, b) => a - b);
 			// Wide enough for four in five of its works.
-			const r = (d[Math.floor(d.length * 0.8)] ?? d[d.length - 1] ?? 0) + label.style.fontSize * 0.3;
+			const r = (d[Math.floor(d.length * 0.8)] ?? d[d.length - 1] ?? 0) + size * 0.3;
 			circle.circle(cx, cy, r).fill({ color, alpha: 0.05 }).stroke({ width: Math.max(2, r / 120), color, alpha: 0.45 });
 			// The name above the circle, its topic and terms between them.
-			const gap = label.style.fontSize * 0.15;
+			const gap = size * 0.15;
 			sub?.position.set(cx, cy - r - gap);
 			label.position.set(cx, cy - r - gap - (sub ? sub.height + gap : 0));
 		});
@@ -2636,7 +2691,9 @@ export class LiteratureGraphView extends ItemView {
 			return false;
 		}
 		const unlisted = ids.filter((id) => this.openAlex.cachedCiting(id) === undefined);
-		if (unlisted.length > 0 && !this.citingProgress && this.settings().openAlexEnabled && !this.openAlex.isRateLimited) void this.listCiting(false);
+		// (Not again right after a failure: the list is drawn again at the end of each attempt, which would start another, without end.)
+		const failedRecently = Date.now() - this.citingFailedAt < CITING_RETRY_MS;
+		if (unlisted.length > 0 && !this.citingProgress && !failedRecently && this.settings().openAlexEnabled && !this.openAlex.isRateLimited) void this.listCiting(false);
 		if (this.citingProgress) {
 			const [done, total] = this.citingProgress;
 			this.citingProgressEl = list.createDiv({ cls: 'literature-graph-suggestions-desc', text: `Finding the works that cite your works on OpenAlex: ${done} of ${total}…` });
@@ -2657,6 +2714,15 @@ export class LiteratureGraphView extends ItemView {
 			void this.listCiting(true);
 		});
 		if (unlisted.length > 0 && !this.settings().openAlexEnabled) status.createSpan({ text: ' OpenAlex is turned off in the settings.' });
+		if (unlisted.length > 0 && failedRecently) {
+			status.createSpan({ text: ' OpenAlex could not be reached. ' });
+			const retry = status.createEl('a', { text: 'Try again', href: '#' });
+			retry.addEventListener('click', (e) => {
+				e.preventDefault();
+				this.citingFailedAt = 0;
+				void this.listCiting(false);
+			});
+		}
 		return true;
 	}
 
@@ -2674,6 +2740,8 @@ export class LiteratureGraphView extends ItemView {
 		} finally {
 			this.citingProgress = null;
 		}
+		// Some works of the vault could not be looked up (offline, refused): wait before trying again by itself.
+		if (ids.some((id) => this.openAlex.cachedCiting(id) === undefined)) this.citingFailedAt = Date.now();
 		this.renderSuggestions();
 		// The cited-by graph shows them too.
 		if (this.options.citedBy) void this.loadData();
@@ -3280,6 +3348,14 @@ export class LiteratureGraphView extends ItemView {
 			this.paused = true;
 			return;
 		}
+		// The idle animation at 30 frames a second at most: as smooth to the eye
+		// for a slow drift, and half the work for the processor (a laptop heated).
+		const started = performance.now();
+		if (this.idle.running && this.focusLevel === 0 && !this.zoom && started - this.lastIdleFrame < IDLE_FRAME_MS) {
+			this.requestFrame();
+			return;
+		}
+		if (this.idle.running) this.lastIdleFrame = started;
 		let again = false;
 
 		// Hover highlight: fades in and out.
