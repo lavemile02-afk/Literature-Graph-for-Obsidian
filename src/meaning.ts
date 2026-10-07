@@ -298,61 +298,77 @@ export function planeOf(vectors: (Float32Array | null)[]): ([number, number] | n
 /**
  * The `k` works nearest to each work in the plane of meaning (so the
  * nearest in color), with a closeness from 1 (same place) towards 0, most
- * alike first. Found through a grid of the plane: only the works of the
- * nearby cells are compared, so it takes a few milliseconds for tens of
- * thousands of works (comparing every pair took minutes). Works without a
- * place get none.
+ * alike first. Found with a k-d tree (the plane cut in two, again and again,
+ * at the middle work): each search visits only the cells near the work, a
+ * few milliseconds in all for thousands of works, however crowded the map
+ * (a regular grid took seconds on the islands of a UMAP map). Works without
+ * a place get none.
  */
 export function nearestInPlane(places: ([number, number] | null)[], k: number): [number, number][][] {
 	const placed = places.flatMap((p, i) => (p ? [i] : []));
 	const out: [number, number][][] = places.map(() => []);
 	if (placed.length < 2) return out;
+	const xs = new Float64Array(places.length);
+	const ys = new Float64Array(places.length);
 	let minX = Infinity;
 	let minY = Infinity;
 	let maxX = -Infinity;
 	let maxY = -Infinity;
 	for (const i of placed) {
 		const [x, y] = places[i] ?? [0, 0];
+		xs[i] = x;
+		ys[i] = y;
 		minX = Math.min(minX, x);
 		minY = Math.min(minY, y);
 		maxX = Math.max(maxX, x);
 		maxY = Math.max(maxY, y);
 	}
-	// About k works per cell.
+	// The tree: `order` holds the works; the node over order[lo..hi) splits at
+	// its middle work, on x at even depths and y at odd ones.
+	const order = Int32Array.from(placed);
+	const build = (lo: number, hi: number, depth: number): void => {
+		if (hi - lo <= 1) return;
+		const axis = depth % 2 === 0 ? xs : ys;
+		const part = Array.from(order.subarray(lo, hi)).sort((a, b) => (axis[a] ?? 0) - (axis[b] ?? 0));
+		order.set(part, lo);
+		const mid = (lo + hi) >> 1;
+		build(lo, mid, depth + 1);
+		build(mid + 1, hi, depth + 1);
+	};
+	build(0, order.length, 0);
+	// Closeness: 1 at the same place, 0.5 at a typical distance between k neighbors.
 	const cells = Math.max(1, Math.ceil(Math.sqrt(placed.length / Math.max(1, k))));
-	const size = Math.max(maxX - minX, maxY - minY, 1e-9) / cells;
-	const cellOf = (v: number, min: number) => Math.min(cells - 1, Math.floor((v - min) / size));
-	const grid = new Map<number, number[]>();
+	const scale = Math.max(maxX - minX, maxY - minY, 1e-9) / cells / 2;
 	for (const i of placed) {
-		const [x, y] = places[i] ?? [0, 0];
-		const key = cellOf(x, minX) * cells + cellOf(y, minY);
-		const list = grid.get(key);
-		if (list) list.push(i);
-		else grid.set(key, [i]);
-	}
-	// Closeness: 1 at the same place, 0.5 at a typical distance between neighbors.
-	const scale = size / 2;
-	for (const i of placed) {
-		const [x, y] = places[i] ?? [0, 0];
-		const cx = cellOf(x, minX);
-		const cy = cellOf(y, minY);
-		const found: [number, number][] = [];
-		// Rings of cells around the work's own, until enough works are found (one more ring then, for the corners).
-		for (let ring = 0, extra = 0; ring < cells && extra < 2; ring++) {
-			for (let gx = cx - ring; gx <= cx + ring; gx++) {
-				for (let gy = cy - ring; gy <= cy + ring; gy++) {
-					if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) !== ring || gx < 0 || gy < 0 || gx >= cells || gy >= cells) continue;
-					for (const j of grid.get(gx * cells + gy) ?? []) {
-						if (j === i) continue;
-						const [qx, qy] = places[j] ?? [0, 0];
-						found.push([j, Math.hypot(qx - x, qy - y)]);
+		const x = xs[i] ?? 0;
+		const y = ys[i] ?? 0;
+		// The k best so far, nearest first (squared distances).
+		const best: [number, number][] = [];
+		const worst = () => (best.length < k ? Infinity : (best[best.length - 1]?.[1] ?? Infinity));
+		const visit = (lo: number, hi: number, depth: number): void => {
+			if (hi <= lo) return;
+			const mid = (lo + hi) >> 1;
+			const j = order[mid] ?? 0;
+			if (j !== i) {
+				const d = ((xs[j] ?? 0) - x) ** 2 + ((ys[j] ?? 0) - y) ** 2;
+				if (d < worst()) {
+					let p = best.length;
+					best.push([j, d]);
+					while (p > 0 && (best[p - 1]?.[1] ?? 0) > d) {
+						best[p] = best[p - 1] as [number, number];
+						p--;
 					}
+					best[p] = [j, d];
+					if (best.length > k) best.pop();
 				}
 			}
-			if (found.length >= k) extra++;
-		}
-		found.sort((a, b) => a[1] - b[1]);
-		out[i] = found.slice(0, k).map(([j, d]) => [j, 1 / (1 + d / scale)]);
+			const diff = depth % 2 === 0 ? x - (xs[j] ?? 0) : y - (ys[j] ?? 0);
+			const [near, far] = diff < 0 ? [[lo, mid], [mid + 1, hi]] : [[mid + 1, hi], [lo, mid]];
+			visit(near[0] ?? 0, near[1] ?? 0, depth + 1);
+			if (diff * diff < worst()) visit(far[0] ?? 0, far[1] ?? 0, depth + 1);
+		};
+		visit(0, order.length, 0);
+		out[i] = best.map(([j, d]) => [j, 1 / (1 + Math.sqrt(d) / scale)]);
 	}
 	return out;
 }

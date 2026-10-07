@@ -116,6 +116,14 @@ export class CitationIndex extends Events {
 		return findDuplicates(works);
 	}
 
+	private markBuilt: () => void = () => undefined;
+	/**
+	 * Resolves once every note was read for the first time: what is computed
+	 * from the whole index (the graph, the meaning of the works) waits for it,
+	 * so it does not depend on how far the reading went when it started.
+	 */
+	readonly whenBuilt: Promise<void> = new Promise((resolve) => (this.markBuilt = resolve));
+
 	/** Reads every Markdown note. */
 	async build(): Promise<void> {
 		this.linksByPath.clear();
@@ -128,6 +136,7 @@ export class CitationIndex extends Events {
 		this.workKeyByPath.clear();
 		this.descriptions.clear();
 		for (const file of this.app.vault.getMarkdownFiles()) await this.indexFile(file, false);
+		this.markBuilt();
 		this.trigger('changed');
 	}
 

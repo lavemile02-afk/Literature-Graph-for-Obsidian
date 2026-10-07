@@ -98,17 +98,19 @@ export function regionNames(works: NamedWork[], group: number[], count: number):
 			const v = works[i]?.vector;
 			return v ? [v] : [];
 		});
+	// The mean of all the works, computed once (computing it for each keyword
+	// took a minute on 10,000 works, and froze Obsidian).
+	const d = all[0]?.length ?? 0;
+	const whole = new Float32Array(d);
+	for (const x of all) for (let j = 0; j < d; j++) whole[j] = (whole[j] ?? 0) + (x[j] ?? 0) / all.length;
 	const meaningOf = (list: number[]) => {
-		const v = meanVector(vectorsOf(list));
-		if (!v || !overall) return v;
-		// The mean of unit vectors is shorter than 1; compare it to the overall mean at the same length.
 		const raw = vectorsOf(list);
-		const d = v.length;
+		if (raw.length === 0 || !overall) return meanVector(raw);
+		// The plain mean (unit vectors give a mean shorter than 1), minus the mean of all the works.
 		const sum = new Float32Array(d);
 		for (const x of raw) for (let j = 0; j < d; j++) sum[j] = (sum[j] ?? 0) + (x[j] ?? 0) / raw.length;
-		const whole = new Float32Array(d);
-		for (const x of all) for (let j = 0; j < d; j++) whole[j] = (whole[j] ?? 0) + (x[j] ?? 0) / all.length;
-		return meanVector([sum.map((x, j) => x - (whole[j] ?? 0))]);
+		for (let j = 0; j < d; j++) sum[j] = (sum[j] ?? 0) - (whole[j] ?? 0);
+		return meanVector([sum]);
 	};
 	const centers = members.map((list) => meaningOf(list));
 	const withKeyword = new Map<string, number[]>();

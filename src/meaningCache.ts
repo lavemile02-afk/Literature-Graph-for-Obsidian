@@ -3,10 +3,12 @@ import { writePluginFile } from './pluginFiles';
 import { packVector, unpackVector } from './meaningMap';
 
 /**
- * 3: the UMAP map learned on the works of reliable meaning only (2: on all
+ * 4: note fingerprints that no longer depend on when the citation index
+ * read the note (3 kept unstable ones). 3: the UMAP map learned on the
+ * works of reliable meaning only (2: on all
  * the corpus; 1: places in the plane of the two main directions).
  */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 /** A work's place in the plane of meaning, and the fingerprint of the text it comes from. */
 interface PlaceEntry {

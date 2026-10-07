@@ -37,6 +37,7 @@ import { alignTo, blendWithNeighbors, mapOfMeaning, meaningTree, placeAmong, rad
 import type { MeaningCache } from './meaningCache';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
+import { bibliographyEntries } from './bibliography';
 import { NamedWork, regionNames } from './regionNames';
 import { WORK_VIEW, WorkState } from './workView';
 import { OpenAlexClient, workCitation } from './openalex';
@@ -673,6 +674,10 @@ export class LiteratureGraphView extends ItemView {
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
 		this.watchActivity();
 		await Promise.all([this.positions.load(), this.ghosts.load(), this.meaningCache.load()]);
+		// The whole index first: a graph (and a meaning) built from a half-read
+		// index differs from one opening to the next.
+		this.setStatus('Reading the notes…');
+		await this.index.whenBuilt;
 		await this.loadData();
 	}
 
@@ -982,7 +987,8 @@ export class LiteratureGraphView extends ItemView {
 						: null;
 		// (The kin found for these same nodes, if the meaning is known.)
 		const kin = meaning && this.meaningKin.length === this.nodes.length ? this.meaningKin : null;
-		this.laidOutWithKin = kin !== null;
+		// (A layout that needs no nearest works has all it needs.)
+		this.laidOutWithKin = kin !== null || this.kinKind() === '';
 		// The branches of the semantic tree (each link once), or of the dendrogram.
 		this.treeEdges.setLinks(
 			this.layoutStyle === 'tree' && kin
@@ -1084,7 +1090,11 @@ export class LiteratureGraphView extends ItemView {
 		const cached = this.noteWords.get(file.path);
 		if (cached && cached.mtime === file.stat.mtime) return cached;
 		// Without its reference lists: the authors and journals they name are not what the note is about.
-		const full = withoutLines(await this.app.vault.cachedRead(file), this.index.bibliographyOf(file).map((e) => e.line));
+		// (Read from the text itself, not from the citation index, which may not
+		// have read the note yet when the graph opens: the fingerprint must not
+		// depend on that, or the whole cache of meaning would be thrown away.)
+		const raw = await this.app.vault.cachedRead(file);
+		const full = withoutLines(raw, bibliographyEntries(raw).map((e) => e.line));
 		const text = full.slice(0, MEANING_TEXT_LIMIT);
 		const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '');
 		const keywords = keywordsInNote(this.app, file, keywordsProperty(this.settings()));
@@ -1609,10 +1619,23 @@ export class LiteratureGraphView extends ItemView {
 	 * (see `groupNames`), or else its most frequent OpenAlex topic. The names
 	 * are drawn in world units, so they grow and shrink with the zoom.
 	 */
+	/** The groups of the regions of the layout shown, named only when the regions are shown (naming takes a moment). */
+	private regionGroups: { groups: MeaningGroups; radii: number[] } | null = null;
+
+	/** Keeps the groups of the regions; names and draws them now if the regions are shown. */
 	private buildRegions(groups: MeaningGroups, radii: number[]): void {
-		const layer = this.regionLayer;
-		for (const child of layer.removeChildren()) child.destroy({ children: true });
+		for (const child of this.regionLayer.removeChildren()) child.destroy({ children: true });
 		this.regions = null;
+		this.regionGroups = { groups, radii };
+		if (this.showRegions) this.nameRegions();
+	}
+
+	/** Names and draws the regions of the groups kept by `buildRegions`, if not done yet. */
+	private nameRegions(): void {
+		const kept = this.regionGroups;
+		if (!kept || this.regions) return;
+		const { groups, radii } = kept;
+		const layer = this.regionLayer;
 		const theme = this.theme;
 		if (!theme) return;
 		const count = groups.centers.length;
@@ -2825,6 +2848,7 @@ export class LiteratureGraphView extends ItemView {
 			.addToggle((toggle) => {
 				toggle.setValue(this.showRegions).onChange((value) => {
 					this.showRegions = value;
+					if (value) this.nameRegions();
 					this.regionsPlacedAt = 0;
 					this.regionsStale = true;
 					this.requestFrame();

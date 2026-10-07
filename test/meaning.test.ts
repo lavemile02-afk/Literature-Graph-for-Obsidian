@@ -124,3 +124,25 @@ test('takes the words and the pairs of adjacent words of a title', () => {
 	assert.deepEqual(titleTerms('Restoration of the cutover peatlands: water table'), ['restoration', 'cutover', 'cutover peatlands', 'peatlands', 'water', 'water table', 'table']);
 	assert.deepEqual(titleTerms('Die Moore und der Torf'), ['moore', 'torf']);
 });
+
+test('finds the nearest works in the plane, even on a crowded map', () => {
+	// Two dense islands far apart, and one work between.
+	const places: [number, number][] = [];
+	for (let i = 0; i < 2000; i++) places.push([(i % 50) * 0.001, Math.floor(i / 50) * 0.001]);
+	for (let i = 0; i < 2000; i++) places.push([100 + (i % 50) * 0.001, Math.floor(i / 50) * 0.001]);
+	places.push([50, 0]);
+	const near = nearestInPlane(places, 5);
+	const dist = (i: number, j: number) => Math.hypot((places[j]?.[0] ?? 0) - (places[i]?.[0] ?? 0), (places[j]?.[1] ?? 0) - (places[i]?.[1] ?? 0));
+	// The same distances as comparing every pair.
+	for (const i of [0, 777, 2500, 4000]) {
+		const brute = places
+			.map((_, j) => j)
+			.filter((j) => j !== i)
+			.map((j) => dist(i, j))
+			.sort((a, b) => a - b)
+			.slice(0, 5);
+		const found = (near[i] ?? []).map(([j]) => dist(i, j));
+		assert.equal(found.length, 5);
+		found.forEach((d, k) => assert.ok(Math.abs(d - (brute[k] ?? 0)) < 1e-12));
+	}
+});
