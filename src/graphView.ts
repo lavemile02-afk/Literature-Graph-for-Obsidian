@@ -390,6 +390,8 @@ export class LiteratureGraphView extends ItemView {
 	private namesMemo: { key: string; names: RegionName[] } | null = null;
 	/** Whether the layout running was given each work's nearest works in meaning (Meaning layout). */
 	private laidOutWithKin = false;
+	/** The style of the layout last started (see `show`). */
+	private laidOutStyle: LayoutStyle | null = null;
 	private meaningRun = 0;
 	private circleTexture: Texture | null = null;
 	private readonly labelsLayer = new Container();
@@ -1089,6 +1091,20 @@ export class LiteratureGraphView extends ItemView {
 					? this.dendrogramLinks()
 					: [],
 		);
+		// Entering the Meaning or Meaning tree layout from another one (not when the
+		// graph opens: the saved places then keep the map the user knows): each work
+		// starts from its place on the map. From the positions shown (a
+		// dendrogram's ring, another layout's clusters), the works stayed mixed
+		// in one disc and never found their groups.
+		if ((this.layoutStyle === 'meaning' || this.layoutStyle === 'tree') && this.laidOutStyle !== null && this.laidOutStyle !== this.layoutStyle && anchors) {
+			for (const node of this.nodes) {
+				const anchor = anchors[node.index];
+				if (!anchor) continue;
+				node.x = anchor[0] + (Math.random() - 0.5) * 20;
+				node.y = anchor[1] + (Math.random() - 0.5) * 20;
+			}
+		}
+		this.laidOutStyle = this.layoutStyle;
 		// Many works without their meaning yet: a loading screen; in the
 		// meaning layouts, the works wait for it (their places come from it),
 		// rather than being drawn and laid out for nothing.

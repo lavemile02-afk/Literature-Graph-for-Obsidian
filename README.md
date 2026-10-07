@@ -4,18 +4,22 @@ An Obsidian plugin for literature notes written in Markdown (for example, papers
 
 Explore how the works of your vault cite each other, and the works outside it that they cite, in a panel and a graph view of their own, built from the reference lists of your notes, from citation links and from OpenAlex.
 
-![The works of a vault and the works they cite, gathered in balls of one meaning](images/meaning.png)
+![The works of a vault and the works they cite, gathered by meaning](images/meaning.png)
 
-*About 20,000 works: 112 literature notes and the works they cite, colored and placed by what they are about (the **Meaning** layout). Works of one meaning gather in a ball; works between two meanings form bridges between their balls.*
+*About 10,000 works: 205 literature notes and the works they cite, colored and placed by what they are about (the **Meaning** layout). Works of one meaning gather in a ball; works between two meanings form bridges between the balls.*
 
 ![The same graph with the named regions of meaning](images/regions.png)
 
-*The same graph with **Regions** on: each group of meaning named by the term most typical of its works.*
+*The same graph with **Regions** on: each group of meaning named by the keyword nearest to its meaning, with its OpenAlex topic and its typical terms below.*
+
+| **Meaning tree**: each work joined to the works most alike it | **Meaning dendrogram**: groups, subgroups, then works |
+|---|---|
+| ![The semantic tree of the works](images/tree.png) | ![A radial dendrogram of the groups of meaning](images/dendrogram.png) |
 
 | Hover a work to see what it cites | Islands: communities of citations |
 |---|---|
 | ![A work of the vault highlighted with the works it cites](images/hover.png) | ![Communities of citations as islands](images/islands.png) |
-| **Atom graph**: each note with the works it cites around it | **Layers**: the vault in the middle, then each depth |
+| **Atom graph**: each note with the works it cites around it | **Layers**: the vault in the middle, the works it cites around it |
 | ![Atom graph](images/atom.png) | ![Layers](images/layers.png) |
 
 When you leave it alone, the graph turns into an animation:
