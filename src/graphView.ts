@@ -35,6 +35,7 @@ import { colorOfPlace, colorsFromSharedKeywords, evenHues, mainTopics, topicName
 import { ballCenters, fingerprint, groupTargets, titleTerms, meaningBasis, MeaningBasis, meaningGroups, MeaningGroups, nearestInPlane, project, tokenize, vectorize, Vocabulary, vocabularyOf } from './meaning';
 import { alignTo, blendWithNeighbors, languageOf, mapOfMeaning, meaningTree, placeAmong, radialDendrogram, RadialDendrogram, withoutLines } from './meaningMap';
 import type { MeaningCache } from './meaningCache';
+import { changedLittle, MeaningModelStore } from './meaningModelStore';
 import { keywordsInNote, keywordsProperty } from './keywordNotes';
 import { WorkSuggest } from './workSuggest';
 import { bibliographyEntries } from './bibliography';
@@ -180,6 +181,8 @@ const MEANING_NEIGHBORS = 6;
 const KIN_MIN_SIMILARITY = 0.3;
 /** Meaning tree: each work is joined to the nearest of this many works near it on the map, then the tree is kept (see `meaningTree`). */
 const TREE_CANDIDATES = 30;
+/** The meaning learned is kept while at most this share of the texts it was learned from changed (see `effectiveModelKey`). */
+const MODEL_DRIFT = 0.1;
 /** Region names are drawn at this size (pixels), then scaled to their size in the graph. */
 const REGION_TEXT_SIZE = 64;
 /** After a failure to list the works citing the vault, wait this long (ms) before trying again by itself. */
@@ -207,6 +210,8 @@ type KinKind = '' | 'kin' | 'tree';
 
 interface MeaningModel {
 	key: string;
+	/** Fingerprint of each text of the corpus when the meaning was learned (see `placeWork`). */
+	sources: Record<string, string>;
 	vocabulary: Vocabulary;
 	basis: MeaningBasis;
 	corpus: Map<string, { vector: Float32Array; place: [number, number] }>;
@@ -375,6 +380,8 @@ export class LiteratureGraphView extends ItemView {
 	private meaningFor: string | null = null;
 	/** Goes up whenever the meaning of the works shown is set anew (what is remembered from it then no longer holds). */
 	private meaningVersion = 0;
+	/** The works whose meaning the cache gave at the last display, for that meaning version (see `computeMeaning`). */
+	private meaningResolved: { version: number; ids: Set<string> } | null = null;
 	/** The meaning version and the works it was complete for (see `meaningFromCache`). */
 	private meaningComplete: string | null = null;
 	/** The nearest works last found (see `kinOf`). */
@@ -549,6 +556,8 @@ export class LiteratureGraphView extends ItemView {
 		private readonly ghosts: GhostNoteStore,
 		/** The places of the works in the plane of meaning, kept between openings. */
 		private readonly meaningCache: MeaningCache,
+		/** The meaning learned last, kept between sessions (see `meaningModelStore.ts`). */
+		private readonly modelStore: MeaningModelStore,
 	) {
 		super(leaf);
 		const s = settings();
@@ -716,7 +725,7 @@ export class LiteratureGraphView extends ItemView {
 		);
 		this.registerEvent(this.app.workspace.on('layout-change', () => this.resume()));
 		this.watchActivity();
-		await Promise.all([this.positions.load(), this.ghosts.load(), this.meaningCache.load()]);
+		await Promise.all([this.positions.load(), this.ghosts.load(), this.meaningCache.load(), this.modelStore.load()]);
 		// The whole index first: a graph (and a meaning) built from a half-read
 		// index differs from one opening to the next.
 		this.setStatus('Reading the notes…');
@@ -1211,7 +1220,7 @@ export class LiteratureGraphView extends ItemView {
 	}
 
 	/** The fingerprint of what meaning is learned from, kept while nothing it depends on changed. */
-	private modelKeyMemo: { signature: string; key: string } | null = null;
+	private modelKeyMemo: { signature: string; key: string; sources: Record<string, string> } | null = null;
 
 	/**
 	 * The fingerprint of what meaning is learned from (see `meaningModel`):
@@ -1222,22 +1231,60 @@ export class LiteratureGraphView extends ItemView {
 		const property = keywordsProperty(this.settings());
 		const signature = `${this.openAlex.revision}\n${property}\n${files.map((f) => `${f.path}\t${f.stat.mtime}\t${f.stat.size}`).join('\n')}`;
 		if (this.modelKeyMemo?.signature === signature) return this.modelKeyMemo.key;
-		const sources: string[] = [];
+		const sources = this.modelSources(files);
+		if (!sources) return null;
+		const key = fingerprint(Object.entries(sources).map(([id, text]) => `${id}\t${text}`).join('\n'));
+		this.modelKeyMemo = { signature, key, sources };
+		return key;
+	}
+
+	/**
+	 * The fingerprint of each text meaning is learned from: each literature
+	 * note (by path), each work it cites (by OpenAlex id), and the keywords
+	 * property (which changes what every note says). Null when a note changed
+	 * and must be read first.
+	 */
+	private modelSources(files: TFile[]): Record<string, string> | null {
+		const sources: Record<string, string> = {};
 		for (const file of files) {
 			const text = this.knownNoteText(file);
 			if (text === null) return null;
-			sources.push(`${file.path}\t${text}`);
+			sources[file.path] = text;
 		}
-		for (const id of this.citedByVault(files)) sources.push(`${id}\t${fingerprint(this.openAlexText(id))}`);
-		sources.push(property);
-		const key = fingerprint(sources.join('\n'));
-		this.modelKeyMemo = { signature, key };
-		return key;
+		for (const id of this.citedByVault(files)) sources[id] = fingerprint(this.openAlexText(id));
+		sources['\u0000keywords property'] = keywordsProperty(this.settings());
+		return sources;
+	}
+
+	/**
+	 * The meaning to use: the one learned last (kept in `meaningModelStore`)
+	 * while at most a tenth of the texts it was learned from changed, so a few
+	 * notes edited are placed with it in a moment, without learning everything
+	 * again (30 s to a few minutes); otherwise the meaning of the texts as
+	 * they are now, to be learned. Null when a note must be read first.
+	 */
+	private effectiveModelKey(files: TFile[]): string | null {
+		const key = this.knownModelKey(files);
+		const stored = this.modelStore.key;
+		if (key === null || stored === null || stored === key) return key;
+		const now = this.modelKeyMemo?.sources;
+		const then = this.modelStore.sources;
+		return now && then && changedLittle(now, then, MODEL_DRIFT) ? stored : key;
 	}
 
 	/** What the meaning of the works shown is computed for: the works, and which nearest works the layout needs. */
 	private meaningWorks(kin: KinKind): string {
 		return `${this.nodes.map((n) => n.data.id).join('\n')}\n${kin}`;
+	}
+
+	/** Forgets the meaning computed, so it is computed again (command "Recompute the meaning of the works"). */
+	recomputeMeaning(): void {
+		this.meaningModelCache = null;
+		this.modelKeyMemo = null;
+		this.meaningFor = null;
+		this.meaningComplete = null;
+		this.meaningVersion++;
+		this.showCurrent();
 	}
 
 	/** Which nearest works in meaning the layout needs: none, the nearest works (Meaning), or the semantic tree (Meaning tree). */
@@ -1338,7 +1385,7 @@ export class LiteratureGraphView extends ItemView {
 			this.meaningKin = this.kinOf(kind, this.nodes, this.meaningById);
 			return;
 		}
-		const model = this.knownModelKey(this.literatureFiles());
+		const model = this.effectiveModelKey(this.literatureFiles());
 		if (model === null || !this.meaningCache.hasModel(model)) {
 			this.meaningMissing = this.nodes.length;
 			return;
@@ -1346,6 +1393,7 @@ export class LiteratureGraphView extends ItemView {
 		const places = new Map<string, [number, number]>();
 		const vectors = new Map<string, Float32Array>();
 		let complete = true;
+		const resolved = new Set<string>();
 		for (const node of this.nodes) {
 			const text = node.data.file ? this.knownNoteText(node.data.file) : this.outsideKey(node);
 			const place = text === null ? undefined : this.meaningCache.place(node.data.id, text);
@@ -1354,12 +1402,14 @@ export class LiteratureGraphView extends ItemView {
 				this.meaningMissing++;
 				continue;
 			}
+			resolved.add(node.data.id);
 			if (place) places.set(node.data.id, place);
 			const vector = this.meaningCache.vector(node.data.id, text);
 			if (vector) vectors.set(node.data.id, vector);
 		}
-		// (Not complete: `computeMeaning` still runs, for the others.)
+		// (Not complete: `computeMeaning` still runs, for the others only.)
 		this.meaningVersion++;
+		this.meaningResolved = { version: this.meaningVersion, ids: resolved };
 		if (complete) {
 			this.meaningFor = works;
 			this.meaningComplete = `${this.meaningVersion}\n${ids}`;
@@ -1397,6 +1447,22 @@ export class LiteratureGraphView extends ItemView {
 		breathe: () => Promise<void>,
 	): Promise<MeaningModel> {
 		if (this.meaningModelCache?.key === key) return this.meaningModelCache;
+		// Learned before (in an earlier session): taken as it was.
+		await this.modelStore.load();
+		const stored = this.modelStore.get();
+		if (stored?.key === key) {
+			const { ids, vectors, places } = stored.corpus;
+			this.meaningModelCache = {
+				key,
+				sources: stored.sources,
+				vocabulary: stored.vocabulary,
+				basis: stored.basis,
+				corpus: new Map(ids.map((id, i) => [id, { vector: vectors[i] ?? new Float32Array(stored.basis.k), place: places[i] ?? ([0, 0] as [number, number]) }])),
+				vectors,
+				places,
+			};
+			return this.meaningModelCache;
+		}
 		const words: string[][] = [];
 		const languages: string[] = [];
 		for (const file of files) {
@@ -1466,7 +1532,10 @@ export class LiteratureGraphView extends ItemView {
 			this.meaningCache.setCorpus(Object.fromEntries(present.map((p, i) => [p.id, places[i] ?? [0, 0]])), key);
 		}
 		const corpus = new Map(present.map((p, i) => [p.id, { vector: p.vector, place: places[i] ?? ([0, 0] as [number, number]) }]));
-		this.meaningModelCache = { key, vocabulary, basis, corpus, vectors, places };
+		const sources = this.modelSources(files) ?? {};
+		this.meaningModelCache = { key, sources, vocabulary, basis, corpus, vectors, places };
+		// Kept for the next sessions (see `effectiveModelKey`).
+		await this.modelStore.save({ key, sources, vocabulary, basis, corpus: { ids: present.map((p) => p.id), vectors, places } });
 		return this.meaningModelCache;
 	}
 
@@ -1521,8 +1590,11 @@ export class LiteratureGraphView extends ItemView {
 	 * nearest works of the corpus.
 	 */
 	private placeWork(node: SimNode, words: () => string[], model: MeaningModel): { vector: Float32Array | null; place: [number, number] | null } {
+		// A work of the corpus whose text is unchanged since the meaning was
+		// learned keeps its place; one changed since (a note edited) is placed anew.
 		const known = model.corpus.get(node.data.id);
-		if (known) return known;
+		const source = node.data.file ? this.knownNoteText(node.data.file) : node.data.openAlexId ? fingerprint(this.openAlexText(node.data.openAlexId)) : null;
+		if (known && source !== null && model.sources[node.data.id] === source) return known;
 		const own = project(vectorize(words(), model.vocabulary), model.basis);
 		// A work whose own text says little leans more on the works of the vault it is linked to.
 		const weight = this.reliableOutside(node.data.openAlexId, node) ? 1 : WEAK_TEXT_WEIGHT;
@@ -1617,14 +1689,24 @@ export class LiteratureGraphView extends ItemView {
 			await this.noteText(file);
 			await breathe();
 		}
-		const model = this.knownModelKey(files) ?? '';
+		const model = this.effectiveModelKey(files) ?? '';
 		if (run !== this.meaningRun) return;
 		this.meaningCache.useModel(model);
 		// Places and vectors from the cache; the others are computed.
 		const places = new Map<string, [number, number]>();
 		const vectors = new Map<string, Float32Array>();
 		const missing: { node: SimNode; text: string; words: () => string[] }[] = [];
+		// The works the cache just gave (when the graph was shown, see
+		// `meaningFromCache`) are not looked up again: only the others are.
+		const resolved = this.meaningResolved?.version === this.meaningVersion ? this.meaningResolved.ids : null;
 		for (const node of nodes) {
+			if (resolved?.has(node.data.id)) {
+				const place = this.meaningById.get(node.data.id);
+				const vector = this.meaningVectors.get(node.data.id);
+				if (place) places.set(node.data.id, place);
+				if (vector) vectors.set(node.data.id, vector);
+				continue;
+			}
 			const { text, words } = await this.workText(node);
 			const place = this.meaningCache.place(node.data.id, text);
 			if (place === undefined) missing.push({ node, text, words });

@@ -82,6 +82,12 @@ export class MeaningCache {
 		return this.cache.model === model;
 	}
 
+	/** Forgets every place and the map (the meaning is computed again from scratch); the fingerprints of the notes stay. */
+	reset(): void {
+		this.cache = { version: CACHE_VERSION, model: '', places: {}, notes: this.cache.notes };
+		this.changed();
+	}
+
 	/** Starts over when the meaning was learned from something else (the notes of the vault changed). */
 	useModel(model: string): void {
 		if (this.cache.model === model) return;

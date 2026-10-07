@@ -8,6 +8,7 @@ import { DuplicatesModal } from './duplicatesModal';
 import { PositionStore } from './positions';
 import { GhostNoteStore } from './ghostNotes';
 import { MeaningCache } from './meaningCache';
+import { MeaningModelStore } from './meaningModelStore';
 import { writeSuggestionsFile } from './suggestionsFile';
 import { writeKeywordsToNotes } from './keywordNotes';
 import { WORK_VIEW, WorkView } from './workView';
@@ -20,6 +21,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 	positions!: PositionStore;
 	ghosts!: GhostNoteStore;
 	meaningCache!: MeaningCache;
+	meaningModel!: MeaningModelStore;
 	/** Resolves when the citation index is first built. */
 	private indexReady: Promise<void> | null = null;
 
@@ -39,6 +41,7 @@ export default class LiteratureGraphPlugin extends Plugin {
 		this.positions = new PositionStore(this.app, `${this.manifest.dir ?? ''}/layout-positions.json`);
 		this.ghosts = new GhostNoteStore(this.app, `${this.manifest.dir ?? ''}/ghost-notes.json`);
 		this.meaningCache = new MeaningCache(this.app, `${this.manifest.dir ?? ''}/meaning-cache.json`);
+		this.meaningModel = new MeaningModelStore(this.app, `${this.manifest.dir ?? ''}/meaning-model.json`);
 		this.app.workspace.onLayoutReady(() => {
 			void this.startIndex();
 			this.connectBetterCitations();
@@ -64,10 +67,24 @@ export default class LiteratureGraphPlugin extends Plugin {
 					this.positions,
 					this.ghosts,
 					this.meaningCache,
+					this.meaningModel,
 				),
 		);
 		this.registerView(WORK_VIEW, (leaf) => new WorkView(leaf, this.openAlex, () => this.settings, this.ghosts));
 		this.addRibbonIcon('network', 'Open literature graph', () => void this.openGraph());
+		this.addCommand({
+			id: 'recompute-meaning',
+			name: 'Recompute the meaning of the works',
+			callback: async () => {
+				// Learned again from the notes as they are now, at the next display.
+				await this.meaningModel.clear();
+				this.meaningCache.reset();
+				for (const leaf of this.app.workspace.getLeavesOfType(GRAPH_VIEW)) {
+					if (leaf.view instanceof LiteratureGraphView) leaf.view.recomputeMeaning();
+				}
+				new Notice('The meaning of the works is computed again.');
+			},
+		});
 		this.addCommand({
 			id: 'open-graph',
 			name: 'Open graph',
