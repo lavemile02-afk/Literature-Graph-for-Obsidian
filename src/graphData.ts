@@ -11,13 +11,13 @@ export type EdgeSource = 'link' | 'bibliography' | 'openalex';
 
 /**
  * A work of the graph. Depth 0: a note of the literature folder;
- * depth 1: a work outside the vault cited by notes of the vault;
- * depth 2: a work cited by depth-1 works.
+ * depth 1: a work outside the vault cited by notes of the vault (or, in the
+ * "Cited By" graph, citing them).
  */
 export interface GraphNode {
 	/** The note's path, or "W…" (OpenAlex id), or "doi:…". */
 	id: string;
-	depth: 0 | 1 | 2;
+	depth: 0 | 1;
 	file: TFile | null;
 	doi: string | null;
 	openAlexId: string | null;
@@ -48,7 +48,7 @@ export interface LiteratureGraph {
 }
 
 export interface GraphOptions {
-	/** 0, 1 or 2. */
+	/** 0 (the works of the vault) or 1 (also the works outside it they cite). */
 	depth: number;
 	/** A work outside the vault is shown only if at least this many works of the graph cite it. */
 	minCitations: number;
@@ -289,7 +289,12 @@ export async function buildGraph(
 	let vaultWorks: WorkSummary[] = [];
 	try {
 		progress.onStatus('Loading OpenAlex data for the works of the vault…');
-		vaultWorks = await openAlex.worksByDois(files.map((f) => index.doiForFile(f)).filter((d): d is string => d !== null));
+		// (With their whole references: depth 1 and the meaning come from them.)
+		vaultWorks = await openAlex.worksByDois(
+			files.map((f) => index.doiForFile(f)).filter((d): d is string => d !== null),
+			undefined,
+			{ references: true },
+		);
 		for (const work of vaultWorks) {
 			const file = work.doi ? index.fileForDoi(work.doi) : null;
 			if (file) {
@@ -309,6 +314,8 @@ export async function buildGraph(
 	} catch (error) {
 		console.error('Literature Graph: OpenAlex request failed; the graph uses local data only', error);
 	}
+	// Only the works of the vault keep their whole references in the cache (see `OpenAlexClient.setVaultWorks`).
+	openAlex.setVaultWorks(new Set(pathById.keys()));
 	progress.onStage(g.snapshot());
 	if (options.depth < 1) return g.snapshot();
 	if (options.citedBy) return citedByStage(g, openAlex, pathById, vaultPath, options, language, progress);
@@ -418,10 +425,7 @@ export async function buildGraph(
 			}
 		}
 	}
-	// At depth 2, depth 1 gets half of the remaining nodes.
-	const remaining = options.maxNodes - g.nodes.size;
-	const budget1 = options.depth >= 2 ? Math.floor(remaining / 2) : remaining;
-	const atDepth1 = mostCited(counts1, options.minCitations, budget1);
+	const atDepth1 = mostCited(counts1, options.minCitations, options.maxNodes - g.nodes.size);
 	g.leftOut += atDepth1.leftOut;
 
 	const ids1 = atDepth1.kept.filter((k) => !k.startsWith('doi:') && !k.startsWith('ref:'));
@@ -468,46 +472,10 @@ export async function buildGraph(
 		});
 		for (const [from, source] of citers1.get(key) ?? []) g.addEdge(from, key, source);
 	}
-	progress.onStage(g.snapshot());
-	if (options.depth < 2) return g.snapshot();
-
-	// ----- Depth 2: works cited by depth-1 works -----
-	const counts2 = new Map<string, number>();
-	const citers2 = new Map<string, Map<string, EdgeSource>>();
-	for (const work of works1) {
-		for (const ref of work.references) {
-			const known = pathById.get(ref) ?? (g.nodes.has(ref) ? ref : null);
-			if (known) g.addEdge(work.id, known, 'openalex');
-			else cite(counts2, citers2, work.id, ref, 'openalex');
-		}
-	}
-	const budget2 = options.maxNodes - g.nodes.size;
-	const atDepth2 = mostCited(counts2, options.minCitations, budget2);
-	g.leftOut += atDepth2.leftOut;
-	let works2: WorkSummary[] = [];
-	try {
-		works2 = await openAlex.worksByIds(atDepth2.kept, (done, total) =>
-			progress.onStatus(`Loading works outside the vault (depth 2): ${done} of ${total}…`),
-		);
-	} catch (error) {
-		console.error('Literature Graph: OpenAlex request failed', error);
-	}
-	const byId2 = new Map(works2.map((w) => [w.id, w]));
-	for (const key of atDepth2.kept) {
-		if (openAlex.isMissing(key)) continue;
-		const work = byId2.get(key);
-		g.nodes.set(key, {
-			id: key,
-			depth: 2,
-			file: null,
-			doi: work?.doi ?? null,
-			openAlexId: key,
-			label: work ? workCitation(work, language) : UNKNOWN_WORK,
-			title: work?.title ?? '',
-			citedBy: 0,
-		});
-		for (const [from, source] of citers2.get(key) ?? []) g.addEdge(from, key, source);
-	}
+	// The works cited by the vault are all the works outside it that the
+	// graph needs: OpenAlex's cache keeps those (and the works citing the
+	// vault), not the works only depth 2 needed (removed on 2026-10-07).
+	openAlex.prune(new Set([...pathById.keys(), ...counts1.keys()]));
 	const graph = g.snapshot();
 	progress.onStage(graph);
 	return graph;

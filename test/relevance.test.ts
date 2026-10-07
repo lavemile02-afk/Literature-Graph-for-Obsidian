@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { GraphEdge, GraphNode, LiteratureGraph } from '../src/graphData';
 import { explainSuggestion, rankCitingWorks, rankSuggestions, WorkInfo } from '../src/relevance';
 
-const node = (id: string, depth: 0 | 1 | 2, openAlexId: string | null = null): GraphNode => ({
+const node = (id: string, depth: 0 | 1, openAlexId: string | null = null): GraphNode => ({
 	id,
 	depth,
 	file: null,
@@ -18,7 +18,7 @@ const edge = (source: string, target: string): GraphEdge => ({ source, target, s
 // Three works of the vault; A cites X, Y and Z, B cites X and Y, C cites X;
 // W (outside) cites the vault's work A and is cited by no one.
 const graph: LiteratureGraph = {
-	nodes: [node('A', 0, 'WA'), node('B', 0, 'WB'), node('C', 0, 'WC'), node('X', 1), node('Y', 1), node('Z', 1), node('W', 1), node('V', 2)],
+	nodes: [node('A', 0, 'WA'), node('B', 0, 'WB'), node('C', 0, 'WC'), node('X', 1), node('Y', 1), node('Z', 1), node('W', 1), node('V', 1)],
 	edges: [edge('A', 'X'), edge('B', 'X'), edge('C', 'X'), edge('A', 'Y'), edge('B', 'Y'), edge('A', 'Z'), edge('A', 'B'), edge('X', 'V'), edge('Y', 'V')],
 	leftOut: 0,
 };

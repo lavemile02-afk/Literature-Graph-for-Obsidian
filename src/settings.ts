@@ -231,8 +231,8 @@ export class LiteratureGraphSettingTab extends PluginSettingTab {
 					},
 					{
 						name: 'Depth',
-						desc: '0: the works of the literature folder. 1: also the works outside the vault that they cite (from OpenAlex). 2: also the works those cite. Can be changed in the graph for the time it stays open.',
-						control: { type: 'dropdown', key: 'graphDepth', options: { '0': '0', '1': '1', '2': '2' } },
+						desc: '0: the works of the literature folder. 1: also the works outside the vault that they cite (from OpenAlex), or that cite them in the "Cited By" graph. Can be changed in the graph for the time it stays open.',
+						control: { type: 'dropdown', key: 'graphDepth', options: { '0': '0', '1': '1' } },
 					},
 					{
 						name: 'Minimum citations for works outside the vault',

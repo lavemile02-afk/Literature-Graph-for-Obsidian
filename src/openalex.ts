@@ -40,6 +40,12 @@ export interface WorkSummary {
 	keywords?: [string, number][];
 	/** Fetched without its references (as a work citing the vault): `references` is empty, and the work is fetched again when they are needed. */
 	partial?: true;
+	/**
+	 * Its references cut down to the works of the vault (see `setVaultWorks`):
+	 * enough for a work outside the vault, fetched again in full if it becomes
+	 * a work of the vault.
+	 */
+	trimmed?: true;
 }
 
 /**
@@ -242,6 +248,66 @@ export class OpenAlexClient {
 	/** Goes up at each change of the cache: what was computed from it may have changed. */
 	revision = 0;
 
+	/** The works of the vault (OpenAlex ids), once known: the only ones whose whole references are kept. */
+	private vaultWorks: Set<string> | null = null;
+
+	/**
+	 * Says which works are the vault's. From then on, the works outside it
+	 * keep only their references to works of the vault (all that the graph,
+	 * at depth 1, and the reading suggestions need of them): their whole
+	 * references (2.2 million on a vault of 200 works) made most of the cache.
+	 */
+	setVaultWorks(ids: Set<string>): void {
+		this.vaultWorks = ids;
+	}
+
+	/** A work as kept: whole for a work of the vault, its references cut down to the vault's works otherwise. */
+	private kept(work: WorkSummary): WorkSummary {
+		const vault = this.vaultWorks;
+		if (!vault || vault.has(work.id) || work.partial) return work;
+		return { ...work, references: work.references.filter((r) => vault.has(r)), trimmed: true };
+	}
+
+	/**
+	 * Forgets the works the graph no longer needs: those neither of the vault,
+	 * nor among `keep` (the works the vault cites), nor citing the vault, nor
+	 * opened as ghost notes; and cuts the references of the works kept outside
+	 * the vault. Only once the works of the vault are known.
+	 */
+	prune(keep: Set<string>): void {
+		const vault = this.vaultWorks;
+		if (!vault) return;
+		const kept = new Set<string>([...vault, ...keep]);
+		// Every work the vault cites, even those the graph takes for a work of
+		// the vault (a chapter of one of its books, recognized by its DOI): without
+		// it, the chapter would be fetched again at each build, and dropped again.
+		for (const id of vault) for (const ref of this.cache.works[id]?.references ?? []) kept.add(ref);
+		for (const list of Object.values(this.cache.citing ?? {})) for (const id of list.ids) kept.add(id);
+		for (const entry of Object.values(this.cache.citedBy ?? {})) for (const id of entry.ids) kept.add(id);
+		for (const id of Object.keys(this.cache.details ?? {})) kept.add(id);
+		let changed = false;
+		for (const [id, work] of Object.entries(this.cache.works)) {
+			if (!kept.has(id)) {
+				delete this.cache.works[id];
+				if (this.cache.abstracts) delete this.cache.abstracts[id];
+				changed = true;
+				continue;
+			}
+			if (!vault.has(id) && !work.partial && !work.trimmed) {
+				this.cache.works[id] = this.kept(work);
+				changed = true;
+			}
+		}
+		// A DOI whose work was forgotten is looked up again when needed.
+		for (const [doi, id] of Object.entries(this.cache.doiToId)) {
+			if (id && !this.cache.works[id]) {
+				delete this.cache.doiToId[doi];
+				changed = true;
+			}
+		}
+		if (changed) this.scheduleSave();
+	}
+
 	/** Writes the cache file a little after the last change. */
 	private scheduleSave(): void {
 		this.revision++;
@@ -337,6 +403,8 @@ export class OpenAlexClient {
 		field: 'doi' | 'openalex_id',
 		values: string[],
 		onProgress?: (done: number, total: number) => void,
+		/** Keep the whole references (works of the vault). */
+		whole = false,
 	): Promise<WorkSummary[]> {
 		const found: WorkSummary[] = [];
 		for (let i = 0; i < values.length; i += BATCH_SIZE) {
@@ -349,7 +417,7 @@ export class OpenAlexClient {
 			})) as { results?: RawWork[] } | null;
 			for (const raw of data?.results ?? []) {
 				this.keepTopics(raw);
-				const work = summarize(raw);
+				const work = whole ? summarize(raw) : this.kept(summarize(raw));
 				this.cache.works[work.id] = work;
 				if (work.doi) this.cache.doiToId[work.doi] = work.id;
 				found.push(work);
@@ -470,13 +538,20 @@ export class OpenAlexClient {
 		return work ?? null;
 	}
 
-	/** Works by DOI, in the same order; unknown DOIs are left out. */
-	async worksByDois(dois: string[], onProgress?: (done: number, total: number) => void): Promise<WorkSummary[]> {
+	/**
+	 * Works by DOI, in the same order; unknown DOIs are left out. With
+	 * `references`, a work cached without its whole references (as a work
+	 * citing the vault, or outside the vault) is fetched again in full.
+	 */
+	async worksByDois(dois: string[], onProgress?: (done: number, total: number) => void, options: { references?: boolean } = {}): Promise<WorkSummary[]> {
 		await this.load();
 		const wanted = dois.map(normalizeDoi);
-		// (A work cached without its references, as a work citing the vault, is fetched again.)
-		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId) || this.cache.works[this.cache.doiToId[d] ?? '']?.partial))];
-		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('doi', missing, onProgress));
+		const lacks = (d: string) => {
+			const work = this.cache.works[this.cache.doiToId[d] ?? ''];
+			return work?.partial === true || (options.references === true && work?.trimmed === true);
+		};
+		const missing = [...new Set(wanted.filter((d) => !(d in this.cache.doiToId) || lacks(d)))];
+		if (missing.length > 0 && this.options().enabled) await this.tryFetch(() => this.fetchBy('doi', missing, onProgress, options.references === true));
 		return wanted
 			.map((d) => this.cache.doiToId[d])
 			.map((id) => (id ? this.cache.works[id] : undefined))

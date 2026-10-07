@@ -554,7 +554,8 @@ export class LiteratureGraphView extends ItemView {
 		const s = settings();
 		// The dropdown setting stores a string.
 		this.options = {
-			depth: Number(s.graphDepth) || 0,
+			// (Depth 2 was removed on 2026-10-07: a setting of 2 shows depth 1.)
+			depth: Math.min(1, Number(s.graphDepth) || 0),
 			minCitations: Math.max(1, Number(s.graphMinCitations) || 1),
 			maxNodes: maxNodesOf(s.graphMaxNodes),
 			localWorks: true,
@@ -1105,7 +1106,6 @@ export class LiteratureGraphView extends ItemView {
 		for (const n of this.nodes) counts[n.data.depth] = (counts[n.data.depth] ?? 0) + 1;
 		const parts = [`${counts[0]} works of the vault`];
 		if ((counts[1] ?? 0) > 0) parts.push(`${counts[1]} cited works outside it`);
-		if ((counts[2] ?? 0) > 0) parts.push(`${counts[2]} at depth 2`);
 		parts.push(`${this.links.length} citations`);
 		if (graph.leftOut > 0) parts.push(`${graph.leftOut} works left out (node limit)`);
 		this.summary = parts.join(' · ');
@@ -2919,10 +2919,10 @@ ${groups.group.join(',')}`;
 			});
 		new Setting(body)
 			.setName('Depth')
-			.setDesc('Works outside the vault cited by it (1), and by those (2).')
+			.setDesc(`0: the works of the vault. 1: also the works outside it that they cite (or, in the ${CITED_BY_GRAPH}, that cite them).`)
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOptions({ '0': '0', '1': '1', '2': '2' })
+					.addOptions({ '0': '0', '1': '1' })
 					.setValue(String(this.options.depth))
 					.onChange((value) => {
 						this.options.depth = Number(value);

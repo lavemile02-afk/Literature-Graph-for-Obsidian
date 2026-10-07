@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { GraphNode } from '../src/graphData';
 import { searchWorks } from '../src/search';
 
-const node = (label: string, title: string, depth: 0 | 1 | 2, citedBy: number): GraphNode => ({
+const node = (label: string, title: string, depth: 0 | 1, citedBy: number): GraphNode => ({
 	id: label,
 	depth,
 	file: null,
